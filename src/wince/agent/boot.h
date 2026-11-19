@@ -15,6 +15,12 @@ typedef struct {
     int dry_run;                               /* prepare everything, do not jump */
 } bf_boot_args;
 
+/* In-memory sources: a path "mem:N" (N = 0..2) names a buffer filled over USB
+ * with the BFP STAGE request, so nothing has to be written to the SD card. */
+#define BF_STAGES 3
+extern uint8_t *bf_stage_data[BF_STAGES];
+extern DWORD bf_stage_len[BF_STAGES];
+
 /* Returns 0 with err filled on failure; on success it never returns (unless dry_run). */
 int bf_boot(const bf_boot_args *args, char *err, size_t err_len);
 

@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import zlib
 
 KERNEL_PA = 0x00800000
 INITRD_PA = 0x01000000
@@ -44,6 +45,15 @@ def main():
             sys.exit(f"mkboot: initrd of {size} bytes exceeds {LIMITS['initrd']}")
         fdtput(args.out, "-t", "x", "/chosen", "linux,initrd-start", f"{INITRD_PA:x}")
         fdtput(args.out, "-t", "x", "/chosen", "linux,initrd-end", f"{INITRD_PA + size:x}")
+        with open(args.initrd, "rb") as f:
+            crc = zlib.crc32(f.read()) & 0xFFFFFFFF
+        # checked by the kernel (mt3351-bootcon) to locate any corruption of the hand-over
+        fdtput(args.out, "-t", "x", "/chosen", "bigfoston,initrd-crc32", f"{crc:x}")
+        print(f"initrd crc32 {crc:08x}")
+    # The board has no hardware RNG and few entropy sources: the kernel's
+    # CRNG only became ready after 255 s on the device (2026-11-19), stalling
+    # anything that needs random numbers. Seed it from the PC at each build.
+    fdtput(args.out, "-t", "bx", "/chosen", "rng-seed", *[f"{b:02x}" for b in os.urandom(64)])
     if args.bootargs is not None:
         fdtput(args.out, "-t", "s", "/chosen", "bootargs", args.bootargs)
     if os.path.getsize(args.out) > LIMITS["dtb"]:

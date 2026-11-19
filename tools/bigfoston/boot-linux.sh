@@ -9,9 +9,11 @@ TOP=$(cd "$(dirname "$0")/../.." && pwd)
 AGENT="python3 $TOP/tools/bigfoston/bfagent.py"
 DIR="$TOP/firmware/build/out/images/bigfoston"
 DRY=""
+DELAY=0
 for arg in "$@"; do
     case "$arg" in
     --dry-run) DRY=--dry-run ;;
+    --delay=*) DELAY=${arg#--delay=} ;;
     *) DIR=$arg ;;
     esac
 done
@@ -32,5 +34,5 @@ for f in zImage fs707dc.dtb initrd.gz; do
 done
 $AGENT boot "$DEV\\zImage" --dtb "$DEV\\fs707dc.dtb" --initrd "$DEV\\initrd.gz" --dry-run
 [ -n "$DRY" ] && exit 0
-$AGENT boot "$DEV\\zImage" --dtb "$DEV\\fs707dc.dtb" --initrd "$DEV\\initrd.gz"
+$AGENT boot "$DEV\\zImage" --dtb "$DEV\\fs707dc.dtb" --initrd "$DEV\\initrd.gz" --delay "$DELAY"
 echo "Linux iniciado no FOSTON. Para voltar ao Windows CE: reset."

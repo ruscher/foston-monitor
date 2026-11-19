@@ -126,6 +126,19 @@ class Link:
                 return msg
         raise AgentError(f"timeout waiting for the reply to request 0x{kind:02x}")
 
+    def retry(self, call, attempts=4):
+        """Repeat an idempotent request (file chunk at a fixed offset) lost on the link."""
+        for attempt in range(attempts):
+            try:
+                return call()
+            except AgentError as error:
+                if "timeout" not in str(error) or attempt == attempts - 1:
+                    raise
+                if self.verbose:
+                    print(f"# retry after: {error}", file=sys.stderr)
+                time.sleep(0.6)               # past the agent's 500 ms stale-request drop
+                self.ser.reset_input_buffer()
+
     # ------------------------------------------------------------ commands
     def text(self, kind, payload=b"", **kw):
         msg = self.request(kind, payload, **kw)
@@ -147,7 +160,8 @@ class Link:
     def read_file(self, path, chunk=256 * 1024, progress=None):
         out, offset, size = bytearray(), 0, None
         while size is None or offset < size:
-            msg = self.request(bfp.READ, struct.pack("<II", offset, chunk) + path.encode() + b"\0", timeout=60)
+            msg = self.retry(lambda: self.request(
+                bfp.READ, struct.pack("<II", offset, chunk) + path.encode() + b"\0", timeout=20))
             size, _ = struct.unpack_from("<II", msg.payload)
             data = msg.payload[8:]
             if not data:
@@ -174,8 +188,8 @@ class Link:
         name = path.encode() + b"\0"
         while True:
             piece = data[offset:offset + chunk]
-            msg = self.request(bfp.WRITE, struct.pack("<IB", offset, 1 if offset == 0 else 0) + name + piece,
-                               timeout=30)
+            msg = self.retry(lambda: self.request(
+                bfp.WRITE, struct.pack("<IB", offset, 1 if offset == 0 else 0) + name + piece, timeout=10))
             written = struct.unpack_from("<I", msg.payload)[0]
             if written != len(piece):
                 raise AgentError(f"short write at {offset}: {written}/{len(piece)}")
@@ -207,14 +221,31 @@ class Link:
                             timeout=60).payload
 
     def boot(self, kernel, dtb="", initrd="", kernel_pa=0x00800000, dtb_pa=0x01F00000, initrd_pa=0x01000000,
-             machine=0xFFFFFFFF, dry_run=False):
-        payload = struct.pack("<IIIIB", kernel_pa, dtb_pa, initrd_pa, machine, 1 if dry_run else 0)
+             machine=0xFFFFFFFF, dry_run=False, delay=0):
+        flags = (1 if dry_run else 0) | (min(delay, 127) << 1)
+        payload = struct.pack("<IIIIB", kernel_pa, dtb_pa, initrd_pa, machine, flags)
         payload += kernel.encode() + b"\0" + dtb.encode() + b"\0" + initrd.encode() + b"\0"
         msg = self.request(bfp.BOOT, payload, timeout=120, check=False)
         text = msg.payload[4:].decode("utf-8", "replace") if dry_run or msg.status else msg.payload.decode()
         if msg.status:
             raise AgentError(msg.error_text())
         return text
+
+    def stage(self, index, data, chunk=6 * 1024, progress=None):
+        """Fill in-memory boot source mem:<index> on the device (no SD write)."""
+        total, offset = len(data), 0
+        while True:
+            piece = data[offset:offset + chunk]
+            msg = self.retry(lambda: self.request(
+                bfp.STAGE, struct.pack("<BII", index, total, offset) + piece, timeout=10))
+            held = struct.unpack_from("<I", msg.payload)[0]
+            if held != offset + len(piece):
+                raise AgentError(f"stage {index}: device holds {held}, expected {offset + len(piece)}")
+            offset += len(piece)
+            if progress:
+                progress(offset, total)
+            if offset >= total:
+                return
 
     def shot(self, under=False):
         payload = self.request(bfp.SHOT, bytes([1 if under else 0]), timeout=30).payload
@@ -349,6 +380,68 @@ def disk_dump(link, device, out, chunk_sectors=None):
     with open(out + ".sha256", "w") as f:
         f.write(f"{digest.hexdigest()}  {os.path.basename(out)}\n")
     return info, digest.hexdigest()
+
+
+# ------------------------------------------------------------- boot check
+
+def read_copy_list(link, list_pa):
+    """Follow the loader's chained copy list in physical RAM: [(dst, src, len)]."""
+    entries, page = [], list_pa
+    for _ in range(4096):
+        words = struct.unpack("<1023I", link.phys(page, 4092, 4))
+        for i in range(0, 1023 - 2, 3):
+            dst, src, length = words[i:i + 3]
+            if dst == 0xFFFFFFFF:
+                page = src
+                break
+            if length == 0:
+                return entries
+            entries.append((dst, src, length))
+        else:
+            raise AgentError("copy list page without terminator")
+    raise AgentError("copy list too long")
+
+
+def verify_boot_plan(link, list_pa, images):
+    """Compare what the loader staged in RAM with the files. images: {dst_pa: bytes}."""
+    entries = read_copy_list(link, list_pa)
+    report = []
+    for base, data in sorted(images.items()):
+        staged = bytearray(len(data))
+        covered = 0
+        for dst, src, length in entries:
+            if base <= dst < base + len(data):
+                off = dst - base
+                n = min(length, len(data) - off)
+                staged[off:off + n] = link.phys(src, (n + 3) & ~3, 1)[:n]
+                covered += n
+        same = staged == data
+        first_bad = next((i for i in range(len(data)) if staged[i] != data[i]), None) if not same else None
+        report.append((base, len(data), covered, same, first_bad))
+    return entries, report
+
+
+# ------------------------------------------------------------------ ramoops
+
+RAMOOPS_BASE, RAMOOPS_SIZE = 0x03F00000, 0x100000   # reserved-memory node of the FS-707DC DT
+PRZ_SIG = 0x43474244                                 # "DBGC", persistent_ram_buffer signature
+
+
+def ramoops_zones(blob, base=RAMOOPS_BASE):
+    """Decode the pstore/ramoops zones Linux left in RAM (survives a reset into Windows CE)."""
+    zones = []
+    for off in range(0, len(blob) - 12, 0x1000):
+        sig, start, size = struct.unpack_from("<III", blob, off)
+        if sig != PRZ_SIG:
+            continue
+        nxt = next((o for o in range(off + 0x1000, len(blob), 0x1000)
+                    if struct.unpack_from("<I", blob, o)[0] == PRZ_SIG), len(blob))
+        cap = nxt - off - 12
+        data = blob[off + 12:off + 12 + cap]
+        size, start = min(size, cap), min(start, cap)
+        text = data[start:size] + data[:start] if size == cap else data[:size]
+        zones.append((base + off, size, text.decode("utf-8", "replace")))
+    return zones
 
 
 # ------------------------------------------------------------------ survey
@@ -489,6 +582,22 @@ def main(argv=None):
     p.add_argument("--initrd-pa", type=parse_int, default=0x01000000)
     p.add_argument("--machine", type=parse_int, default=0xFFFFFFFF)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--delay", type=int, default=0, help="seconds shown on the device before the jump (unplug USB)")
+    p = sub.add_parser("verify-boot", help="dry-run the loader and compare the staged RAM with the files")
+    p.add_argument("kernel_dev")
+    p.add_argument("dtb_dev")
+    p.add_argument("initrd_dev")
+    p.add_argument("--kernel", required=True, help="local zImage")
+    p.add_argument("--dtb", required=True, help="local DTB")
+    p.add_argument("--initrd", required=True, help="local initrd")
+    p = sub.add_parser("boot-mem", help="send kernel/DTB/initrd over USB into the agent's RAM, verify, boot")
+    p.add_argument("--kernel", required=True)
+    p.add_argument("--dtb", required=True)
+    p.add_argument("--initrd", required=True)
+    p.add_argument("--delay", type=int, default=30)
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("ramoops", help="kernel log left by the last Linux boot")
+    p.add_argument("-o", "--out")
     p = sub.add_parser("quit")
     p.add_argument("--restart", action="store_true", help="start the agent again from the card (after an update)")
     args = ap.parse_args(argv)
@@ -560,7 +669,50 @@ def main(argv=None):
                   f"({2 * args.n * args.size / elapsed / 1024:.0f} KB/s both ways)")
         elif args.cmd == "boot":
             print(link.boot(args.kernel, args.dtb, args.initrd, args.kernel_pa, args.dtb_pa, args.initrd_pa,
-                            args.machine, args.dry_run))
+                            args.machine, args.dry_run, args.delay))
+        elif args.cmd == "verify-boot":
+            text = link.boot(args.kernel_dev, args.dtb_dev, args.initrd_dev, dry_run=True)
+            print(text)
+            list_pa = int(text.split("list 0x")[1].split()[0], 16)
+            images = {}
+            for pa, path in ((0x00800000, args.kernel), (0x01F00000, args.dtb), (0x01000000, args.initrd)):
+                with open(path, "rb") as f:
+                    images[pa] = f.read()
+            entries, report = verify_boot_plan(link, list_pa, images)
+            print(f"lista de copia: {len(entries)} entradas")
+            ok = True
+            for base, size, covered, same, bad in report:
+                ok &= same
+                print(f"  0x{base:08x}: {size} bytes, {covered} na lista -> "
+                      + ("IGUAL ao arquivo" if same else f"DIFERENTE (primeiro byte errado em +0x{bad:x})"))
+            if not ok:
+                return 1
+        elif args.cmd == "boot-mem":
+            files = {}
+            for idx, (pa, path) in enumerate(((0x00800000, args.kernel), (0x01F00000, args.dtb),
+                                               (0x01000000, args.initrd))):
+                with open(path, "rb") as f:
+                    files[pa] = f.read()
+                link.stage(idx, files[pa], progress=progress_bar(os.path.basename(path)))
+            text = link.boot("mem:0", "mem:1", "mem:2", dry_run=True)
+            print(text)
+            entries, report = verify_boot_plan(link, int(text.split("list 0x")[1].split()[0], 16), files)
+            ok = all(same for _, _, _, same, _ in report)
+            for base, size, covered, same, bad in report:
+                print(f"  0x{base:08x}: {size} bytes -> " + ("IGUAL ao arquivo" if same else f"DIFERENTE (+0x{bad:x})"))
+            if not ok:
+                return 1
+            if not args.dry_run:
+                print(link.boot("mem:0", "mem:1", "mem:2", delay=args.delay))
+        elif args.cmd == "ramoops":
+            zones = ramoops_zones(link.phys(RAMOOPS_BASE, RAMOOPS_SIZE))
+            if not zones:
+                print("nenhum log do Linux encontrado em 0x03F00000", file=sys.stderr)
+            out = "".join(f"===== zona 0x{addr:08x} ({size} bytes)\n{text}\n" for addr, size, text in zones)
+            if args.out:
+                with open(args.out, "w") as f:
+                    f.write(out)
+            print(out, end="")
         elif args.cmd == "quit":
             link.request(bfp.QUIT, b"\1" if args.restart else b"")
     except AgentError as error:

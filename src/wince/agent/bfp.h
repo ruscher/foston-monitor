@@ -58,6 +58,7 @@
 #define BFP_SHOT      0x60   /* -> u16 width, u16 height, RGB565 rows top-down */
 #define BFP_BOOT      0x38   /* u32 kernel_pa, u32 dtb_pa, u32 initrd_pa, u32 machine, u8 dry_run,
                                 kernel path NUL, dtb path NUL, initrd path NUL -> text; then jumps */
+#define BFP_STAGE     0x39   /* u8 index, u32 total, u32 offset, bytes -> u32 bytes held; boot path "mem:N" */
 #define BFP_QUIT      0x70   /* agent exits and restores the previous USB client */
 
 /* status */

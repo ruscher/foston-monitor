@@ -30,8 +30,8 @@
 #include "bfp.h"
 #include "boot.h"
 
-#define AGENT_VERSION "bfagent 0.2.4"
-#define AGENT_VERSION_W L"bfagent 0.2.4"
+#define AGENT_VERSION "bfagent 0.3.0"
+#define AGENT_VERSION_W L"bfagent 0.3.0"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -891,6 +891,7 @@ static void cmd_boot(const bfp_msg *req)
 {
     static bf_boot_args args;
     char err[240];
+    unsigned delay;
     uint32_t used = 0, pos = 17;
     if (req->len < 18) {
         respond_error(req, BFP_E_ARGS, 0, "boot arguments expected");
@@ -901,7 +902,8 @@ static void cmd_boot(const bfp_msg *req)
     args.dtb_pa = bfp_get32(req->payload + 4);
     args.initrd_pa = bfp_get32(req->payload + 8);
     args.machine = bfp_get32(req->payload + 12);
-    args.dry_run = req->payload[16];
+    args.dry_run = req->payload[16] & 1;
+    delay = req->payload[16] >> 1;      /* seconds to wait before the jump (unplug the USB cable) */
     /* layout (tools/bigfoston/mkboot.py): zImage 0x00800000 (8 MB), initrd 0x01000000 (12 MB),
      * DTB 0x01F00000 (64 KB); the kernel decompresses itself to 0x00008000 */
     args.kernel_max = 8u << 20;
@@ -932,6 +934,15 @@ static void cmd_boot(const bfp_msg *req)
         return;
     }
     respond(req, BFP_OK, (const uint8_t *)"booting", 7);
+    /* A connected host keeps the USB function controller busy: received
+     * packets are written by DMA into Windows CE buffers that Linux then owns
+     * (suspected cause of initramfs corruption, 2026-11-19). The delay lets
+     * the user unplug the cable first. */
+    while (delay) {
+        STATUS(L"DESCONECTE O CABO USB.  Linux inicia em %u s  (reset volta ao Windows CE)", delay);
+        Sleep(1000);
+        delay--;
+    }
     STATUS(L"Iniciando %ls ... (reset volta ao Windows CE)", args.kernel);
     Sleep(300);                                  /* let the reply and the screen update out */
     if (g_log) {
@@ -944,6 +955,44 @@ static void cmd_boot(const bfp_msg *req)
         w[239] = 0;
         STATUS(L"Boot falhou: %ls", w);
     }
+}
+
+/* Fill an in-memory boot source (boot.c "mem:N"): offset 0 (re)allocates the
+ * buffer for `total` bytes. Chunks may be resent (idempotent by offset). */
+static void cmd_stage(const bfp_msg *req)
+{
+    uint8_t reply[4];
+    unsigned idx;
+    uint32_t total, offset, n;
+    if (req->len < 9 || req->payload[0] >= BF_STAGES) {
+        respond_error(req, BFP_E_ARGS, 0, "index, total, offset expected");
+        return;
+    }
+    idx = req->payload[0];
+    total = bfp_get32(req->payload + 1);
+    offset = bfp_get32(req->payload + 5);
+    n = req->len - 9;
+    if (total > (12u << 20) || offset + n > total) {
+        respond_error(req, BFP_E_ARGS, 0, "bad size or offset");
+        return;
+    }
+    if (offset == 0 && bf_stage_len[idx] != total) {
+        if (bf_stage_data[idx])
+            VirtualFree(bf_stage_data[idx], 0, MEM_RELEASE);
+        bf_stage_data[idx] = (uint8_t *)VirtualAlloc(NULL, total ? total : 1, MEM_COMMIT, PAGE_READWRITE);
+        bf_stage_len[idx] = bf_stage_data[idx] ? total : 0;
+        if (!bf_stage_data[idx]) {
+            respond_error(req, BFP_E_SYSTEM, GetLastError(), "allocation failed");
+            return;
+        }
+    }
+    if (!bf_stage_data[idx] || bf_stage_len[idx] != total) {
+        respond_error(req, BFP_E_ARGS, 0, "stage not started at offset 0");
+        return;
+    }
+    memcpy(bf_stage_data[idx] + offset, req->payload + 9, n);
+    bfp_put32(reply, offset + n);
+    respond(req, BFP_OK, reply, 4);
 }
 
 static const char *command_name(uint8_t type)
@@ -967,6 +1016,7 @@ static const char *command_name(uint8_t type)
     case BFP_DISKREAD: return "diskread";
     case BFP_SHOT: return "shot";
     case BFP_BOOT: return "boot";
+    case BFP_STAGE: return "stage";
     case BFP_QUIT: return "quit";
     default: return "?";
     }
@@ -1001,6 +1051,7 @@ static void handle(const bfp_msg *m)
     case BFP_DISKREAD: cmd_diskread(m); break;
     case BFP_SHOT: cmd_shot(m); break;
     case BFP_BOOT: cmd_boot(m); break;
+    case BFP_STAGE: cmd_stage(m); break;
     case BFP_QUIT:
         if (m->len >= 1 && m->payload[0] == 1)
             InterlockedExchange(&g_restart, 1);
@@ -1413,6 +1464,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     (void)show;
 
     other = FindWindowW(AGENT_CLASS, NULL);
+    if (other && cmd && wcsstr(cmd, L"/wait")) {
+        /* started by the previous agent for an update: let it quit first */
+        int i;
+        for (i = 0; i < 100 && (other = FindWindowW(AGENT_CLASS, NULL)) != NULL; i++)
+            Sleep(100);
+    }
     if (other) {
         SetForegroundWindow(other);
         return 0;

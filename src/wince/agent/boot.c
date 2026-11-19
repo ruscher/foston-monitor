@@ -241,11 +241,47 @@ static int list_add(pool_t *pool, list_t *l, DWORD dst, DWORD src, DWORD len)
     return 1;
 }
 
+uint8_t *bf_stage_data[BF_STAGES];
+DWORD bf_stage_len[BF_STAGES];
+
+static int stage_index(const WCHAR *path)
+{
+    if (!_wcsnicmp(path, L"mem:", 4) && path[4] >= L'0' && path[4] < L'0' + BF_STAGES && !path[5])
+        return path[4] - L'0';
+    return -1;
+}
+
 /* Read a file into pool pages and add copy entries to dst. Returns bytes or -1. */
 static long load_file(pool_t *pool, list_t *l, const WCHAR *path, DWORD dst, DWORD limit, char *err, size_t err_len)
 {
-    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    HANDLE f;
     DWORD size, done = 0;
+    int stage = stage_index(path);
+    if (stage >= 0) {                     /* staged over USB: copy from the buffer */
+        const uint8_t *src = bf_stage_data[stage];
+        size = bf_stage_len[stage];
+        if (!src || !size || size > limit) {
+            BERR(L"%ls: empty or over the limit (%lu bytes)", path, size);
+            return -1;
+        }
+        while (done < size) {
+            DWORD pa, want = size - done > PAGE ? PAGE : size - done;
+            uint8_t *page = pool_take(pool, &pa);
+            if (!page) {
+                BERR(L"out of usable pages loading %ls", path);
+                return -1;
+            }
+            memset(page, 0, PAGE);
+            memcpy(page, src + done, want);
+            if (!list_add(pool, l, dst + done, pa, (want + 3) & ~3u)) {
+                BERR(L"out of pages for the copy list");
+                return -1;
+            }
+            done += want;
+        }
+        return (long)size;
+    }
+    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) {
         BERR(L"cannot open %ls (%lu)", path, GetLastError());
         return -1;
@@ -290,6 +326,8 @@ static DWORD file_size(const WCHAR *path)
     DWORD size;
     if (!path[0])
         return 0;
+    if (stage_index(path) >= 0)
+        return bf_stage_len[stage_index(path)];
     f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE)
         return 0;

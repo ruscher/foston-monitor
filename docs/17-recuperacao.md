@@ -18,7 +18,8 @@ reversível e não exige abrir o aparelho.
 
 | Backup | Conteúdo | Serve para |
 |---|---|---|
-| `backup/2026-11-18-volume/` | todos os arquivos do cartão SD | restaurar mapas, rotas, contatos BT, iGO |
+| `backup/2026-11-18-volume/` | todos os arquivos do cartão SD (18/11) | restaurar mapas, rotas, contatos BT, iGO |
+| `backup/2026-11-19-sd-files/sd-files.tar` | **todos os 2 159 arquivos do cartão antes da formatação** (19/11), com `files.sha256` verificado | restaurar o cartão: montar e `tar -xf` na raiz |
 | `backup/2026-11-19-nand/DSK9-msflash.img` | NAND inteira vista pelo CE: MBR, imagem do Windows CE (BINFS), registro, aplicativos, dados de GPS | referência e, no futuro, regravação |
 | `backup/2026-11-19-nand/DSK9-msflash.img.sha256` | hash do dump | verificar integridade |
 | `backup/2026-11-19-survey/` | registro completo, mapa de memória, módulos | engenharia reversa |
@@ -26,6 +27,25 @@ reversível e não exige abrir o aparelho.
 **Ainda não salvo:** o bootloader (EBoot) e os blocos da NAND antes do MBR, que o
 Windows CE não expõe em `DSK9:`. Enquanto isso não existir, **nenhuma escrita na
 NAND será feita**.
+
+## Restaurar os arquivos originais do cartão SD
+
+O cartão foi reformatado em 19/11/2026 (FAT32, rótulo `BIGFOSTON`). Para voltar os mapas
+e dados do iGO, com o FOSTON no menu e o cabo ligado (pendrive):
+
+```sh
+M=/run/media/$USER/BIGFOSTON
+tar -C "$M" -xf backup/2026-11-19-sd-files/sd-files.tar
+(cd "$M" && sha256sum -c --quiet "$OLDPWD/backup/2026-11-19-sd-files/files.sha256")
+```
+
+Depois: reset no FOSTON e "Caminho da navegação" de volta para o iGO.
+
+**O cartão original desta unidade está em fim de vida:** lê sem erros, mas as
+gravações falham de forma intermitente (pelo FOSTON e também num leitor do PC).
+Use um cartão SD novo, de preferência de 2 GB (FAT32). Para preparar um cartão novo:
+formate em FAT32 e rode `tools/bigfoston/sd-install.sh` com ele num leitor; para os
+mapas do iGO, restaure `backup/2026-11-19-sd-files/sd-files.tar`.
 
 ## Conferir o backup da NAND
 

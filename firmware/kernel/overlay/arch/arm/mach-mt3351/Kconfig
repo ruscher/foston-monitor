@@ -18,7 +18,7 @@ config MT3351_BOOTCON
 	bool "Text console on the boot loader framebuffer"
 	default y
 	select FONT_SUPPORT
-	select FONT_8x16
+	select FONT_8x8
 	help
 	  Draws kernel messages into the framebuffer left running by Windows
 	  CE (simple-framebuffer node), starting before the timer is set up.

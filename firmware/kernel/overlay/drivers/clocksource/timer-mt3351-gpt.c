@@ -24,6 +24,18 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/sched_clock.h>
+#include <linux/kthread.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/task.h>
+#include <linux/sched/cputime.h>
+#include <linux/sched/task_stack.h>
+#include <linux/mm.h>
+#include <linux/math64.h>
+#include <linux/gfp.h>
+#include <linux/highmem.h>
+#include <linux/delay.h>
+#include <linux/jiffies.h>
+#include <linux/init.h>
 
 #define GPT_IRQ_EN		0x00
 #define GPT_IRQ_STA		0x04
@@ -37,6 +49,7 @@
 #define GPT_MIN_DELTA		64
 
 static void __iomem *gpt_base;
+static unsigned int gpt_ticks;		/* interrupts handled, for the bring-up self-check */
 
 static u64 notrace gpt_sched_read(void)
 {
@@ -90,6 +103,7 @@ static irqreturn_t gpt_interrupt(int irq, void *dev_id)
 	struct clock_event_device *evt = dev_id;
 
 	writel_relaxed(GPT1_BIT, gpt_base + GPT_IRQ_ACK);
+	gpt_ticks++;
 	evt->event_handler(evt);
 	return IRQ_HANDLED;
 }
@@ -133,3 +147,160 @@ static int __init mt3351_gpt_init(struct device_node *node)
 	return 0;
 }
 TIMER_OF_DECLARE(mt3351_gpt, "mediatek,mt3351-gpt", mt3351_gpt_init);
+
+/*
+ * Bring-up self-check, printed on the framebuffer console: are timer
+ * interrupts arriving (jiffies and our counter move during mdelay), does
+ * sleeping work, and what did the kernel leave in the CP15 control register
+ * (U = bit 22 unaligned access, A = bit 1 alignment trap).
+ */
+static int __init mt3351_gpt_selfcheck(void)
+{
+	static u8 buf[8] __aligned(4) = {1, 2, 3, 4, 5, 6, 7, 8};
+	volatile u32 *odd = (volatile u32 *)(buf + 1);
+	unsigned long j0 = jiffies;
+	unsigned int t0 = gpt_ticks;
+	u32 sctlr;
+
+	if (!gpt_base)
+		return 0;
+	asm volatile("mrc p15, 0, %0, c1, c0, 0" : "=r"(sctlr));
+	pr_info("selfcheck: HZ=%d jiffies=%lu ticks=%u sctlr=%08x (U=%d A=%d)\n", HZ, j0, t0, sctlr,
+		!!(sctlr & BIT(22)), !!(sctlr & BIT(1)));
+	pr_info("selfcheck: unaligned u32 at +1 = %08x (expected 05040302)\n", *odd);
+	mdelay(200);
+	pr_info("selfcheck: after mdelay(200): jiffies +%lu ticks +%u\n", jiffies - j0, gpt_ticks - t0);
+	msleep(200);
+	pr_info("selfcheck: after msleep(200): jiffies +%lu ticks +%u\n", jiffies - j0, gpt_ticks - t0);
+	return 0;
+}
+late_initcall(mt3351_gpt_selfcheck);
+
+/*
+ * Bring-up watcher: every 5 s, where is PID 1 and what is it doing? Shows
+ * a user process that is stuck (fault loop, sleep, spin) without a serial
+ * console or input. Printed on the framebuffer console.
+ */
+static int bfwatch_thread(void *unused)
+{
+	while (!kthread_should_stop()) {
+		struct task_struct *init;
+		struct pt_regs *regs;
+		u64 ut = 0, st = 0;
+
+		ssleep(5);
+		rcu_read_lock();
+		init = find_task_by_vpid(1);
+		if (init)
+			get_task_struct(init);
+		rcu_read_unlock();
+		if (!init)
+			continue;
+		task_cputime(init, &ut, &st);
+		regs = task_pt_regs(init);
+		pr_info("bfwatch: %s state=%c pc=%08lx lr=%08lx sp=%08lx user=%llums sys=%llums minflt=%lu majflt=%lu csw=%lu/%lu free=%luK\n",
+			init->comm, task_state_to_char(init), regs->ARM_pc, regs->ARM_lr, regs->ARM_sp,
+			div_u64(ut, NSEC_PER_MSEC), div_u64(st, NSEC_PER_MSEC), init->min_flt, init->maj_flt,
+			init->nvcsw, init->nivcsw, global_zone_page_state(NR_FREE_PAGES) << (PAGE_SHIFT - 10));
+		put_task_struct(init);
+	}
+	return 0;
+}
+
+static int __init bfwatch_start(void)
+{
+	kthread_run(bfwatch_thread, NULL, "bfwatch");
+	return 0;
+}
+late_initcall_sync(bfwatch_start);
+
+/*
+ * Bring-up memory watcher: who writes into RAM behind Linux's back? Fills
+ * all free memory but 16 MB (1 MB blocks) with a pattern derived from each
+ * word's physical address and reports, every 5 s, the words that changed
+ * (physical address and value). A bus master left running by Windows CE
+ * (DMA into one of its old buffers) shows up as a fixed address range.
+ */
+#define MEMWATCH_BLOCKS 128			/* up to 128 MB, stops leaving MEMWATCH_KEEP free */
+#define MEMWATCH_KEEP_PAGES (16u << (20 - PAGE_SHIFT))
+#define MEMWATCH_ORDER  8			/* 256 pages = 1 MB */
+
+static inline u32 memwatch_pattern(phys_addr_t pa)
+{
+	return (u32)pa ^ 0xA5C3B5E1u;
+}
+
+static struct page *memwatch_blocks[MEMWATCH_BLOCKS];
+static unsigned int memwatch_n;
+
+static int memwatch_thread(void *unused)
+{
+	unsigned int b, reports = 0;
+	size_t words = (PAGE_SIZE << MEMWATCH_ORDER) / 4, i;
+
+	while (!kthread_should_stop()) {
+		unsigned int bad = 0;
+
+		ssleep(5);
+		for (b = 0; b < memwatch_n; b++) {
+			u32 *w = page_address(memwatch_blocks[b]);
+			phys_addr_t pa = page_to_phys(memwatch_blocks[b]);
+
+			for (i = 0; i < words; i++) {
+				u32 want = memwatch_pattern(pa + i * 4);
+
+				if (w[i] == want)
+					continue;
+				if (bad < 6 && reports < 60)
+					pr_warn("memwatch: CHANGED pa=0x%08llx now=%08x was=%08x\n",
+						(u64)(pa + i * 4), w[i], want);
+				bad++;
+				w[i] = want;			/* re-arm to see whether it keeps changing */
+			}
+		}
+		if (bad) {
+			reports++;
+			pr_warn("memwatch: %u words changed in the last 5 s\n", bad);
+		} else if (reports < 60) {
+			pr_info("memwatch: no change (%u MB)\n", memwatch_n);
+		}
+	}
+	return 0;
+}
+
+/*
+ * Fill at the earliest initcall level, before the initramfs is unpacked
+ * and before any user process exists: everything userland later gets comes
+ * from the 16 MB left, and a stray bus master writing anywhere else shows up.
+ */
+static int __init memwatch_fill(void)
+{
+	size_t words = (PAGE_SIZE << MEMWATCH_ORDER) / 4, i;
+	unsigned int b;
+
+	for (b = 0; b < MEMWATCH_BLOCKS; b++) {
+		u32 *w;
+		phys_addr_t pa;
+
+		if (global_zone_page_state(NR_FREE_PAGES) < MEMWATCH_KEEP_PAGES + (1u << MEMWATCH_ORDER))
+			break;
+		memwatch_blocks[b] = alloc_pages(GFP_KERNEL | __GFP_NOWARN, MEMWATCH_ORDER);
+		if (!memwatch_blocks[b])
+			break;
+		w = page_address(memwatch_blocks[b]);
+		pa = page_to_phys(memwatch_blocks[b]);
+		for (i = 0; i < words; i++)
+			w[i] = memwatch_pattern(pa + i * 4);
+		memwatch_n++;
+	}
+	pr_info("memwatch: %u MB filled before the initramfs\n", memwatch_n);
+	return 0;
+}
+early_initcall(memwatch_fill);
+
+static int __init memwatch_start(void)
+{
+	kthread_run(memwatch_thread, NULL, "memwatch");
+	return 0;
+}
+late_initcall_sync(memwatch_start);

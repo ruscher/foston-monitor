@@ -15,7 +15,7 @@
 
 	chosen {
 		/* bootargs and the initrd range are filled in by tools/bigfoston/mkboot.py */
-		bootargs = "loglevel=7 rdinit=/init";
+		bootargs = "loglevel=7 rdinit=/init user_debug=31 print_fatal_signals=1 memtest=2";
 	};
 
 	/* 0x03e00000-0x03ffffff is video memory (framebuffer at 0x03e00030) */
@@ -23,6 +23,33 @@
 		device_type = "memory";
 		reg = <0x00000000 0x03e00000>,
 		      <0x04000000 0x04000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * Windows CE leaves bus masters running after the hand-over that
+		 * keep writing into its old buffers here: GDMA channel 9 (START
+		 * set, PGMADDR 0x007f3c00, COUNT 0x1f00, port 0x8002e00c, read on
+		 * the device) and something writing at 0x007e8000 (found by
+		 * bftest step 6: /bin/busybox pages corrupted in RAM, which made
+		 * the shell crash). The whole megabyte is kept away from Linux.
+		 */
+		ce-dma-buffers@700000 {
+			reg = <0x00700000 0x100000>;
+			no-map;
+		};
+
+		/* kernel log kept across a reset, read back from Windows CE by bfagent */
+		ramoops@3f00000 {
+			compatible = "ramoops";
+			reg = <0x03f00000 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+		};
 	};
 
 	cpus {

@@ -18,12 +18,16 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/string.h>
+#include <linux/crc32.h>
+#include <linux/mm.h>
 
 #define COLS_MAX	128
 #define ROWS_MAX	64
 #define FG		0xdefb		/* light grey */
 #define BG		0x1904		/* graphite */
 #define ACCENT		0x343c		/* BigLinux blue */
+
+static void initrd_check(const char *when);
 
 static u16 __iomem *fb;
 static unsigned int fb_w, fb_h, fb_stride;	/* stride in pixels */
@@ -110,7 +114,7 @@ void __init mt3351_earlyfb_register(void)
 		return;
 	}
 	of_node_put(np);
-	font = find_font("VGA8x16");
+	font = find_font("VGA8x8");	/* 58 rows: a whole panic fits in one photo */
 	if (!font)
 		return;
 	fb = ioremap_wc(res.start, resource_size(&res));
@@ -125,4 +129,39 @@ void __init mt3351_earlyfb_register(void)
 		for (x = 0; x < fb_w; x++)
 			writew_relaxed(y < 6 ? ACCENT : BG, fb + y * fb_stride + x);
 	register_console(&bootcon);
+	initrd_check("inicio");
 }
+
+/*
+ * Bring-up integrity check of the initrd the BigFoston loader placed in RAM:
+ * CRC32 (zlib) of /chosen linux,initrd-start..end against the value
+ * tools/bigfoston/mkboot.py stored in /chosen bigfoston,initrd-crc32.
+ * Run at interrupt-controller setup and again just before the initramfs is
+ * unpacked, to tell "corrupted by the hand-over" from "corrupted during boot".
+ */
+static void initrd_check(const char *when)
+{
+	struct device_node *chosen = of_find_node_by_path("/chosen");
+	u32 start, end, want = 0;
+	u32 crc;
+
+	if (!chosen)
+		return;
+	if (of_property_read_u32(chosen, "linux,initrd-start", &start) ||
+	    of_property_read_u32(chosen, "linux,initrd-end", &end) || end <= start) {
+		of_node_put(chosen);
+		return;
+	}
+	of_property_read_u32(chosen, "bigfoston,initrd-crc32", &want);
+	of_node_put(chosen);
+	crc = crc32_le(~0u, phys_to_virt(start), end - start) ^ ~0u;
+	pr_info("bfcheck %s: initrd 0x%08x+%u crc32 %08x expected %08x -> %s\n", when, start, end - start, crc,
+		want, crc == want ? "OK" : "CORROMPIDO");
+}
+
+static int __init initrd_check_late(void)
+{
+	initrd_check("antes-do-unpack");
+	return 0;
+}
+fs_initcall_sync(initrd_check_late);

@@ -17,7 +17,7 @@ Unidade analisada: ID `Nav-61`, plataforma `APOLLO`, OEM `MTK`.
 | VFP | não habilitado pelo CE (`CPACR=0`); userland soft-float | CP15 c1 |
 | RAM | **128 MB** em PA `0x00000000–0x07FFFFFF` | tabela de páginas do CE (OEMAddressTable) |
 | NAND interna | ~128 MB, setores de 2048 B, `DSK9:` 64 640 setores | `IOCTL_DISK_GETINFO` |
-| Cartão SD | 2 GB, `DSK3:` (é o "pendrive" visto no PC) | `Drivers\Active`, `Mass_Storage_Class\DeviceName=DSK3:` |
+| Cartão SD | 2 GB, `DSK3:` (é o "pendrive" visto no PC); era FAT16 desalinhado (setor 245), reformatado em FAT32 a partir de 1 MiB em 19/11/2026; leitura completa (`mkfs.fat -c`) sem erros, mas **gravações falham** de forma intermitente tanto pelo FOSTON quanto num leitor USB do PC (`I/O error … WRITE`, resets do leitor): **cartão em fim de vida, trocar** | `Drivers\Active`; `mkfs.fat -c`; log do kernel do PC |
 | Tela | 7", 800×480, RGB565 | GDI |
 | Framebuffer | **PA `0x03E00030`**, stride 1600 B | comparação pixel a pixel tela × RAM (383 929/384 000 iguais) |
 | Toque | resistivo, 1 ponto, driver `touch.dll` | registro `HARDWARE\DEVICEMAP\TOUCH` |
