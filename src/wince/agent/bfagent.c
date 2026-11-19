@@ -1,0 +1,1500 @@
+/*
+ * bfagent - BigFoston diagnostic agent for the FOSTON FS-707DC (Windows CE 5,
+ * MediaTek MT3351).
+ *
+ * Purpose: give the PC everything needed to port Linux to this board
+ * without writing to its flash: the physical memory map (CP15 + page
+ * tables), RAM/ROM/register contents, raw NAND sectors (firmware backup),
+ * the registry (drivers and their settings), loaded modules, files and
+ * screenshots. Commands arrive over the USB Serial_Class port using the BFP
+ * protocol (bfp.h); the host side is tools/bigfoston/bfagent.py.
+ *
+ * Safety rules built in:
+ *   - physical memory is mapped read-only (PAGE_READONLY); no command writes
+ *     physical memory, registers or raw disk sectors;
+ *   - the registry is only read;
+ *   - KernelIoControl only accepts a whitelist of information requests;
+ *   - file writes go through the normal file system (to deploy test files).
+ *
+ * Runs from \Temp (copied there at start) so the USB storage can go away.
+ * Quitting restores the USB client that was active before.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#include <windows.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+
+#include "bfp.h"
+#include "boot.h"
+
+#define AGENT_VERSION "bfagent 0.2.4"
+#define AGENT_VERSION_W L"bfagent 0.2.4"
+#define AGENT_CLASS L"BigFostonAgent"
+#define WM_APP_REDRAW (WM_APP + 1)
+
+/* ------------------------------------------------------------------ state */
+
+static HWND g_hwnd;
+static int g_width, g_height;
+static HANDLE g_port = INVALID_HANDLE_VALUE;
+static CRITICAL_SECTION g_write_lock;
+static volatile LONG g_quit;
+static volatile LONG g_restart;            /* QUIT with payload 1: start the copy on the card again */
+static WCHAR g_origin_dir[MAX_PATH];
+static WCHAR g_port_name[16];
+static WCHAR g_prev_client[128];
+static int g_switched_usb;
+static WCHAR g_status[200] = L"Iniciando...";
+static WCHAR g_last[200] = L"";
+static DWORD g_requests;
+static RECT g_exit_button;
+static FILE *g_log;
+
+static void log_line(const char *fmt, ...)
+{
+    va_list ap;
+    if (!g_log)
+        return;
+    fprintf(g_log, "[%lu] ", (unsigned long)GetTickCount());
+    va_start(ap, fmt);
+    vfprintf(g_log, fmt, ap);
+    va_end(ap);
+    fputc('\n', g_log);
+    fflush(g_log);
+}
+
+static void set_text(WCHAR *dst, const WCHAR *src)
+{
+    wcsncpy(dst, src, 199);
+    dst[199] = 0;
+    if (g_hwnd)
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+}
+
+/* this device's coredll has no _vsnwprintf: format with _snwprintf only */
+#define STATUS(...) do { WCHAR s_[200]; _snwprintf(s_, 199, __VA_ARGS__); s_[199] = 0; set_text(g_status, s_); } while (0)
+#define LAST(...)   do { WCHAR s_[200]; _snwprintf(s_, 199, __VA_ARGS__); s_[199] = 0; set_text(g_last, s_); } while (0)
+
+/* --------------------------------------------- kernel/coredll entry points */
+
+typedef BOOL (WINAPI *VirtualCopy_t)(LPVOID, LPVOID, DWORD, DWORD);
+typedef BOOL (WINAPI *SetKMode_t)(BOOL);
+typedef DWORD (WINAPI *SetProcPermissions_t)(DWORD);
+typedef void (WINAPI *CacheSync_t)(int);
+typedef BOOL (WINAPI *KernelIoControl_t)(DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWORD);
+typedef BOOL (WINAPI *CeSetThreadPriority_t)(HANDLE, int);
+typedef HANDLE (WINAPI *FindFirstDevice_t)(int, const void *, void *);
+typedef BOOL (WINAPI *FindClose_t)(HANDLE);
+typedef void (WINAPI *SystemIdleTimerReset_t)(void);
+
+static HMODULE g_coredll;
+static VirtualCopy_t p_VirtualCopy;
+static SetKMode_t p_SetKMode;
+static SetProcPermissions_t p_SetProcPermissions;
+static CacheSync_t p_CacheSync;
+static KernelIoControl_t p_KernelIoControl;
+static CeSetThreadPriority_t p_CeSetThreadPriority;
+static SystemIdleTimerReset_t p_idle_reset;
+
+static FARPROC core_proc(const WCHAR *name)
+{
+    if (!g_coredll)
+        g_coredll = LoadLibraryW(L"coredll.dll");
+    return g_coredll ? GetProcAddressW(g_coredll, name) : NULL;
+}
+
+static void resolve_kernel_calls(void)
+{
+    p_VirtualCopy = (VirtualCopy_t)core_proc(L"VirtualCopy");
+    p_SetKMode = (SetKMode_t)core_proc(L"SetKMode");
+    p_SetProcPermissions = (SetProcPermissions_t)core_proc(L"SetProcPermissions");
+    p_CacheSync = (CacheSync_t)core_proc(L"CacheSync");
+    p_KernelIoControl = (KernelIoControl_t)core_proc(L"KernelIoControl");
+    p_CeSetThreadPriority = (CeSetThreadPriority_t)core_proc(L"CeSetThreadPriority");
+    p_idle_reset = (SystemIdleTimerReset_t)core_proc(L"SystemIdleTimerReset");
+}
+
+/* --------------------------------------------------------- output buffer */
+
+typedef struct {
+    uint8_t *data;
+    uint32_t len, cap;
+    int overflow;
+} buf_t;
+
+static int buf_init(buf_t *b, uint32_t cap)
+{
+    b->data = (uint8_t *)malloc(cap);
+    b->len = 0;
+    b->cap = b->data ? cap : 0;
+    b->overflow = 0;
+    return b->data != NULL;
+}
+
+static void buf_add(buf_t *b, const void *data, uint32_t len)
+{
+    if (b->len + len > b->cap) {
+        b->overflow = 1;
+        len = b->cap - b->len;
+    }
+    memcpy(b->data + b->len, data, len);
+    b->len += len;
+}
+
+static void buf_w(buf_t *b, const WCHAR *text)
+{
+    char tmp[1024];
+    int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, tmp, sizeof(tmp), NULL, NULL);
+    if (n > 1)
+        buf_add(b, tmp, (uint32_t)(n - 1));
+}
+
+#define BUFF(b, ...) do { WCHAR t_[512]; _snwprintf(t_, 511, __VA_ARGS__); t_[511] = 0; buf_w((b), t_); } while (0)
+
+/* request payload helpers: NUL-terminated UTF-8 string -> wide */
+static int arg_path(const uint8_t *p, uint32_t len, WCHAR *out, int out_chars, uint32_t *used)
+{
+    uint32_t n = 0;
+    int w;
+    while (n < len && p[n])
+        n++;
+    if (!n || n >= 1024)
+        return 0;
+    w = MultiByteToWideChar(CP_UTF8, 0, (const char *)p, (int)n, out, out_chars - 1);
+    if (w <= 0)
+        return 0;
+    out[w] = 0;
+    if (used)
+        *used = n < len ? n + 1 : n;
+    return 1;
+}
+
+/* ------------------------------------------------------------- transport */
+
+static int send_raw(const uint8_t *data, uint32_t len)
+{
+    while (len) {
+        DWORD chunk = len > 16384 ? 16384 : len, written = 0;
+        if (!WriteFile(g_port, data, chunk, &written, NULL) || !written)
+            return 0;
+        data += written;
+        len -= written;
+    }
+    return 1;
+}
+
+static void respond(const bfp_msg *req, uint16_t status, const uint8_t *payload, uint32_t len)
+{
+    uint8_t header[BFP_HEADER];
+    bfp_header(header, (uint8_t)(req->type | BFP_RESPONSE), req->seq, status, payload, len);
+    EnterCriticalSection(&g_write_lock);
+    if (g_port != INVALID_HANDLE_VALUE && send_raw(header, BFP_HEADER) && len)
+        send_raw(payload, len);
+    LeaveCriticalSection(&g_write_lock);
+}
+
+static void respond_error(const bfp_msg *req, uint16_t status, DWORD err, const char *message)
+{
+    uint8_t p[260];
+    size_t n = strlen(message);
+    if (n > 250)
+        n = 250;
+    bfp_put32(p, err);
+    memcpy(p + 4, message, n);
+    respond(req, status, p, (uint32_t)(4 + n));
+}
+
+static void respond_buf(const bfp_msg *req, buf_t *b)
+{
+    respond(req, b->overflow ? BFP_E_TOOBIG : BFP_OK, b->data, b->len);
+}
+
+/* ------------------------------------------------------------- commands */
+
+static void cmd_info(const bfp_msg *req)
+{
+    buf_t b;
+    OSVERSIONINFOW os;
+    SYSTEM_INFO si;
+    MEMORYSTATUS mem;
+    WCHAR text[128];
+    HDC dc;
+    if (!buf_init(&b, 8192)) {
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    BUFF(&b, L"agent: %hs\n", AGENT_VERSION);
+    os.dwOSVersionInfoSize = sizeof(os);
+    GetVersionExW(&os);
+    BUFF(&b, L"os: Windows CE %lu.%lu build %lu %ls\n", os.dwMajorVersion, os.dwMinorVersion, os.dwBuildNumber,
+         os.szCSDVersion);
+    text[0] = 0;
+    SystemParametersInfoW(258 /* SPI_GETOEMINFO */, sizeof(text), text, 0);
+    BUFF(&b, L"oem: %ls\n", text);
+    text[0] = 0;
+    SystemParametersInfoW(257 /* SPI_GETPLATFORMTYPE */, sizeof(text), text, 0);
+    BUFF(&b, L"platform: %ls\n", text);
+    GetSystemInfo(&si);
+    BUFF(&b, L"cpu: arch %u type %lu level %u revision 0x%04x page %lu\n", si.wProcessorArchitecture,
+         si.dwProcessorType, si.wProcessorLevel, si.wProcessorRevision, si.dwPageSize);
+    BUFF(&b, L"address space: 0x%08lx-0x%08lx\n", (DWORD)si.lpMinimumApplicationAddress,
+         (DWORD)si.lpMaximumApplicationAddress);
+    mem.dwLength = sizeof(mem);
+    GlobalMemoryStatus(&mem);
+    BUFF(&b, L"memory: physical %lu KB, free %lu KB, virtual %lu KB\n", mem.dwTotalPhys / 1024,
+         mem.dwAvailPhys / 1024, mem.dwTotalVirtual / 1024);
+    dc = GetDC(NULL);
+    BUFF(&b, L"screen: %dx%d %d bpp\n", GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+         GetDeviceCaps(dc, BITSPIXEL));
+    ReleaseDC(NULL, dc);
+    BUFF(&b, L"tick: %lu\n", GetTickCount());
+    BUFF(&b, L"origin: %ls\nport: %ls\nprevious usb client: %ls\n", g_origin_dir, g_port_name,
+         g_prev_client[0] ? g_prev_client : L"-");
+    BUFF(&b, L"kernel calls: VirtualCopy=%d SetKMode=%d SetProcPermissions=%d CacheSync=%d KernelIoControl=%d\n",
+         p_VirtualCopy != NULL, p_SetKMode != NULL, p_SetProcPermissions != NULL, p_CacheSync != NULL,
+         p_KernelIoControl != NULL);
+    respond_buf(req, &b);
+    free(b.data);
+}
+
+static void cmd_list(const bfp_msg *req)
+{
+    WCHAR path[MAX_PATH], pattern[MAX_PATH + 4];
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    buf_t b;
+    if (!arg_path(req->payload, req->len, path, MAX_PATH - 4, NULL)) {
+        respond_error(req, BFP_E_ARGS, 0, "path expected");
+        return;
+    }
+    if (!buf_init(&b, 256 * 1024)) {
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    _snwprintf(pattern, MAX_PATH + 3, L"%ls%ls*", path, path[wcslen(path) - 1] == L'\\' ? L"" : L"\\");
+    pattern[MAX_PATH + 3] = 0;
+    h = FindFirstFileW(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        free(b.data);
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "FindFirstFile failed");
+        return;
+    }
+    do {
+        BUFF(&b, L"%lc %lu 0x%lx %ls\n", (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? L'D' : L'F',
+             fd.nFileSizeLow, fd.dwFileAttributes, fd.cFileName);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    respond_buf(req, &b);
+    free(b.data);
+}
+
+static void cmd_read(const bfp_msg *req)
+{
+    WCHAR path[MAX_PATH];
+    uint32_t offset, length;
+    HANDLE f;
+    uint8_t *data;
+    DWORD got = 0, size;
+    if (req->len < 9 || !arg_path(req->payload + 8, req->len - 8, path, MAX_PATH, NULL)) {
+        respond_error(req, BFP_E_ARGS, 0, "offset, length, path expected");
+        return;
+    }
+    offset = bfp_get32(req->payload);
+    length = bfp_get32(req->payload + 4);
+    if (length > BFP_MAX_PAYLOAD - 8)
+        length = BFP_MAX_PAYLOAD - 8;
+    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "open failed");
+        return;
+    }
+    size = GetFileSize(f, NULL);
+    data = (uint8_t *)malloc(length + 8);
+    if (!data) {
+        CloseHandle(f);
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    /* response: u32 file size, u32 offset, bytes */
+    bfp_put32(data, size);
+    bfp_put32(data + 4, offset);
+    if (SetFilePointer(f, (LONG)offset, NULL, FILE_BEGIN) == 0xFFFFFFFF && GetLastError() != NO_ERROR) {
+        free(data);
+        CloseHandle(f);
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "seek failed");
+        return;
+    }
+    if (length && !ReadFile(f, data + 8, length, &got, NULL)) {
+        DWORD err = GetLastError();
+        free(data);
+        CloseHandle(f);
+        respond_error(req, BFP_E_SYSTEM, err, "read failed");
+        return;
+    }
+    CloseHandle(f);
+    respond(req, BFP_OK, data, 8 + got);
+    free(data);
+}
+
+static void cmd_write(const bfp_msg *req)
+{
+    WCHAR path[MAX_PATH];
+    uint32_t offset, used = 0;
+    uint8_t truncate, reply[4];
+    HANDLE f;
+    DWORD written = 0;
+    if (req->len < 6 || !arg_path(req->payload + 5, req->len - 5, path, MAX_PATH, &used)) {
+        respond_error(req, BFP_E_ARGS, 0, "offset, truncate, path expected");
+        return;
+    }
+    offset = bfp_get32(req->payload);
+    truncate = req->payload[4];
+    f = CreateFileW(path, GENERIC_WRITE, 0, NULL, truncate ? CREATE_ALWAYS : OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                    NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "create failed");
+        return;
+    }
+    SetFilePointer(f, (LONG)offset, NULL, FILE_BEGIN);
+    if (req->len > 5 + used &&
+        !WriteFile(f, req->payload + 5 + used, req->len - 5 - used, &written, NULL)) {
+        DWORD err = GetLastError();
+        CloseHandle(f);
+        respond_error(req, BFP_E_SYSTEM, err, "write failed");
+        return;
+    }
+    FlushFileBuffers(f);
+    CloseHandle(f);
+    bfp_put32(reply, written);
+    respond(req, BFP_OK, reply, 4);
+}
+
+static void cmd_path_op(const bfp_msg *req)
+{
+    WCHAR path[MAX_PATH];
+    BOOL ok;
+    if (!arg_path(req->payload, req->len, path, MAX_PATH, NULL)) {
+        respond_error(req, BFP_E_ARGS, 0, "path expected");
+        return;
+    }
+    ok = req->type == BFP_MKDIR ? CreateDirectoryW(path, NULL) : DeleteFileW(path);
+    if (ok)
+        respond(req, BFP_OK, NULL, 0);
+    else
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), req->type == BFP_MKDIR ? "mkdir failed" : "delete failed");
+}
+
+static void reg_dump(buf_t *b, HKEY root, const WCHAR *path, int depth)
+{
+    HKEY key;
+    DWORD index, i;
+    WCHAR name[256], sub[512];
+    static BYTE data[4096];
+    if (RegOpenKeyExW(root, path, 0, 0, &key) != ERROR_SUCCESS) {
+        BUFF(b, L"[%ls] (absent)\n", path);
+        return;
+    }
+    BUFF(b, L"[%ls]\n", path);
+    for (index = 0;; index++) {
+        DWORD name_len = 256, data_len = sizeof(data) - 4, type = 0;
+        if (RegEnumValueW(key, index, name, &name_len, NULL, &type, data, &data_len) != ERROR_SUCCESS)
+            break;
+        data[data_len] = data[data_len + 1] = data[data_len + 2] = data[data_len + 3] = 0;
+        if (type == REG_DWORD && data_len == 4) {
+            DWORD v;
+            memcpy(&v, data, 4);
+            BUFF(b, L"  \"%ls\"=dword:%08lx\n", name, v);
+        } else if (type == REG_SZ || type == REG_EXPAND_SZ) {
+            BUFF(b, L"  \"%ls\"=\"%ls\"\n", name, (WCHAR *)data);
+        } else if (type == REG_MULTI_SZ) {
+            WCHAR *s = (WCHAR *)data;
+            BUFF(b, L"  \"%ls\"=multi:", name);
+            while (*s && (BYTE *)s < data + data_len) {
+                BUFF(b, L"\"%ls\" ", s);
+                s += wcslen(s) + 1;
+            }
+            buf_add(b, "\n", 1);
+        } else {
+            BUFF(b, L"  \"%ls\"=hex(%lu):", name, type);
+            for (i = 0; i < data_len && i < 256; i++)
+                BUFF(b, L"%02x", data[i]);
+            buf_add(b, "\n", 1);
+        }
+    }
+    if (depth > 0) {
+        for (index = 0;; index++) {
+            DWORD name_len = 256;
+            if (RegEnumKeyExW(key, index, name, &name_len, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            _snwprintf(sub, 511, L"%ls%ls%ls", path, path[0] ? L"\\" : L"", name);
+            sub[511] = 0;
+            reg_dump(b, root, sub, depth - 1);
+            if (b->overflow)
+                break;
+        }
+    }
+    RegCloseKey(key);
+}
+
+static void cmd_reg(const bfp_msg *req)
+{
+    static const HKEY roots[] = {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER, HKEY_CLASSES_ROOT, HKEY_USERS};
+    WCHAR path[512];
+    buf_t b;
+    if (req->len < 2 || req->payload[0] > 3) {
+        respond_error(req, BFP_E_ARGS, 0, "root, depth, path expected");
+        return;
+    }
+    path[0] = 0;
+    if (req->len > 2 && req->payload[2])
+        arg_path(req->payload + 2, req->len - 2, path, 512, NULL);
+    if (!buf_init(&b, BFP_MAX_PAYLOAD)) {
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    reg_dump(&b, roots[req->payload[0]], path, req->payload[1]);
+    respond_buf(req, &b);
+    free(b.data);
+}
+
+static void cmd_exec(const bfp_msg *req)
+{
+    WCHAR path[MAX_PATH], args[512];
+    uint32_t used = 0;
+    PROCESS_INFORMATION pi;
+    uint8_t reply[4];
+    if (!arg_path(req->payload, req->len, path, MAX_PATH, &used)) {
+        respond_error(req, BFP_E_ARGS, 0, "path expected");
+        return;
+    }
+    args[0] = 0;
+    if (used < req->len)
+        arg_path(req->payload + used, req->len - used, args, 512, NULL);
+    if (!CreateProcessW(path, args[0] ? args : NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "CreateProcess failed");
+        return;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    bfp_put32(reply, pi.dwProcessId);
+    respond(req, BFP_OK, reply, 4);
+}
+
+typedef struct {
+    DWORD dwSize, cntUsage, th32ProcessID, th32DefaultHeapID, th32ModuleID, cntThreads, th32ParentProcessID;
+    LONG pcPriClassBase;
+    DWORD dwFlags;
+    WCHAR szExeFile[MAX_PATH];
+    DWORD th32MemoryBase, th32AccessKey;
+} PROCESSENTRY32_CE;
+
+typedef struct {
+    DWORD dwSize, th32ModuleID, th32ProcessID, GlblcntUsage, ProccntUsage;
+    BYTE *modBaseAddr;
+    DWORD modBaseSize;
+    HMODULE hModule;
+    WCHAR szModule[256];
+    WCHAR szExePath[MAX_PATH];
+    DWORD dwFlags;
+} MODULEENTRY32_CE;
+
+static void cmd_ps(const bfp_msg *req)
+{
+    typedef HANDLE (WINAPI *Snap_t)(DWORD, DWORD);
+    typedef BOOL (WINAPI *Walk_t)(HANDLE, void *);
+    typedef BOOL (WINAPI *Close_t)(HANDLE);
+    HMODULE th = LoadLibraryW(L"toolhelp.dll");
+    Snap_t snap;
+    Walk_t pfirst, pnext, mfirst, mnext;
+    Close_t close_snap;
+    PROCESSENTRY32_CE pe;
+    MODULEENTRY32_CE me;
+    HANDLE s;
+    BOOL more;
+    buf_t b;
+    int modules = req->len >= 1 && req->payload[0];
+    if (!th) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "toolhelp.dll missing");
+        return;
+    }
+    snap = (Snap_t)GetProcAddressW(th, L"CreateToolhelp32Snapshot");
+    pfirst = (Walk_t)GetProcAddressW(th, L"Process32First");
+    pnext = (Walk_t)GetProcAddressW(th, L"Process32Next");
+    mfirst = (Walk_t)GetProcAddressW(th, L"Module32First");
+    mnext = (Walk_t)GetProcAddressW(th, L"Module32Next");
+    close_snap = (Close_t)GetProcAddressW(th, L"CloseToolhelp32Snapshot");
+    if (!snap || !pfirst || !pnext || !buf_init(&b, 256 * 1024)) {
+        FreeLibrary(th);
+        respond_error(req, BFP_E_SYSTEM, 0, "toolhelp incomplete");
+        return;
+    }
+    s = snap(2 /* TH32CS_SNAPPROCESS */, 0);
+    pe.dwSize = sizeof(pe);
+    for (more = s != INVALID_HANDLE_VALUE && pfirst(s, &pe); more; more = pnext(s, &pe)) {
+        BUFF(&b, L"P %08lx base=0x%08lx threads=%lu %ls\n", pe.th32ProcessID, pe.th32MemoryBase, pe.cntThreads,
+             pe.szExeFile);
+        if (modules && mfirst && mnext) {
+            HANDLE ms = snap(8 /* TH32CS_SNAPMODULE */ | 0x40000000 /* NOHEAPS */, pe.th32ProcessID);
+            BOOL mm;
+            me.dwSize = sizeof(me);
+            for (mm = ms != INVALID_HANDLE_VALUE && mfirst(ms, &me); mm; mm = mnext(ms, &me)) {
+                BUFF(&b, L"  M 0x%08lx %lu %ls\n", (DWORD)me.modBaseAddr, me.modBaseSize, me.szModule);
+                me.dwSize = sizeof(me);
+            }
+            if (ms != INVALID_HANDLE_VALUE && close_snap)
+                close_snap(ms);
+        }
+        pe.dwSize = sizeof(pe);
+    }
+    if (s != INVALID_HANDLE_VALUE && close_snap)
+        close_snap(s);
+    FreeLibrary(th);
+    respond_buf(req, &b);
+    free(b.data);
+}
+
+static void cmd_kill(const bfp_msg *req)
+{
+    HANDLE p;
+    if (req->len < 4) {
+        respond_error(req, BFP_E_ARGS, 0, "pid expected");
+        return;
+    }
+    p = OpenProcess(0, FALSE, bfp_get32(req->payload));
+    if (!p || !TerminateProcess(p, 0)) {
+        DWORD err = GetLastError();
+        if (p)
+            CloseHandle(p);
+        respond_error(req, BFP_E_SYSTEM, err, "terminate failed");
+        return;
+    }
+    CloseHandle(p);
+    respond(req, BFP_OK, NULL, 0);
+}
+
+/* Physical memory, read-only. width 4 reads 32-bit words (registers);
+ * width 1 copies bytes (RAM/ROM). The caller (host tool) only asks for
+ * ranges that Windows CE itself maps, taken from the page tables. */
+#define PAGE_PHYSICAL_CE 0x400
+#define MAX_PHYS_READ (256u * 1024u)
+
+static void cmd_phys(const bfp_msg *req)
+{
+    uint32_t address, length, base, offset, span, width;
+    void *va;
+    uint8_t *out;
+    if (req->len < 9) {
+        respond_error(req, BFP_E_ARGS, 0, "address, length, width expected");
+        return;
+    }
+    if (!p_VirtualCopy) {
+        respond_error(req, BFP_E_DENIED, 0, "VirtualCopy unavailable");
+        return;
+    }
+    address = bfp_get32(req->payload);
+    length = bfp_get32(req->payload + 4);
+    width = req->payload[8];
+    if (!length || length > MAX_PHYS_READ || (width == 4 && ((address | length) & 3))) {
+        respond_error(req, BFP_E_ARGS, 0, "bad length or alignment");
+        return;
+    }
+    base = address & ~0xFFFu;
+    offset = address - base;
+    span = (offset + length + 0xFFFu) & ~0xFFFu;
+    va = VirtualAlloc(NULL, span, MEM_RESERVE, PAGE_NOACCESS);
+    if (!va) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "VirtualAlloc failed");
+        return;
+    }
+    if (!p_VirtualCopy(va, (LPVOID)(base >> 8), span, PAGE_READONLY | PAGE_NOCACHE | PAGE_PHYSICAL_CE)) {
+        DWORD err = GetLastError();
+        VirtualFree(va, 0, MEM_RELEASE);
+        respond_error(req, BFP_E_SYSTEM, err, "VirtualCopy failed");
+        return;
+    }
+    out = (uint8_t *)malloc(length);
+    if (!out) {
+        VirtualFree(va, 0, MEM_RELEASE);
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    if (p_CacheSync)
+        p_CacheSync(4 /* CACHE_SYNC_WRITEBACK: what the kernel wrote reaches RAM before the uncached read */);
+    if (width == 4) {
+        volatile const uint32_t *src = (volatile const uint32_t *)((uint8_t *)va + offset);
+        uint32_t i;
+        for (i = 0; i < length / 4; i++)
+            bfp_put32(out + i * 4, src[i]);
+    } else {
+        memcpy(out, (uint8_t *)va + offset, length);
+    }
+    VirtualFree(va, 0, MEM_RELEASE);
+    respond(req, BFP_OK, out, length);
+    free(out);
+}
+
+/* CP15 and CPSR, read in kernel mode (SetKMode). ARM926EJ-S expected. */
+static void cmd_cpu(const bfp_msg *req)
+{
+    DWORD id = 0, cache = 0, tcm = 0, ctrl = 0, ttb = 0, dacr = 0, pid = 0, cpsr = 0;
+    DWORD aux = 0, cpacr = 0, fpsid = 0, dtcm = 0, itcm = 0;
+    BOOL previous;
+    buf_t b;
+    if (!p_SetKMode) {
+        respond_error(req, BFP_E_DENIED, 0, "SetKMode unavailable");
+        return;
+    }
+    previous = p_SetKMode(TRUE);
+    __asm__ __volatile__(
+        "mrc p15, 0, %0, c0, c0, 0\n\t"
+        "mrc p15, 0, %1, c0, c0, 1\n\t"
+        "mrc p15, 0, %2, c0, c0, 2\n\t"
+        "mrc p15, 0, %3, c1, c0, 0\n\t"
+        : "=r"(id), "=r"(cache), "=r"(tcm), "=r"(ctrl));
+    __asm__ __volatile__(
+        "mrc p15, 0, %0, c2, c0, 0\n\t"
+        "mrc p15, 0, %1, c3, c0, 0\n\t"
+        "mrc p15, 0, %2, c13, c0, 0\n\t"
+        "mrs %3, cpsr\n\t"
+        : "=r"(ttb), "=r"(dacr), "=r"(pid), "=r"(cpsr));
+    __asm__ __volatile__(
+        "mrc p15, 0, %0, c1, c0, 1\n\t"     /* auxiliary control */
+        "mrc p15, 0, %1, c1, c0, 2\n\t"     /* coprocessor access (cp10/cp11 = VFP) */
+        : "=r"(aux), "=r"(cpacr));
+    __asm__ __volatile__(
+        "mrc p15, 0, %0, c9, c1, 0\n\t"     /* data TCM region (base, size, enable) */
+        "mrc p15, 0, %1, c9, c1, 1\n\t"     /* instruction TCM region */
+        : "=r"(dtcm), "=r"(itcm));
+    /* FPSID only when the OS granted cp10 access: otherwise the read is undefined */
+    if ((cpacr & (3u << 20)) == (3u << 20))
+        __asm__ __volatile__("mrc p10, 7, %0, c0, c0, 0\n\t" : "=r"(fpsid));
+    p_SetKMode(previous);
+    if (!buf_init(&b, 1024)) {
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    BUFF(&b, L"main_id=0x%08lx\ncache_type=0x%08lx\ntcm_status=0x%08lx\ncontrol=0x%08lx\n", id, cache, tcm, ctrl);
+    BUFF(&b, L"ttb=0x%08lx\ndacr=0x%08lx\nfcse_pid=0x%08lx\ncpsr=0x%08lx\n", ttb, dacr, pid, cpsr);
+    BUFF(&b, L"aux_control=0x%08lx\ncpacr=0x%08lx\nfpsid=0x%08lx\n", aux, cpacr, fpsid);
+    BUFF(&b, L"dtcm_region=0x%08lx\nitcm_region=0x%08lx\n", dtcm, itcm);
+    respond_buf(req, &b);
+    free(b.data);
+}
+
+static void cmd_kioctl(const bfp_msg *req)
+{
+    /* information requests only (FILE_DEVICE_HAL functions) */
+    static const DWORD allowed[] = {
+        0x01010000, /* IOCTL_HAL_GET_DEVICE_INFO */
+        0x0101004C, /* IOCTL_HAL_GET_UUID */
+        0x01010054, /* IOCTL_HAL_GET_DEVICEID */
+        0x01010064, /* IOCTL_PROCESSOR_INFORMATION */
+    };
+    DWORD code, ret = 0, i;
+    uint8_t out[1024];
+    if (req->len < 4 || !p_KernelIoControl) {
+        respond_error(req, BFP_E_ARGS, 0, "code expected / KernelIoControl unavailable");
+        return;
+    }
+    code = bfp_get32(req->payload);
+    for (i = 0; i < sizeof(allowed) / sizeof(allowed[0]) && allowed[i] != code; i++)
+        ;
+    if (i == sizeof(allowed) / sizeof(allowed[0])) {
+        respond_error(req, BFP_E_DENIED, 0, "ioctl not in the information whitelist");
+        return;
+    }
+    memset(out, 0, sizeof(out));
+    if (code == 0x01010054)
+        bfp_put32(out, sizeof(out));      /* DEVICE_ID.dwSize */
+    if (!p_KernelIoControl(code, req->len > 4 ? (LPVOID)(req->payload + 4) : NULL, req->len - 4, out, sizeof(out),
+                           &ret)) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "KernelIoControl failed");
+        return;
+    }
+    respond(req, BFP_OK, out, ret && ret <= sizeof(out) ? ret : sizeof(out));
+}
+
+/* block devices (diskio.h) */
+#define IOCTL_DISK_GETINFO_CE 0x00071C00
+#define IOCTL_DISK_READ_CE    0x00071C08
+#define DISK_IOCTL_GETINFO_CE 1
+#define DISK_IOCTL_READ_CE    2
+
+typedef struct { DWORD total_sectors, bytes_per_sector, cylinders, heads, sectors, flags; } DISK_INFO_CE;
+typedef struct { uint8_t *buf; DWORD len; } SG_BUF_CE;
+typedef struct { DWORD start, num_sec, num_sg, status; void *callback; SG_BUF_CE sg[1]; } SG_REQ_CE;
+
+static HANDLE open_disk(const bfp_msg *req, const uint8_t *name_bytes, uint32_t len)
+{
+    WCHAR name[32];
+    HANDLE h;
+    if (!arg_path(name_bytes, len, name, 32, NULL)) {
+        respond_error(req, BFP_E_ARGS, 0, "device name expected");
+        return INVALID_HANDLE_VALUE;
+    }
+    h = CreateFileW(name, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        h = CreateFileW(name, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (h == INVALID_HANDLE_VALUE)
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "device open failed");
+    return h;
+}
+
+static int disk_info(HANDLE h, DISK_INFO_CE *di)
+{
+    DWORD ret = 0;
+    memset(di, 0, sizeof(*di));
+    if (DeviceIoControl(h, IOCTL_DISK_GETINFO_CE, NULL, 0, di, sizeof(*di), &ret, NULL) && di->bytes_per_sector)
+        return 1;
+    memset(di, 0, sizeof(*di));
+    return DeviceIoControl(h, DISK_IOCTL_GETINFO_CE, di, sizeof(*di), NULL, 0, &ret, NULL) && di->bytes_per_sector;
+}
+
+static void cmd_diskinfo(const bfp_msg *req)
+{
+    DISK_INFO_CE di;
+    uint8_t out[24];
+    HANDLE h = open_disk(req, req->payload, req->len);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    if (!disk_info(h, &di)) {
+        DWORD err = GetLastError();
+        CloseHandle(h);
+        respond_error(req, BFP_E_SYSTEM, err, "DISK GETINFO failed");
+        return;
+    }
+    CloseHandle(h);
+    bfp_put32(out, di.total_sectors);
+    bfp_put32(out + 4, di.bytes_per_sector);
+    bfp_put32(out + 8, di.cylinders);
+    bfp_put32(out + 12, di.heads);
+    bfp_put32(out + 16, di.sectors);
+    bfp_put32(out + 20, di.flags);
+    respond(req, BFP_OK, out, 24);
+}
+
+static void cmd_diskread(const bfp_msg *req)
+{
+    DISK_INFO_CE di;
+    SG_REQ_CE sg;
+    DWORD sector, count, bytes, ret = 0;
+    uint8_t *data;
+    HANDLE h;
+    if (req->len < 9) {
+        respond_error(req, BFP_E_ARGS, 0, "sector, count, device expected");
+        return;
+    }
+    sector = bfp_get32(req->payload);
+    count = bfp_get32(req->payload + 4);
+    h = open_disk(req, req->payload + 8, req->len - 8);
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    if (!disk_info(h, &di) || !count || di.bytes_per_sector > 4096 ||
+        count * di.bytes_per_sector > BFP_MAX_PAYLOAD || sector + count > di.total_sectors) {
+        CloseHandle(h);
+        respond_error(req, BFP_E_ARGS, 0, "bad range");
+        return;
+    }
+    bytes = count * di.bytes_per_sector;
+    data = (uint8_t *)malloc(bytes);
+    if (!data) {
+        CloseHandle(h);
+        respond_error(req, BFP_E_SYSTEM, 0, "out of memory");
+        return;
+    }
+    memset(&sg, 0, sizeof(sg));
+    sg.start = sector;
+    sg.num_sec = count;
+    sg.num_sg = 1;
+    sg.sg[0].buf = data;
+    sg.sg[0].len = bytes;
+    if (!DeviceIoControl(h, IOCTL_DISK_READ_CE, &sg, sizeof(sg), NULL, 0, &ret, NULL) || sg.status) {
+        sg.status = 0;
+        if (!DeviceIoControl(h, DISK_IOCTL_READ_CE, &sg, sizeof(sg), NULL, 0, &ret, NULL) || sg.status) {
+            DWORD err = sg.status ? sg.status : GetLastError();
+            free(data);
+            CloseHandle(h);
+            respond_error(req, BFP_E_SYSTEM, err, "DISK READ failed");
+            return;
+        }
+    }
+    CloseHandle(h);
+    respond(req, BFP_OK, data, bytes);
+    free(data);
+}
+
+/* Screenshot of the whole screen; payload[0] = 1 hides the agent window first
+ * so the application underneath is captured. */
+static void cmd_shot(const bfp_msg *req)
+{
+    struct { BITMAPINFOHEADER h; DWORD masks[3]; } bi;
+    HDC screen, mem;
+    HBITMAP dib, old;
+    void *bits = NULL;
+    uint8_t *out;
+    int w = GetSystemMetrics(SM_CXSCREEN), hgt = GetSystemMetrics(SM_CYSCREEN), y;
+    int hide = req->len >= 1 && req->payload[0];
+    if (hide) {
+        ShowWindow(g_hwnd, SW_HIDE);
+        Sleep(400);
+    }
+    memset(&bi, 0, sizeof(bi));
+    bi.h.biSize = sizeof(bi.h);
+    bi.h.biWidth = w;
+    bi.h.biHeight = -hgt;
+    bi.h.biPlanes = 1;
+    bi.h.biBitCount = 16;
+    bi.h.biCompression = BI_BITFIELDS;
+    bi.masks[0] = 0xF800;
+    bi.masks[1] = 0x07E0;
+    bi.masks[2] = 0x001F;
+    screen = GetDC(NULL);
+    mem = CreateCompatibleDC(screen);
+    dib = CreateDIBSection(screen, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    out = (uint8_t *)malloc(4 + w * hgt * 2);
+    if (!mem || !dib || !bits || !out) {
+        if (dib)
+            DeleteObject(dib);
+        if (mem)
+            DeleteDC(mem);
+        ReleaseDC(NULL, screen);
+        free(out);
+        if (hide)
+            ShowWindow(g_hwnd, SW_SHOW);
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "screen capture setup failed");
+        return;
+    }
+    old = (HBITMAP)SelectObject(mem, dib);
+    BitBlt(mem, 0, 0, w, hgt, screen, 0, 0, SRCCOPY);
+    bfp_put16(out, (uint16_t)w);
+    bfp_put16(out + 2, (uint16_t)hgt);
+    for (y = 0; y < hgt; y++)                /* DIB rows are DWORD aligned: 800*2 already is */
+        memcpy(out + 4 + y * w * 2, (uint8_t *)bits + y * ((w * 2 + 3) & ~3), w * 2);
+    SelectObject(mem, old);
+    DeleteObject(dib);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    if (hide) {
+        ShowWindow(g_hwnd, SW_SHOW);
+        SetForegroundWindow(g_hwnd);
+    }
+    respond(req, BFP_OK, out, 4 + w * hgt * 2);
+    free(out);
+}
+
+/* Start a kernel / bare-metal payload. Replies first (dry run: replies with
+ * the plan), then never returns: Windows CE is gone until the next reset. */
+static void cmd_boot(const bfp_msg *req)
+{
+    static bf_boot_args args;
+    char err[240];
+    uint32_t used = 0, pos = 17;
+    if (req->len < 18) {
+        respond_error(req, BFP_E_ARGS, 0, "boot arguments expected");
+        return;
+    }
+    memset(&args, 0, sizeof(args));
+    args.kernel_pa = bfp_get32(req->payload);
+    args.dtb_pa = bfp_get32(req->payload + 4);
+    args.initrd_pa = bfp_get32(req->payload + 8);
+    args.machine = bfp_get32(req->payload + 12);
+    args.dry_run = req->payload[16];
+    /* layout (tools/bigfoston/mkboot.py): zImage 0x00800000 (8 MB), initrd 0x01000000 (12 MB),
+     * DTB 0x01F00000 (64 KB); the kernel decompresses itself to 0x00008000 */
+    args.kernel_max = 8u << 20;
+    args.dtb_max = 64u << 10;
+    args.initrd_max = 12u << 20;
+    if (!arg_path(req->payload + pos, req->len - pos, args.kernel, MAX_PATH, &used)) {
+        respond_error(req, BFP_E_ARGS, 0, "kernel path expected");
+        return;
+    }
+    pos += used;
+    if (pos < req->len && req->payload[pos] && arg_path(req->payload + pos, req->len - pos, args.dtb, MAX_PATH, &used))
+        pos += used;
+    else
+        pos++;
+    if (pos < req->len && req->payload[pos])
+        arg_path(req->payload + pos, req->len - pos, args.initrd, MAX_PATH, NULL);
+    /* destinations must stay below the pages the loader uses (boot.c BOOT_SAFE_MIN) */
+    if (args.kernel_pa < 0x4000 || args.kernel_pa + args.kernel_max > 0x02000000u ||
+        (args.dtb[0] && args.dtb_pa + args.dtb_max > 0x02000000u) ||
+        (args.initrd[0] && args.initrd_pa + args.initrd_max > 0x02000000u)) {
+        respond_error(req, BFP_E_ARGS, 0, "destinations must lie in 0x4000..0x02000000");
+        return;
+    }
+    log_line("boot %ls dtb=%ls initrd=%ls dry=%d", args.kernel, args.dtb, args.initrd, args.dry_run);
+    if (args.dry_run) {
+        int ok = bf_boot(&args, err, sizeof(err));
+        respond_error(req, ok ? BFP_OK : BFP_E_SYSTEM, ok ? 0 : GetLastError(), err);
+        return;
+    }
+    respond(req, BFP_OK, (const uint8_t *)"booting", 7);
+    STATUS(L"Iniciando %ls ... (reset volta ao Windows CE)", args.kernel);
+    Sleep(300);                                  /* let the reply and the screen update out */
+    if (g_log) {
+        fclose(g_log);
+        g_log = NULL;
+    }
+    if (!bf_boot(&args, err, sizeof(err))) {
+        WCHAR w[240];
+        MultiByteToWideChar(CP_UTF8, 0, err, -1, w, 239);
+        w[239] = 0;
+        STATUS(L"Boot falhou: %ls", w);
+    }
+}
+
+static const char *command_name(uint8_t type)
+{
+    switch (type) {
+    case BFP_INFO: return "info";
+    case BFP_PING: return "ping";
+    case BFP_LIST: return "list";
+    case BFP_READ: return "read";
+    case BFP_WRITE: return "write";
+    case BFP_MKDIR: return "mkdir";
+    case BFP_DELETE: return "delete";
+    case BFP_REG: return "reg";
+    case BFP_EXEC: return "exec";
+    case BFP_PS: return "ps";
+    case BFP_KILL: return "kill";
+    case BFP_PHYS: return "phys";
+    case BFP_CPU: return "cpu";
+    case BFP_KIOCTL: return "kioctl";
+    case BFP_DISKINFO: return "diskinfo";
+    case BFP_DISKREAD: return "diskread";
+    case BFP_SHOT: return "shot";
+    case BFP_BOOT: return "boot";
+    case BFP_QUIT: return "quit";
+    default: return "?";
+    }
+}
+
+static void handle(const bfp_msg *m)
+{
+    g_requests++;
+    LAST(L"#%lu %hs (%lu bytes)", g_requests, command_name(m->type), m->len);
+    if (p_idle_reset)
+        p_idle_reset();
+    if (!m->crc_ok) {
+        respond_error(m, BFP_E_CRC, 0, "payload CRC mismatch");
+        return;
+    }
+    switch (m->type) {
+    case BFP_INFO: cmd_info(m); break;
+    case BFP_PING: respond(m, BFP_OK, m->payload, m->len); break;
+    case BFP_LIST: cmd_list(m); break;
+    case BFP_READ: cmd_read(m); break;
+    case BFP_WRITE: cmd_write(m); break;
+    case BFP_MKDIR:
+    case BFP_DELETE: cmd_path_op(m); break;
+    case BFP_REG: cmd_reg(m); break;
+    case BFP_EXEC: cmd_exec(m); break;
+    case BFP_PS: cmd_ps(m); break;
+    case BFP_KILL: cmd_kill(m); break;
+    case BFP_PHYS: cmd_phys(m); break;
+    case BFP_CPU: cmd_cpu(m); break;
+    case BFP_KIOCTL: cmd_kioctl(m); break;
+    case BFP_DISKINFO: cmd_diskinfo(m); break;
+    case BFP_DISKREAD: cmd_diskread(m); break;
+    case BFP_SHOT: cmd_shot(m); break;
+    case BFP_BOOT: cmd_boot(m); break;
+    case BFP_QUIT:
+        if (m->len >= 1 && m->payload[0] == 1)
+            InterlockedExchange(&g_restart, 1);
+        respond(m, BFP_OK, NULL, 0);
+        PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
+        break;
+    default:
+        respond_error(m, BFP_E_UNKNOWN, 0, "unknown request");
+        break;
+    }
+}
+
+/* ------------------------------------------------------- USB function */
+
+typedef struct {
+    DWORD dwSize;
+    HANDLE hDevice, hParentDevice;
+    WCHAR szLegacyName[6];
+    WCHAR szDeviceKey[MAX_PATH], szDeviceName[MAX_PATH], szBusName[MAX_PATH];
+} DEVINFO_CE;
+typedef struct { WCHAR szName[128]; } UFN_NAME;
+typedef struct { WCHAR szName[128]; WCHAR szDescription[250]; } UFN_INFO;
+#define UFN_IOCTL(n) ((0x22UL << 16) | ((n) << 2))
+#define IOCTL_UFN_GET_CURRENT_CLIENT    UFN_IOCTL(3)
+#define IOCTL_UFN_CHANGE_CURRENT_CLIENT UFN_IOCTL(4)
+static const GUID GUID_USBFN = {0xE2BDC372, 0x598F, 0x4619, {0xBC, 0x50, 0x54, 0xB3, 0xF7, 0x84, 0x8D, 0x35}};
+
+/* Same open sequence that bsmd-ce 1.2.0 validated on this device. */
+static HANDLE ufn_open(void)
+{
+    FindFirstDevice_t find_first = (FindFirstDevice_t)core_proc(L"FindFirstDevice");
+    FindClose_t find_close = (FindClose_t)core_proc(L"FindClose");
+    static const WCHAR *legacy[] = {L"UFN1:", L"UFN0:", L"UFN2:", NULL};
+    DEVINFO_CE di;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    int i;
+    memset(&di, 0, sizeof(di));
+    if (find_first) {
+        HANDLE search;
+        di.dwSize = sizeof(di);
+        search = find_first(3 /* DeviceSearchByGuid */, &GUID_USBFN, &di);
+        if (search != INVALID_HANDLE_VALUE && search != NULL) {
+            if (find_close)
+                find_close(search);
+            h = CreateFileW(di.szBusName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (h == INVALID_HANDLE_VALUE)
+                h = CreateFileW(di.szBusName, 0x0100, 0, NULL, OPEN_EXISTING, 0, NULL);
+        }
+    }
+    for (i = 0; h == INVALID_HANDLE_VALUE && legacy[i]; i++)
+        h = CreateFileW(legacy[i], 0x0100, 0, NULL, OPEN_EXISTING, 0, NULL);
+    return h;
+}
+
+static int ufn_change(HANDLE h, const WCHAR *name)
+{
+    UFN_NAME n;
+    memset(&n, 0, sizeof(n));
+    wcsncpy(n.szName, name, 127);
+    return DeviceIoControl(h, IOCTL_UFN_CHANGE_CURRENT_CLIENT, &n, sizeof(n), NULL, 0, NULL, NULL) ? 1 : 0;
+}
+
+#define UFN_KEY L"Drivers\\USB\\FunctionDrivers"
+
+static int read_default_client(WCHAR *out, DWORD chars)
+{
+    HKEY key;
+    DWORD len = chars * sizeof(WCHAR), type = 0;
+    int ok = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UFN_KEY, 0, 0, &key) != ERROR_SUCCESS)
+        return 0;
+    if (RegQueryValueExW(key, L"DefaultClientDriver", NULL, &type, (BYTE *)out, &len) == ERROR_SUCCESS &&
+        type == REG_SZ && out[0]) {
+        out[chars - 1] = 0;
+        ok = 1;
+    }
+    RegCloseKey(key);
+    return ok;
+}
+
+/* The only registry write of the agent: restoring a value it caused to change. */
+static void write_default_client(const WCHAR *value)
+{
+    typedef LONG (WINAPI *RegFlushKey_t)(HKEY);
+    RegFlushKey_t flush = (RegFlushKey_t)core_proc(L"RegFlushKey");
+    WCHAR now[128];
+    HKEY key;
+    if (!read_default_client(now, 128) || !_wcsicmp(now, value))
+        return;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UFN_KEY, 0, 0, &key) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(key, L"DefaultClientDriver", 0, REG_SZ, (const BYTE *)value,
+                   (DWORD)((wcslen(value) + 1) * sizeof(WCHAR)));
+    if (flush)
+        flush(key);
+    RegCloseKey(key);
+    log_line("DefaultClientDriver %ls -> %ls (restored)", now, value);
+}
+
+static int ensure_serial_client(void)
+{
+    HANDLE h = ufn_open();
+    UFN_INFO info;
+    DWORD got = 0;
+    int ok = 0;
+    if (h == INVALID_HANDLE_VALUE)
+        return 0;
+    memset(&info, 0, sizeof(info));
+    if (DeviceIoControl(h, IOCTL_UFN_GET_CURRENT_CLIENT, NULL, 0, &info, sizeof(info), &got, NULL)) {
+        if (!_wcsicmp(info.szName, L"Serial_Class")) {
+            ok = 1;
+        } else {
+            WCHAR before[128];
+            int had_default = read_default_client(before, 128);
+            if (ufn_change(h, L"Serial_Class")) {
+                if (!g_switched_usb) {
+                    wcsncpy(g_prev_client, info.szName, 127);
+                    g_switched_usb = 1;
+                }
+                log_line("usb client %ls -> Serial_Class", info.szName);
+                /* On this device the change is also saved as the boot default
+                 * (found 2026-11-19: it kept booting as a serial port). Put the
+                 * saved default back so a reset always returns to USB storage. */
+                if (had_default)
+                    write_default_client(before);
+                ok = 1;
+            }
+        }
+    }
+    CloseHandle(h);
+    return ok;
+}
+
+static void restore_usb_client(void)
+{
+    HANDLE h;
+    if (!g_switched_usb || !g_prev_client[0])
+        return;
+    h = ufn_open();
+    if (h == INVALID_HANDLE_VALUE)
+        return;
+    log_line("restore usb client %ls: %d", g_prev_client, ufn_change(h, g_prev_client));
+    CloseHandle(h);
+}
+
+static int find_usb_serial_port(WCHAR *out, size_t out_chars)
+{
+    HKEY active, entry;
+    DWORD index;
+    WCHAR name[64], key_path[MAX_PATH], dev[32];
+    int found = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Drivers\\Active", 0, 0, &active) != ERROR_SUCCESS)
+        return 0;
+    for (index = 0; !found; index++) {
+        DWORD name_len = 64, len, type;
+        if (RegEnumKeyExW(active, index, name, &name_len, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (RegOpenKeyExW(active, name, 0, 0, &entry) != ERROR_SUCCESS)
+            continue;
+        len = sizeof(key_path);
+        key_path[0] = 0;
+        if (RegQueryValueExW(entry, L"Key", NULL, &type, (BYTE *)key_path, &len) == ERROR_SUCCESS) {
+            WCHAR lower[MAX_PATH];
+            size_t i;
+            for (i = 0; key_path[i] && i < MAX_PATH - 1; i++)
+                lower[i] = towlower(key_path[i]);
+            lower[i] = 0;
+            if (wcsstr(lower, L"serial_class") || wcsstr(lower, L"usbser") || wcsstr(lower, L"usbfnserial")) {
+                len = sizeof(dev);
+                if (RegQueryValueExW(entry, L"Name", NULL, &type, (BYTE *)dev, &len) == ERROR_SUCCESS && dev[0]) {
+                    wcsncpy(out, dev, out_chars - 1);
+                    out[out_chars - 1] = 0;
+                    found = 1;
+                }
+            }
+        }
+        RegCloseKey(entry);
+    }
+    RegCloseKey(active);
+    return found;
+}
+
+static HANDLE open_port(const WCHAR *name)
+{
+    HANDLE h = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    DCB dcb;
+    COMMTIMEOUTS t;
+    if (h == INVALID_HANDLE_VALUE)
+        return h;
+    memset(&dcb, 0, sizeof(dcb));
+    dcb.DCBlength = sizeof(dcb);
+    if (GetCommState(h, &dcb)) {
+        dcb.BaudRate = 115200;
+        dcb.ByteSize = 8;
+        dcb.Parity = NOPARITY;
+        dcb.StopBits = ONESTOPBIT;
+        dcb.fOutxCtsFlow = dcb.fOutxDsrFlow = FALSE;
+        dcb.fDtrControl = DTR_CONTROL_ENABLE;
+        dcb.fRtsControl = RTS_CONTROL_ENABLE;
+        dcb.fOutX = dcb.fInX = FALSE;
+        SetCommState(h, &dcb);
+    }
+    t.ReadIntervalTimeout = MAXDWORD;     /* return at once: the driver drops what it cannot buffer */
+    t.ReadTotalTimeoutMultiplier = 0;
+    t.ReadTotalTimeoutConstant = 0;
+    t.WriteTotalTimeoutMultiplier = 0;
+    t.WriteTotalTimeoutConstant = 10000;
+    SetCommTimeouts(h, &t);
+    SetupComm(h, 64 * 1024, 64 * 1024);
+    return h;
+}
+
+/* ------------------------------------------------------------ comm thread */
+
+static DWORD WINAPI comm_thread(LPVOID unused)
+{
+    uint8_t *rx = (uint8_t *)malloc(BFP_HEADER + BFP_MAX_REQUEST + 4096);
+    uint8_t tmp[512];
+    bfp_parser parser;
+    (void)unused;
+    if (!rx) {
+        STATUS(L"Sem memoria.");
+        return 1;
+    }
+    if (p_CeSetThreadPriority)
+        p_CeSetThreadPriority(GetCurrentThread(), 200);
+    while (!g_quit) {
+        DWORD idle = 0;
+        if (!ensure_serial_client())
+            log_line("usb function switching unavailable");
+        if (!find_usb_serial_port(g_port_name, 16)) {
+            STATUS(L"Aguardando a porta USB serial. Conecte o cabo USB.");
+            Sleep(1500);
+            continue;
+        }
+        g_port = open_port(g_port_name);
+        if (g_port == INVALID_HANDLE_VALUE) {
+            STATUS(L"Porta %ls ocupada (erro %lu).", g_port_name, GetLastError());
+            Sleep(1500);
+            continue;
+        }
+        STATUS(L"Pronto em %ls. Rode no PC: tools/bigfoston/bfagent.py info", g_port_name);
+        log_line("port %ls open", g_port_name);
+        bfp_parser_init(&parser, rx, BFP_HEADER + BFP_MAX_REQUEST + 4096);
+        while (!g_quit) {
+            DWORD got = 0;
+            bfp_msg m;
+            if (!ReadFile(g_port, tmp, sizeof(tmp), &got, NULL)) {
+                log_line("read failed: %lu", GetLastError());
+                break;
+            }
+            if (!got) {
+                /* never sleep longer than 1 ms: the Serial_Class driver loses
+                 * data beyond a few KB while nobody reads (measured: 6 KB
+                 * requests failed after the 5 ms idle sleep of 0.1.0) */
+                Sleep(1);
+                if (parser.used && ++idle > 500) {
+                    log_line("stalled partial request (%u bytes): dropped", (unsigned)parser.used);
+                    parser.used = 0;           /* the host times out and retries */
+                    idle = 0;
+                }
+                continue;
+            }
+            idle = 0;
+            {
+                DWORD i = 0;
+                while (i < got) {
+                    size_t n = bfp_feed(&parser, tmp + i, got - i);
+                    i += (DWORD)n;
+                    while (bfp_next(&parser, &m)) {
+                        handle(&m);
+                        bfp_consume(&parser);
+                    }
+                    if (!n && parser.used == parser.cap)
+                        parser.used = 0;   /* oversized request: drop it, the host times out */
+                }
+            }
+        }
+        EnterCriticalSection(&g_write_lock);
+        CloseHandle(g_port);
+        g_port = INVALID_HANDLE_VALUE;
+        LeaveCriticalSection(&g_write_lock);
+        Sleep(500);
+    }
+    free(rx);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ window */
+
+static void paint(HDC dc)
+{
+    RECT r;
+    HBRUSH bg = CreateSolidBrush(RGB(0x1b, 0x1f, 0x27));
+    HBRUSH accent = CreateSolidBrush(RGB(0x35, 0x84, 0xe4));
+    HBRUSH button = CreateSolidBrush(RGB(0x3a, 0x3f, 0x4b));
+    LOGFONTW lf;
+    HFONT font_big, font_small, old;
+    SetRect(&r, 0, 0, g_width, g_height);
+    FillRect(dc, &r, bg);
+    SetRect(&r, 0, 0, g_width, 6);
+    FillRect(dc, &r, accent);
+    SetBkMode(dc, TRANSPARENT);
+    memset(&lf, 0, sizeof(lf));
+    lf.lfHeight = 40;
+    lf.lfWeight = FW_BOLD;
+    wcscpy(lf.lfFaceName, L"Tahoma");
+    font_big = CreateFontIndirectW(&lf);
+    lf.lfHeight = 22;
+    lf.lfWeight = FW_NORMAL;
+    font_small = CreateFontIndirectW(&lf);
+    old = (HFONT)SelectObject(dc, font_big);
+    SetTextColor(dc, RGB(0xff, 0xff, 0xff));
+    SetRect(&r, 32, 40, g_width - 32, 100);
+    DrawTextW(dc, L"BigFoston  \x2022  modo diagnostico", -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    SelectObject(dc, font_small);
+    SetTextColor(dc, RGB(0x99, 0xc1, 0xf1));
+    SetRect(&r, 32, 100, g_width - 32, 130);
+    DrawTextW(dc, AGENT_VERSION_W, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    SetTextColor(dc, RGB(0xde, 0xdd, 0xda));
+    SetRect(&r, 32, 160, g_width - 32, 280);
+    DrawTextW(dc, g_status, -1, &r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    SetTextColor(dc, RGB(0x8f, 0xf0, 0xa4));
+    SetRect(&r, 32, 290, g_width - 32, 330);
+    DrawTextW(dc, g_last, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    SetTextColor(dc, RGB(0x9a, 0x99, 0x96));
+    SetRect(&r, 32, 360, g_width - 240, g_height - 20);
+    DrawTextW(dc, L"Somente leitura de memoria, registro e NAND. Nada e gravado na flash.", -1, &r,
+              DT_LEFT | DT_TOP | DT_WORDBREAK);
+    FillRect(dc, &g_exit_button, button);
+    SetTextColor(dc, RGB(0xff, 0xff, 0xff));
+    SelectObject(dc, font_big);
+    DrawTextW(dc, L"Sair", -1, &g_exit_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, old);
+    DeleteObject(font_big);
+    DeleteObject(font_small);
+    DeleteObject(bg);
+    DeleteObject(accent);
+    DeleteObject(button);
+}
+
+static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        paint(dc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_APP_REDRAW:
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    case WM_LBUTTONUP: {
+        POINT pt;
+        pt.x = (short)LOWORD(lp);
+        pt.y = (short)HIWORD(lp);
+        if (PtInRect(&g_exit_button, pt))
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        return 0;
+    }
+    case WM_TIMER:
+        if (p_idle_reset)
+            p_idle_reset();
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static int relocate(const WCHAR *self)
+{
+    WCHAR args[MAX_PATH + 16];
+    PROCESS_INFORMATION pi;
+    if (!_wcsnicmp(self, L"\\Temp\\", 6))
+        return 0;
+    CreateDirectoryW(L"\\Temp", NULL);
+    {
+        /* after a remote restart the previous instance may still hold the copy for a moment */
+        int tries = 0;
+        while (!CopyFileW(self, L"\\Temp\\bfagent.exe", FALSE)) {
+            if (++tries == 20)
+                return 0;
+            Sleep(250);
+        }
+    }
+    _snwprintf(args, MAX_PATH + 15, L"/from \"%ls\"", g_origin_dir);
+    args[MAX_PATH + 15] = 0;
+    if (!CreateProcessW(L"\\Temp\\bfagent.exe", args, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi))
+        return 0;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 1;
+}
+
+int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
+{
+    WCHAR self[MAX_PATH], *slash, *from;
+    WNDCLASSW wc;
+    MSG msg;
+    HWND taskbar, other;
+    HANDLE thread;
+    (void)prev;
+    (void)show;
+
+    other = FindWindowW(AGENT_CLASS, NULL);
+    if (other) {
+        SetForegroundWindow(other);
+        return 0;
+    }
+    GetModuleFileNameW(NULL, self, MAX_PATH);
+    wcscpy(g_origin_dir, self);
+    slash = wcsrchr(g_origin_dir, L'\\');
+    if (slash)
+        *slash = 0;
+    from = cmd ? wcsstr(cmd, L"/from \"") : NULL;
+    if (from) {
+        WCHAR *end;
+        wcsncpy(g_origin_dir, from + 7, MAX_PATH - 1);
+        g_origin_dir[MAX_PATH - 1] = 0;
+        end = wcschr(g_origin_dir, L'"');
+        if (end)
+            *end = 0;
+    } else if (!(cmd && wcsstr(cmd, L"/norelocate")) && relocate(self)) {
+        return 0;
+    }
+    g_log = _wfopen(L"\\Temp\\bfagent.log", L"w");
+    log_line("%s starting from %ls (origin %ls)", AGENT_VERSION, self, g_origin_dir);
+    InitializeCriticalSection(&g_write_lock);
+    resolve_kernel_calls();
+    if (p_SetProcPermissions)
+        p_SetProcPermissions(0xFFFFFFFF);     /* see every process slot (needed by VirtualCopy on CE 5) */
+    g_width = GetSystemMetrics(SM_CXSCREEN);
+    g_height = GetSystemMetrics(SM_CYSCREEN);
+    SetRect(&g_exit_button, g_width - 200, g_height - 100, g_width - 24, g_height - 24);
+
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = wnd_proc;
+    wc.hInstance = inst;
+    wc.lpszClassName = AGENT_CLASS;
+    RegisterClassW(&wc);
+    g_hwnd = CreateWindowExW(WS_EX_TOPMOST, AGENT_CLASS, L"BigFoston Agent", WS_VISIBLE | WS_POPUP, 0, 0, g_width,
+                             g_height, NULL, NULL, inst, NULL);
+    if (!g_hwnd)
+        return 1;
+    taskbar = FindWindowW(L"HHTaskBar", NULL);
+    if (taskbar)
+        ShowWindow(taskbar, SW_HIDE);
+    SetForegroundWindow(g_hwnd);
+    SetTimer(g_hwnd, 1, 5000, NULL);
+
+    thread = CreateThread(NULL, 0, comm_thread, NULL, 0, NULL);
+    while (GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    InterlockedExchange(&g_quit, 1);
+    EnterCriticalSection(&g_write_lock);
+    if (g_port != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_port);
+        g_port = INVALID_HANDLE_VALUE;
+    }
+    LeaveCriticalSection(&g_write_lock);
+    if (thread) {
+        WaitForSingleObject(thread, 2000);
+        CloseHandle(thread);
+    }
+    if (g_restart) {
+        /* the new instance keeps the serial client: no USB re-enumeration */
+        WCHAR exe[MAX_PATH];
+        PROCESS_INFORMATION pi;
+        _snwprintf(exe, MAX_PATH - 1, L"%ls\\bfagent.exe", g_origin_dir);
+        exe[MAX_PATH - 1] = 0;
+        log_line("restarting from %ls", exe);
+        if (g_log)
+            fclose(g_log);
+        if (CreateProcessW(exe, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi)) {
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return 0;
+        }
+        g_log = NULL;
+    }
+    restore_usb_client();
+    if (taskbar)
+        ShowWindow(taskbar, SW_SHOW);
+    log_line("bye");
+    if (g_log)
+        fclose(g_log);
+    return 0;
+}
