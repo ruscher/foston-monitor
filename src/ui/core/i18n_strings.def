@@ -1,0 +1,207 @@
+/* Tabela de textos do BigFoston shell.
+ * X(ID, "chave.estavel", "pt-BR", "en", "es")
+ * A chave estável é o "msgid" para um futuro catálogo estilo gettext (.po):
+ * i18n_load_catalog() pode sobrescrever qualquer texto pela chave.
+ * Mantenha os textos curtos: a tela tem 800x480 e o toque é resistivo. */
+
+/* ---- Aplicativos (grade inicial) ---- */
+X(S_APP_MULTIMEDIA, "app.multimedia", "Multimídia", "Multimedia", "Multimedia")
+X(S_APP_TV,         "app.tv",         "TV", "TV", "TV")
+X(S_APP_BLUETOOTH,  "app.bluetooth",  "Bluetooth", "Bluetooth", "Bluetooth")
+X(S_APP_BOOK,       "app.book",       "Livro", "Book", "Libro")
+X(S_APP_GPS,        "app.gps",        "GPS", "GPS", "GPS")
+X(S_APP_FILES,      "app.files",      "Arquivos", "Files", "Archivos")
+X(S_APP_TERMINAL,   "app.terminal",   "Terminal", "Terminal", "Terminal")
+X(S_APP_RUN,        "app.run",        "Run", "Run", "Ejecutar")
+X(S_APP_BIGSCREEN,  "app.bigscreen",  "Big Screen", "Big Screen", "Big Screen")
+X(S_APP_MONITOR,    "app.monitor",    "Monitor", "Monitor", "Monitor")
+X(S_APP_SETTINGS,   "app.settings",   "Ajustes", "Settings", "Ajustes")
+X(S_HOME,           "app.home",       "Início", "Home", "Inicio")
+
+/* ---- Barra inferior ---- */
+X(S_NAV_HOME,     "nav.home",     "Início", "Home", "Inicio")
+X(S_NAV_BACK,     "nav.back",     "Voltar", "Back", "Atrás")
+X(S_NAV_RECENTS,  "nav.recents",  "Recentes", "Recent", "Recientes")
+X(S_NAV_TERMINAL, "nav.terminal", "Terminal", "Terminal", "Terminal")
+X(S_NAV_SETTINGS, "nav.settings", "Ajustes", "Settings", "Ajustes")
+X(S_NAV_POWER,    "nav.power",    "Desligar", "Power", "Apagar")
+
+/* ---- Itens de Ajustes: título ---- */
+X(S_SET_BACKLIGHT, "set.backlight", "Luz Posterior", "Backlight", "Retroiluminación")
+X(S_SET_VOLUME,    "set.volume",    "Volume", "Volume", "Volumen")
+X(S_SET_LANGUAGE,  "set.language",  "Língua", "Language", "Idioma")
+X(S_SET_GPSINFO,   "set.gpsinfo",   "GpsInfo", "GPS info", "Info GPS")
+X(S_SET_DATE,      "set.date",      "Data", "Date", "Fecha")
+X(S_SET_CALIBRATE, "set.calibrate", "Calibrar", "Calibrate", "Calibrar")
+X(S_SET_RUN,       "set.run",       "Run", "Run", "Ejecutar")
+X(S_SET_POWER,     "set.power",     "Potência", "Power", "Energía")
+X(S_SET_RESET,     "set.reset",     "Reset Settings", "Reset settings", "Restablecer ajustes")
+X(S_SET_SYSINFO,   "set.sysinfo",   "Sistema de Informação", "System information", "Información del sistema")
+X(S_SET_USB,       "set.usb",       "USB", "USB", "USB")
+X(S_SET_FM,        "set.fm",        "FM Transmitir", "FM transmitter", "Transmisor FM")
+X(S_SET_SSH,       "set.ssh",       "SSH", "SSH", "SSH")
+X(S_SET_ADVANCED,  "set.advanced",  "Avançado", "Advanced", "Avanzado")
+
+/* ---- Itens de Ajustes: subtítulo ---- */
+X(S_SUB_BACKLIGHT, "sub.backlight", "Brilho da tela", "Screen brightness", "Brillo de pantalla")
+X(S_SUB_VOLUME,    "sub.volume",    "Nível de som", "Sound level", "Nivel de sonido")
+X(S_SUB_LANGUAGE,  "sub.language",  "Português (Brasil)", "English", "Español")
+X(S_SUB_GPSINFO,   "sub.gpsinfo",   "Satélites e posição", "Satellites and position", "Satélites y posición")
+X(S_SUB_DATE,      "sub.date",      "Data, hora e formato", "Date, time and format", "Fecha, hora y formato")
+X(S_SUB_CALIBRATE, "sub.calibrate", "Toque em 5 pontos", "5-point touch", "Toque en 5 puntos")
+X(S_SUB_RUN,       "sub.run",       "Aplicativos e comandos", "Apps and commands", "Apps y comandos")
+X(S_SUB_POWER,     "sub.power",     "Bateria e energia", "Battery and power", "Batería y energía")
+X(S_SUB_RESET,     "sub.reset",     "Voltar aos padrões", "Back to defaults", "Volver a valores por defecto")
+X(S_SUB_SYSINFO,   "sub.sysinfo",   "Hardware e software", "Hardware and software", "Hardware y software")
+X(S_SUB_USB,       "sub.usb",       "Modo de conexão USB", "USB connection mode", "Modo de conexión USB")
+X(S_SUB_FM,        "sub.fm",        "Transmissor de rádio", "Radio transmitter", "Transmisor de radio")
+X(S_SUB_SSH,       "sub.ssh",       "Acesso remoto", "Remote access", "Acceso remoto")
+X(S_SUB_ADVANCED,  "sub.advanced",  "Tema e opções", "Theme and options", "Tema y opciones")
+
+/* ---- Comuns ---- */
+X(S_UNAVAILABLE,       "common.unavailable", "Não disponível neste hardware ainda", "Not available on this hardware yet", "No disponible en este hardware todavía")
+X(S_UNAVAILABLE_SHORT, "common.unavailable_short", "indisponível", "unavailable", "no disponible")
+X(S_IN_DEV,            "common.in_dev", "Em desenvolvimento", "In development", "En desarrollo")
+X(S_WHAT_MISSING,      "common.what_missing", "O que falta", "What is missing", "Qué falta")
+X(S_STATUS,            "common.status", "Status", "Status", "Estado")
+X(S_CANCEL,            "common.cancel", "Cancelar", "Cancel", "Cancelar")
+X(S_CLOSE,             "common.close", "Fechar", "Close", "Cerrar")
+X(S_CONFIRM,           "common.confirm", "Confirmar", "Confirm", "Confirmar")
+X(S_SIM_BADGE,         "common.sim_badge", "SIM", "SIM", "SIM")
+X(S_SIMULATED,         "common.simulated", "valor simulado", "simulated value", "valor simulado")
+X(S_SIM_NOTE,          "common.sim_note", "Simulador: os ícones de status mostram valores simulados.", "Simulator: status icons show simulated values.", "Simulador: los iconos de estado muestran valores simulados.")
+X(S_UNKNOWN,           "common.unknown", "desconhecido", "unknown", "desconocido")
+X(S_ON,                "common.on", "ligado", "on", "encendido")
+X(S_OFF,               "common.off", "desligado", "off", "apagado")
+X(S_SAVED,             "common.saved", "Salvo", "Saved", "Guardado")
+X(S_OPEN_RUN_TERMINAL, "common.open_run_terminal", "Abrir Run em modo terminal", "Open Run in terminal mode", "Abrir Ejecutar en modo terminal")
+
+/* ---- Desligar / Recentes ---- */
+X(S_POWER_TITLE,  "power.title", "Desligar o BigFoston?", "Power off BigFoston?", "¿Apagar BigFoston?")
+X(S_POWER_BODY,   "power.body", "Salve seu trabalho. O aparelho será desligado.", "Save your work. The device will power off.", "Guarde su trabajo. El equipo se apagará.")
+X(S_POWER_OFF,    "power.off", "Desligar", "Power off", "Apagar")
+X(S_REBOOT,       "power.reboot", "Reiniciar", "Restart", "Reiniciar")
+X(S_POWER_SIM,    "power.sim", "Simulador: \"Desligar\" apenas fecha o programa.", "Simulator: \"Power off\" just quits the program.", "Simulador: \"Apagar\" solo cierra el programa.")
+X(S_RECENTS_TITLE,"recents.title", "Telas recentes", "Recent screens", "Pantallas recientes")
+X(S_RECENTS_EMPTY,"recents.empty", "Nenhuma tela recente ainda.", "No recent screens yet.", "Aún no hay pantallas recientes.")
+
+/* ---- Descrições das funções em desenvolvimento ---- */
+X(S_DESC_MULTIMEDIA, "desc.multimedia", "Player de música e vídeo para o cartão SD, com fila de reprodução e capas.", "Music and video player for the SD card, with play queue and covers.", "Reproductor de música y vídeo para la tarjeta SD, con cola y carátulas.")
+X(S_MISS_MULTIMEDIA, "miss.multimedia", "Driver de áudio (ALSA) do MT3351 e decodificação sem VFP.", "MT3351 audio (ALSA) driver and decoding without VFP.", "Driver de audio (ALSA) del MT3351 y decodificación sin VFP.")
+X(S_DESC_TV,         "desc.tv",         "Recepção de TV analógica/digital quando houver sintonizador.", "Analog/digital TV reception when a tuner is present.", "Recepción de TV analógica/digital cuando haya sintonizador.")
+X(S_MISS_TV,         "miss.tv",         "Driver SPI do Siano SMS1xxx (ISDB-T) no kernel + firmware e DVB/V4L2.", "SPI driver for the Siano SMS1xxx (ISDB-T) in the kernel + firmware and DVB/V4L2.", "Driver SPI del Siano SMS1xxx (ISDB-T) en el kernel + firmware y DVB/V4L2.")
+X(S_DESC_BLUETOOTH,  "desc.bluetooth",  "Pareamento com celulares e fones, viva-voz e áudio A2DP.", "Pairing with phones and headsets, hands-free and A2DP audio.", "Emparejamiento con móviles y auriculares, manos libres y audio A2DP.")
+X(S_MISS_BLUETOOTH,  "miss.bluetooth",  "HCI via UART do CSR BlueCore (hci_uart/BCSP) + BlueZ.", "UART HCI for the CSR BlueCore (hci_uart/BCSP) + BlueZ.", "HCI por UART del CSR BlueCore (hci_uart/BCSP) + BlueZ.")
+X(S_DESC_BOOK,       "desc.book",       "Leitor de livros (TXT/EPUB) com tema noturno e marcador de página.", "Book reader (TXT/EPUB) with night theme and bookmarks.", "Lector de libros (TXT/EPUB) con tema nocturno y marcadores.")
+X(S_MISS_BOOK,       "miss.book",       "Somente software: leitor ainda não escrito.", "Software only: reader not written yet.", "Solo software: lector aún no escrito.")
+X(S_DESC_GPS,        "desc.gps",        "Navegação e mapa offline usando o receptor GPS interno.", "Navigation and offline map using the internal GPS receiver.", "Navegación y mapa offline con el receptor GPS interno.")
+X(S_MISS_GPS,        "miss.gps",        "Acesso NMEA ao receptor GPS (UART) e gpsd.", "NMEA access to the GPS receiver (UART) and gpsd.", "Acceso NMEA al receptor GPS (UART) y gpsd.")
+X(S_DESC_FILES,      "desc.files",      "Gerenciador de arquivos para cartão SD e memória interna.", "File manager for SD card and internal storage.", "Gestor de archivos para tarjeta SD y memoria interna.")
+X(S_MISS_FILES,      "miss.files",      "Somente software: navegador de arquivos ainda não escrito.", "Software only: file browser not written yet.", "Solo software: navegador de archivos aún no escrito.")
+X(S_DESC_TERMINAL,   "desc.terminal",   "Terminal completo (VT100) com teclado na tela. Hoje, use o Run em modo terminal.", "Full VT100 terminal with on-screen keyboard. For now, use Run in terminal mode.", "Terminal VT100 completa con teclado en pantalla. Por ahora, use Ejecutar en modo terminal.")
+X(S_MISS_TERMINAL,   "miss.terminal",   "Emulador VT100 sobre pty.", "VT100 emulator on a pty.", "Emulador VT100 sobre pty.")
+X(S_DESC_BIGSCREEN,  "desc.bigscreen",  "Usar o FOSTON como segundo monitor do PC (Big Screen Monitor Display).", "Use the FOSTON as a second PC monitor (Big Screen Monitor Display).", "Usar el FOSTON como segundo monitor del PC (Big Screen Monitor Display).")
+X(S_MISS_BIGSCREEN,  "miss.bigscreen",  "Cliente bsmd para Linux (gadget USB serial).", "bsmd client for Linux (USB serial gadget).", "Cliente bsmd para Linux (gadget USB serie).")
+X(S_DESC_FM,         "desc.fm",         "Transmitir o áudio para o rádio do carro por FM.", "Transmit audio to the car radio over FM.", "Transmitir el audio a la radio del coche por FM.")
+X(S_MISS_FM,         "miss.fm",         "Driver do chip transmissor FM (I2C) — chip ainda não identificado.", "FM transmitter chip driver (I2C) — chip not identified yet.", "Driver del chip transmisor FM (I2C) — chip aún no identificado.")
+X(S_DESC_USB,        "desc.usb",        "Escolher o modo USB: armazenamento, rede (RNDIS/ECM) ou serial.", "Choose USB mode: storage, network (RNDIS/ECM) or serial.", "Elegir el modo USB: almacenamiento, red (RNDIS/ECM) o serie.")
+X(S_MISS_USB,        "miss.usb",        "Driver do controlador USB device (UDC) do MT3351.", "MT3351 USB device controller (UDC) driver.", "Driver del controlador USB device (UDC) del MT3351.")
+X(S_DESC_GPSINFO,    "desc.gpsinfo",    "Satélites visíveis, força do sinal, posição e hora UTC.", "Visible satellites, signal strength, position and UTC time.", "Satélites visibles, intensidad de señal, posición y hora UTC.")
+X(S_MISS_GPSINFO,    "miss.gpsinfo",    "Acesso NMEA ao receptor GPS (UART) e gpsd.", "NMEA access to the GPS receiver (UART) and gpsd.", "Acceso NMEA al receptor GPS (UART) y gpsd.")
+X(S_MISS_BACKLIGHT,  "miss.backlight",  "Nenhum dispositivo em /sys/class/backlight (driver PWM do MT3351).", "No device in /sys/class/backlight (MT3351 PWM driver).", "Ningún dispositivo en /sys/class/backlight (driver PWM del MT3351).")
+X(S_MISS_VOLUME,     "miss.volume",     "Nenhuma placa de som em /proc/asound (driver de áudio).", "No sound card in /proc/asound (audio driver).", "Ninguna tarjeta de sonido en /proc/asound (driver de audio).")
+X(S_MISS_BATTERY,    "miss.battery",    "Nenhuma bateria em /sys/class/power_supply (driver do medidor).", "No battery in /sys/class/power_supply (fuel gauge driver).", "Ninguna batería en /sys/class/power_supply (driver del medidor).")
+
+/* ---- Luz posterior / volume ---- */
+X(S_BRIGHTNESS,   "bl.level", "Brilho", "Brightness", "Brillo")
+X(S_VOLUME_LEVEL, "vol.level", "Volume", "Volume", "Volumen")
+X(S_DEVICE,       "common.device", "Dispositivo", "Device", "Dispositivo")
+
+/* ---- Língua ---- */
+X(S_LANG_HINT, "lang.hint", "A interface é redesenhada imediatamente.", "The interface is redrawn immediately.", "La interfaz se redibuja de inmediato.")
+
+/* ---- Data ---- */
+X(S_DATE_NOW,      "date.now", "Agora", "Now", "Ahora")
+X(S_DATE_TOPBAR,   "date.topbar", "Mostrar data na barra superior", "Show date in the top bar", "Mostrar fecha en la barra superior")
+X(S_DATE_24H,      "date.24h", "Relógio de 24 horas", "24-hour clock", "Reloj de 24 horas")
+X(S_DATE_SET_NOTE, "date.set_note", "Acertar data/hora exige RTC/NTP e privilégios: em desenvolvimento.", "Setting date/time needs RTC/NTP and privileges: in development.", "Ajustar fecha/hora requiere RTC/NTP y privilegios: en desarrollo.")
+X(S_TIMEZONE,      "date.tz", "Fuso horário", "Time zone", "Zona horaria")
+
+/* ---- Potência ---- */
+X(S_BATTERY,       "pwr.battery", "Bateria", "Battery", "Batería")
+X(S_CHARGING,      "pwr.charging", "carregando", "charging", "cargando")
+X(S_DISCHARGING,   "pwr.discharging", "descarregando", "discharging", "descargando")
+X(S_EXT_POWER,     "pwr.ext", "Alimentação externa", "External power", "Alimentación externa")
+
+/* ---- Reset ---- */
+X(S_RESET_Q,     "reset.q", "Restaurar todos os ajustes para o padrão?", "Restore all settings to defaults?", "¿Restaurar todos los ajustes por defecto?")
+X(S_RESET_BODY,  "reset.body", "Língua, tema, brilho, volume e formato de data voltam ao padrão. Histórico, favoritos e calibração são mantidos.", "Language, theme, brightness, volume and date format go back to defaults. History, favorites and calibration are kept.", "Idioma, tema, brillo, volumen y formato de fecha vuelven al valor por defecto. Se conservan historial, favoritos y calibración.")
+X(S_RESET_BTN,   "reset.btn", "Restaurar padrões", "Restore defaults", "Restaurar valores")
+X(S_RESET_DONE,  "reset.done", "Ajustes restaurados.", "Settings restored.", "Ajustes restaurados.")
+
+/* ---- Informações do sistema ---- */
+X(S_SI_OS,      "si.os", "Sistema", "OS", "Sistema")
+X(S_SI_BASE,    "si.base", "Base", "Base", "Base")
+X(S_SI_KERNEL,  "si.kernel", "Kernel", "Kernel", "Kernel")
+X(S_SI_ARCH,    "si.arch", "Arquitetura", "Arch", "Arquitectura")
+X(S_SI_CPU,     "si.cpu", "CPU", "CPU", "CPU")
+X(S_SI_RAM,     "si.ram", "Memória", "Memory", "Memoria")
+X(S_SI_DISK,    "si.disk", "Armazenamento", "Storage", "Almacenamiento")
+X(S_SI_UPTIME,  "si.uptime", "Ligado há", "Uptime", "Encendido")
+X(S_SI_RES,     "si.res", "Resolução", "Resolution", "Resolución")
+X(S_SI_UI,      "si.ui", "Interface", "UI", "Interfaz")
+X(S_SI_IP,      "si.ip", "IP", "IP", "IP")
+X(S_SI_MAC,     "si.mac", "MAC", "MAC", "MAC")
+X(S_SI_SSH,     "si.ssh", "SSH", "SSH", "SSH")
+X(S_SSH_ACTIVE, "ssh.active", "ativo (porta 22 escutando)", "active (port 22 listening)", "activo (puerto 22 escuchando)")
+X(S_SSH_INACTIVE,"ssh.inactive", "inativo (porta 22 fechada)", "inactive (port 22 closed)", "inactivo (puerto 22 cerrado)")
+X(S_NO_NETWORK, "si.no_network", "sem rede", "no network", "sin red")
+
+/* ---- Run ---- */
+X(S_RUN_PLACEHOLDER, "run.placeholder", "Buscar app ou digitar comando…", "Search app or type a command…", "Buscar app o escribir comando…")
+X(S_RUN_APPS,      "run.apps", "Apps", "Apps", "Apps")
+X(S_RUN_FAVS,      "run.favs", "Favoritos", "Favorites", "Favoritos")
+X(S_RUN_HISTORY,   "run.history", "Histórico", "History", "Historial")
+X(S_RUN_EXEC,      "run.exec", "Executar", "Run", "Ejecutar")
+X(S_RUN_SHELL,     "run.shell", "sh -c", "sh -c", "sh -c")
+X(S_RUN_STOP,      "run.stop", "Parar", "Stop", "Detener")
+X(S_RUN_RUNNING,   "run.running", "Executando…", "Running…", "Ejecutando…")
+X(S_RUN_EXIT,      "run.exit", "Código de saída", "Exit code", "Código de salida")
+X(S_RUN_SIGNAL,    "run.signal", "Encerrado pelo sinal", "Killed by signal", "Terminado por señal")
+X(S_RUN_LAUNCHED,  "run.launched", "Aplicativo iniciado em segundo plano", "App launched in background", "App iniciada en segundo plano")
+X(S_RUN_ROOT,      "run.root", "Recusado: o shell roda como root e não há usuário sem privilégios (defina BIGFOSTON_RUN_USER).", "Refused: the shell runs as root and there is no unprivileged user (set BIGFOSTON_RUN_USER).", "Rechazado: el shell corre como root y no hay usuario sin privilegios (defina BIGFOSTON_RUN_USER).")
+X(S_RUN_FAILED,    "run.failed", "Falha ao executar", "Failed to run", "Error al ejecutar")
+X(S_RUN_EMPTY_APPS,"run.empty_apps", "Nenhum app encontrado nas pastas de apps.", "No apps found in the app folders.", "No se encontraron apps en las carpetas.")
+X(S_RUN_EMPTY_LIST,"run.empty_list", "Lista vazia.", "Empty list.", "Lista vacía.")
+X(S_RUN_OUTPUT,    "run.output", "Saída", "Output", "Salida")
+X(S_RUN_MODE_HINT, "run.mode_hint", "Sem \"sh -c\", o texto é dividido em argumentos e executado diretamente (sem shell).", "Without \"sh -c\" the text is split into arguments and run directly (no shell).", "Sin \"sh -c\" el texto se divide en argumentos y se ejecuta directamente (sin shell).")
+
+/* ---- Monitor ---- */
+X(S_MON_CPU,    "mon.cpu", "CPU", "CPU", "CPU")
+X(S_MON_RAM,    "mon.ram", "RAM", "RAM", "RAM")
+X(S_MON_LOAD,   "mon.load", "Carga (1/5/15 min)", "Load (1/5/15 min)", "Carga (1/5/15 min)")
+X(S_MON_PROCS,  "mon.procs", "Processos", "Processes", "Procesos")
+X(S_MON_CHART,  "mon.chart", "Últimos 2 minutos · atualiza a cada 2 s", "Last 2 minutes · updates every 2 s", "Últimos 2 minutos · actualiza cada 2 s")
+
+/* ---- Calibrar ---- */
+X(S_CAL_INTRO,  "cal.intro", "Toque no centro de cada alvo com a caneta ou a ponta do dedo. São 5 pontos.", "Tap the centre of each target with the stylus or fingertip. There are 5 points.", "Toque el centro de cada objetivo con el lápiz o la punta del dedo. Son 5 puntos.")
+X(S_CAL_START,  "cal.start", "Iniciar", "Start", "Iniciar")
+X(S_CAL_POINT,  "cal.point", "Ponto", "Point", "Punto")
+X(S_CAL_OF,     "cal.of", "de", "of", "de")
+X(S_CAL_DONE,   "cal.done", "Calibração salva", "Calibration saved", "Calibración guardada")
+X(S_CAL_ERROR,  "cal.error", "Erro residual médio", "Mean residual error", "Error residual medio")
+X(S_CAL_RETRY,  "cal.retry", "Refazer", "Redo", "Rehacer")
+X(S_CAL_STUB,   "cal.stub", "Aplicar no driver de toque: pendente (driver ainda não existe).", "Apply to touch driver: pending (driver does not exist yet).", "Aplicar al driver táctil: pendiente (el driver aún no existe).")
+X(S_CAL_FAIL,   "cal.fail", "Pontos inconsistentes. Refaça a calibração.", "Inconsistent points. Please redo the calibration.", "Puntos inconsistentes. Rehaga la calibración.")
+
+/* ---- SSH ---- */
+X(S_SSH_STATE,  "ssh.state", "Servidor SSH", "SSH server", "Servidor SSH")
+X(S_SSH_TOGGLE, "ssh.toggle", "Ligar/desligar o servidor pelo shell: em desenvolvimento (exige serviço com privilégios).", "Starting/stopping the server from the shell: in development (needs a privileged service).", "Encender/apagar el servidor desde el shell: en desarrollo (requiere servicio con privilegios).")
+
+/* ---- Avançado ---- */
+X(S_ADV_THEME,   "adv.theme", "Tema escuro", "Dark theme", "Tema oscuro")
+X(S_ADV_DATADIR, "adv.datadir", "Pasta de dados", "Data folder", "Carpeta de datos")
+X(S_ADV_STATUS,  "adv.status", "Fonte de status", "Status source", "Fuente de estado")
+X(S_ADV_APPS,    "adv.apps", "Pastas de apps", "App folders", "Carpetas de apps")
+X(S_ADV_REAL,    "adv.real", "sysfs/proc (real)", "sysfs/proc (real)", "sysfs/proc (real)")
+X(S_ADV_SIM,     "adv.sim", "simulada", "simulated", "simulada")
