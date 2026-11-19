@@ -1,0 +1,20 @@
+#!/bin/sh
+# BigFoston OS bring-up report: written to the kernel log, which the
+# framebuffer console of the board shows (no serial port, no input yet).
+case "$1" in
+start)
+    (
+        say() { echo "bigfoston: $*" > /dev/kmsg; }
+        say "userland up: BusyBox $(busybox | head -n1 | cut -d' ' -f2), $(uname -srm)"
+        say "cpu: $(grep -m1 -E 'model name|Processor' /proc/cpuinfo | cut -d: -f2)"
+        say "mem: $(grep -E 'MemTotal|MemFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
+        say "root: $(df -h / | tail -n1 | tr -s ' ')"
+        n=0
+        while :; do
+            sleep 10
+            n=$((n + 10))
+            say "alive ${n}s | load $(cut -d' ' -f1-3 /proc/loadavg) | timer irqs $(grep -m1 mt3351-gpt /proc/interrupts | tr -s ' ' | cut -d' ' -f3)"
+        done
+    ) &
+    ;;
+esac

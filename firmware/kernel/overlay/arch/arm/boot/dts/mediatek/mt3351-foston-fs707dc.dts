@@ -1,0 +1,69 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * FOSTON FS-707DC (MediaTek MT3351), BigFoston OS.
+ * Every address here was measured on the device: docs/01-hardware.md.
+ */
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "FOSTON FS-707DC";
+	compatible = "foston,fs707dc", "mediatek,mt3351";
+	interrupt-parent = <&cirq>;
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	chosen {
+		/* bootargs and the initrd range are filled in by tools/bigfoston/mkboot.py */
+		bootargs = "loglevel=7 rdinit=/init";
+	};
+
+	/* 0x03e00000-0x03ffffff is video memory (framebuffer at 0x03e00030) */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x03e00000>,
+		      <0x04000000 0x04000000>;
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,arm1176jzf-s";
+			reg = <0>;
+		};
+	};
+
+	framebuffer@3e00030 {
+		compatible = "simple-framebuffer";
+		reg = <0x03e00030 (800 * 480 * 2)>;
+		width = <800>;
+		height = <480>;
+		stride = <(800 * 2)>;
+		format = "r5g6b5";
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		cirq: interrupt-controller@80022000 {
+			compatible = "mediatek,mt3351-cirq";
+			reg = <0x80022000 0x200>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		timer@8002a000 {
+			compatible = "mediatek,mt3351-gpt";
+			reg = <0x8002a000 0x100>;
+			interrupts = <39 IRQ_TYPE_LEVEL_HIGH>;
+			/* 468 MHz / 32 as configured by the boot loader, measured */
+			clock-frequency = <14625000>;
+		};
+	};
+};

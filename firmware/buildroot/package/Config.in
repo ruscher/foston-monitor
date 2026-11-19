@@ -1,0 +1,3 @@
+menu "BigFoston OS"
+source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bigscreen/Config.in"
+endmenu
