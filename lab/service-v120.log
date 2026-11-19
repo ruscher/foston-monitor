@@ -1,0 +1,13 @@
+nov 18 20:51:24 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: incident kind=client_quit client closed on the device by request display=usb-5-1.4.1
+nov 18 20:51:24 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: incident kind=transport_disconnected disconnected: the client on the device was closed display=usb-5-1.4.1 operation=present model=FOSTON FS-707DC Touch Display attempts=1 duration_ms=10.5
+nov 18 20:51:24 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [usb-5-1.4.1] link state healthy -> recovering (present: disconnected)
+nov 18 20:51:28 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: incident kind=connect_timeout timeout: the bsmd-ce client is not running on the device (start it from the navigator menu) display=usb-5-1.4.1 operation=open attempts=1 strategy=close + reopen + backoff
+nov 18 20:51:28 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [usb-5-1.4.1] link state recovering -> retrying (open failed: timeout)
+nov 18 20:51:29 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [usb-5-1.4.1] link state retrying -> recovering (retrying connection)
+nov 18 20:51:29 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [/dev/ttyUSB0] FOSTON FS-707DC Touch Display: bsmd-ce 1.2.0, WinCE 5.0.1400, 800x480, MTK
+nov 18 20:51:29 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [usb-5-1.4.1] link state recovering -> healthy (display ready)
+nov 18 20:51:29 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: incident kind=recovered display communication restored display=usb-5-1.4.1 model=FOSTON FS-707DC Touch Display attempts=2 recovery_s=5.06
+nov 18 20:52:36 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+nov 18 20:53:10 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+nov 18 20:54:54 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+nov 18 20:55:49 ruscher-wmaker python3[670085]: transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising

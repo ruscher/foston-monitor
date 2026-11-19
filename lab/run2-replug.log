@@ -1,0 +1,21 @@
+<6>MainThread: Big Screen Monitor Display 5.1.0 starting (theme=standard orientation=horizontal model=auto config=/home/ruscher/Documentos/Git/foston-monitor/lab/settings.json)
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state starting -> recovering (display found)
+<6>MainThread: [usb-5-1.4.1] display session started
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] FOSTON FS-707DC Touch Display: bsmd-ce 1.1.0, WinCE 5.0.1400, 800x480, MTK
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state recovering -> healthy (display ready)
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] display ready: FOSTON FS-707DC Touch Display 800x480 at /dev/ttyUSB0
+<6>render:usb-5-1.4.1: media socket listening at /run/user/1000/big-screen-monitor-display/media.sock
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+<4>transport:usb-5-1.4.1: incident kind=transport_protocol protocol: device rejected a message during PRESENT (crc) display=usb-5-1.4.1 operation=present model=FOSTON FS-707DC Touch Display attempts=1 duration_ms=1331.1
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state healthy -> degraded (present: protocol)
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+<4>transport:usb-5-1.4.1: incident kind=transport_protocol protocol: device rejected a message during HELLO (crc) display=usb-5-1.4.1 operation=present model=FOSTON FS-707DC Touch Display attempts=2 duration_ms=756.1
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state degraded -> recovering (present: protocol)
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] FOSTON FS-707DC Touch Display: bsmd-ce 1.1.0, WinCE 5.0.1400, 800x480, MTK
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state recovering -> healthy (display ready)
+<6>transport:usb-5-1.4.1: incident kind=recovered display communication restored display=usb-5-1.4.1 model=FOSTON FS-707DC Touch Display attempts=1 recovery_s=0.04
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising
+<4>transport:usb-5-1.4.1: incident kind=transport_protocol protocol: device rejected a message during PRESENT (crc) display=usb-5-1.4.1 operation=present model=FOSTON FS-707DC Touch Display attempts=1 duration_ms=1360.0
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state healthy -> degraded (present: protocol)
+<6>transport:usb-5-1.4.1: [usb-5-1.4.1] link state degraded -> healthy (present succeeded)
+<6>transport:usb-5-1.4.1: [/dev/ttyUSB0] frame damaged on the link (protocol: device rejected a message during PRESENT (crc)): resynchronising

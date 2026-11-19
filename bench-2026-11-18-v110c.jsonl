@@ -1,0 +1,8 @@
+{"step": "hello", "ms": 10.0, "model": "FOSTON FS-707DC Touch Display", "size": [800, 480], "details": {"client": "bsmd-ce 1.1.0", "platform": "APOLLO", "oem": "MTK", "device_port": "COM6:", "windows_ce": "5.0.1400", "memory_kb": "99864/120668", "usb_previous_client": "Mass_Storage_Class", "touch": "single", "brightness": "not supported"}}
+{"step": "pattern:bars", "bytes": 20109, "ms": 126.6, "device_decode_ms": 54, "device_blit_ms": 12}
+{"step": "pattern:grid", "bytes": 36418, "ms": 177.2, "device_decode_ms": 76, "device_blit_ms": 12}
+{"step": "full_frames", "frames": 37, "fps": 7.33, "ms_median": 129.6, "bytes_median": 20109, "throughput_kib_s": 200.8}
+{"step": "small_updates", "frames": 577, "fps": 130.14, "ms_median": 7.5, "ms_p95": 10.2}
+{"step": "ping", "ms_median": 2.01, "ms_max": 3.16}
+{"step": "touch", "seconds": 40.0}
+{"step": "done", "stats": {"presented": 618, "naks": 0, "touch_events": 0, "decode_ms": 76, "blit_ms": 12, "round_trip_ms": 75.6165120001242, "bytes": 1400977}, "encodings": {"deflate": 2485, "fill": 60}}

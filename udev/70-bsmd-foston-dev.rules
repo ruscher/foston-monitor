@@ -1,0 +1,5 @@
+# Temporary (development) copy of the FOSTON FS-707DC rule of
+# big-screen-monitor-display; delete it once the package with the rule is installed.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="045e", ATTRS{idProduct}=="00ce", \
+    ATTRS{product}=="Generic Serial (PROTOTYPE--Remember to change idVendor)", \
+    MODE="0660", GROUP="big-screen-monitor", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"

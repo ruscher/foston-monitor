@@ -1,0 +1,10 @@
+# Personal data copied from the navigator (contacts, routes, history): never publish
+backup/
+# Third-party compiler and libraries (231 MB), rebuilt from their official sources
+toolchain/
+# Generated packages
+pkg/
+# Local lab state
+lab/state/
+lab/settings.json
+__pycache__/

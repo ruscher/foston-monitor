@@ -1,0 +1,13 @@
+{"step": "hello", "ms": 204.4, "model": "FOSTON FS-707DC Touch Display", "size": [800, 480], "details": {"client": "bsmd-ce 1.0.2", "platform": "APOLLO", "oem": "MTK", "device_port": "COM6:", "windows_ce": "5.0.1400", "memory_kb": "96880/120668", "usb_previous_client": "Mass_Storage_Class", "touch": "single", "brightness": "not supported"}}
+Traceback (most recent call last):
+  File "/home/ruscher/Documentos/Git/foston-monitor/tools/fsp_bench.py", line 156, in <module>
+    main()
+    ~~~~^^
+  File "/home/ruscher/Documentos/Git/foston-monitor/tools/fsp_bench.py", line 84, in main
+    t = driver.present(image)
+  File "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/big-screen-monitor-display/bsmd/displays/foston/driver.py", line 240, in present
+    msg = self._wait((fsp.PRESENTED,), self.PRESENT_TIMEOUT, "PRESENT",
+                     accept=lambda m: int.from_bytes(m.payload[:4], "little") == frame_id)
+  File "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/big-screen-monitor-display/bsmd/displays/foston/driver.py", line 143, in _wait
+    raise DisplayError(TIMEOUT, f"no answer to {what} from {self.port}")
+bsmd.displays.base.DisplayError: timeout: no answer to PRESENT from /dev/ttyUSB0

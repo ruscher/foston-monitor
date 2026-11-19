@@ -1,0 +1,28 @@
+{"step": "hello", "ms": 10.6, "model": "FOSTON FS-707DC Touch Display", "size": [800, 480], "details": {"client": "bsmd-ce 1.1.0", "platform": "APOLLO", "oem": "MTK", "device_port": "COM6:", "windows_ce": "5.0.1400", "memory_kb": "99864/120668", "usb_previous_client": "Mass_Storage_Class", "touch": "single", "brightness": "not supported"}}
+{"step": "pattern:bars", "bytes": 20109, "ms": 133.1, "device_decode_ms": 57, "device_blit_ms": 14}
+{"step": "pattern:grid", "bytes": 36418, "ms": 158.5, "device_decode_ms": 73, "device_blit_ms": 12}
+{"step": "full_frames", "frames": 56, "fps": 7.13, "ms_median": 144.1, "bytes_median": 28263, "throughput_kib_s": 196.8}
+{"step": "small_updates", "frames": 947, "fps": 131.79, "ms_median": 7.7, "ms_p95": 9.4}
+Traceback (most recent call last):
+  File "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/big-screen-monitor-display/bsmd/displays/transport.py", line 108, in alive
+    _ = self.ser.cts
+        ^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/serial/serialposix.py", line 722, in cts
+    s = fcntl.ioctl(self.fd, TIOCMGET, TIOCM_zero_str)
+OSError: [Errno 25] Inappropriate ioctl for device
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/ruscher/Documentos/Git/foston-monitor/tools/fsp_bench.py", line 156, in <module>
+    main()
+    ~~~~^^
+  File "/home/ruscher/Documentos/Git/foston-monitor/tools/fsp_bench.py", line 127, in main
+    driver.probe()
+    ~~~~~~~~~~~~^^
+  File "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/big-screen-monitor-display/bsmd/displays/foston/driver.py", line 351, in probe
+    self.transport.alive()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/big-screen-monitor-display/bsmd/displays/transport.py", line 110, in alive
+    raise classify_serial_error(error, self.port, "probe")
+bsmd.displays.base.DisplayError: io: probe failed on /dev/ttyUSB0 ([Errno 25] Inappropriate ioctl for device)
