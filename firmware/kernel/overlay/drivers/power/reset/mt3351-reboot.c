@@ -6,6 +6,11 @@
  * 0x80003000, then wait. The device resets about a second later and boots
  * Windows CE again. Tested from Linux with devmem on 2026-11-20.
  *
+ * On this device the reset leaves it switched off (the power button starts
+ * it again, 2026-11-20), and no separate power-off control is known, so the
+ * same sequence also serves as power-off: without it "poweroff" only halted
+ * the CPU with the screen lit.
+ *
  * CE's values (field meanings inferred from the MT6516 watchdog):
  *   +0x04 = 0x0828  timeout, key 0x08
  *   +0x08 = 0x1971  restart key (reload the counter)
@@ -33,10 +38,15 @@ static int mt3351_restart(struct sys_off_data *data)
 static int mt3351_reboot_probe(struct platform_device *pdev)
 {
 	void __iomem *wdt = devm_platform_ioremap_resource(pdev, 0);
+	int ret;
 
 	if (IS_ERR(wdt))
 		return PTR_ERR(wdt);
-	return devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_RESTART,
+	ret = devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_RESTART,
+					    SYS_OFF_PRIO_DEFAULT, mt3351_restart, (void *)wdt);
+	if (ret)
+		return ret;
+	return devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_POWER_OFF,
 					     SYS_OFF_PRIO_DEFAULT, mt3351_restart, (void *)wdt);
 }
 

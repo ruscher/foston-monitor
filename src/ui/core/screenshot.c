@@ -192,6 +192,12 @@ int screenshot_run(const char *dir)
     dialog_close_all(); pump(30);
     bottombar_open_recents();       shot("26-recentes");
     dialog_close_all(); pump(30);
+    {
+        lv_obj_t *b = app_bye_screen(true); pump(30); shot("26b-reiniciando");
+        lv_obj_delete(b);
+        b = app_bye_screen(false); pump(30);          shot("26c-desligando");
+        lv_obj_delete(b); pump(30);
+    }
 
     /* bateria/brilho "reais" (provedor linux): mostra o estado honesto */
     status_select(&bf_status_linux);

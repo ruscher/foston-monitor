@@ -185,6 +185,17 @@ As imagens do shell (ícone 72 px, símbolo da barra, marca d'água) saem de
 `src/ui/tools/make_logo.py`; ambos rasterizam o SVG com `rsvg-convert`
 (`src/ui/tools/logo_svg.py`).
 
+## Tela de encerramento
+
+Desligar e Reiniciar mostram o logotipo com "Desligando…" / "Reiniciando…"
+(`app_bye_screen`, camada do sistema) e o shell deixa o console de texto do
+kernel pausado mesmo ao receber o SIGTERM do desligamento, então o log não
+aparece. O kernel desliga pelo watchdog (`mt3351-reboot.c`, modos RESTART e
+POWER_OFF): neste aparelho esse reset deixa o FOSTON apagado, e reiniciar
+também o desliga (a tela avisa).
+
+![](images/ui/26b-reiniciando.png)
+
 ## Regras de honestidade para hardware sem suporte
 
 1. Se o recurso depende de driver que não existe, a página mostra o cartão

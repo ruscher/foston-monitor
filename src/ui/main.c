@@ -65,7 +65,9 @@ static void bootcon_pause(bool on)
     close(fd);
 }
 static void bootcon_resume(void) { bootcon_pause(false); }
-static void on_term(int sig) { (void)sig; bootcon_resume(); _exit(0); }
+/* No desligamento o init manda SIGTERM a todos: a tela de encerramento fica e o
+ * console de texto do kernel continua pausado até o aparelho apagar. */
+static void on_term(int sig) { (void)sig; if(!app_shutting_down()) bootcon_resume(); _exit(0); }
 
 #define TEST_BIT(b, a) ((a[(b) / (8 * sizeof(long))] >> ((b) % (8 * sizeof(long)))) & 1)
 /* Procura um /dev/input/eventN com ABS_X/ABS_Y e BTN_TOUCH (touchscreen). */

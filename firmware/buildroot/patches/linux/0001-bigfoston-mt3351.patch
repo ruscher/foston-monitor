@@ -1741,7 +1741,7 @@ diff -Nur a/drivers/power/reset/Makefile b/drivers/power/reset/Makefile
 diff -Nur a/drivers/power/reset/mt3351-reboot.c b/drivers/power/reset/mt3351-reboot.c
 --- a/drivers/power/reset/mt3351-reboot.c
 +++ b/drivers/power/reset/mt3351-reboot.c
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,65 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Restart of the FOSTON FS-707DC (MediaTek MT3351) through the hardware
@@ -1749,6 +1749,11 @@ diff -Nur a/drivers/power/reset/mt3351-reboot.c b/drivers/power/reset/mt3351-reb
 + * OALIoCtlHalReboot): three 32-bit writes to the watchdog block at
 + * 0x80003000, then wait. The device resets about a second later and boots
 + * Windows CE again. Tested from Linux with devmem on 2026-11-20.
++ *
++ * On this device the reset leaves it switched off (the power button starts
++ * it again, 2026-11-20), and no separate power-off control is known, so the
++ * same sequence also serves as power-off: without it "poweroff" only halted
++ * the CPU with the screen lit.
 + *
 + * CE's values (field meanings inferred from the MT6516 watchdog):
 + *   +0x04 = 0x0828  timeout, key 0x08
@@ -1777,10 +1782,15 @@ diff -Nur a/drivers/power/reset/mt3351-reboot.c b/drivers/power/reset/mt3351-reb
 +static int mt3351_reboot_probe(struct platform_device *pdev)
 +{
 +	void __iomem *wdt = devm_platform_ioremap_resource(pdev, 0);
++	int ret;
 +
 +	if (IS_ERR(wdt))
 +		return PTR_ERR(wdt);
-+	return devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_RESTART,
++	ret = devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_RESTART,
++					    SYS_OFF_PRIO_DEFAULT, mt3351_restart, (void *)wdt);
++	if (ret)
++		return ret;
++	return devm_register_sys_off_handler(&pdev->dev, SYS_OFF_MODE_POWER_OFF,
 +					     SYS_OFF_PRIO_DEFAULT, mt3351_restart, (void *)wdt);
 +}
 +

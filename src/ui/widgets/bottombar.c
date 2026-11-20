@@ -13,8 +13,8 @@ static lv_obj_t *btn[B__N];
 static void power_cb(int b, void *ud)
 {
     (void)ud;
-    if(b == 1) app_power(false);
-    else if(b == 2) app_power(true);
+    if(b == 1) app_power(true);          /* botões: 0 Cancelar, 1 Reiniciar, 2 Desligar */
+    else if(b == 2) app_power(false);
 }
 
 void bottombar_open_power(void)

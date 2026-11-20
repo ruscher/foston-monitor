@@ -3,6 +3,8 @@
 
   bf_logo_icon  — ícone completo, 72 px (ARGB8888): Aparência, Informações
   bf_logo_mark  — só o símbolo, 30 px de altura (ARGB8888): barra superior
+  bf_logo_big   — símbolo e nome, 260 px de largura (ARGB8888): tela de
+                  encerramento (Desligando / Reiniciando)
   bf_logo_wm    — só o símbolo, 400 px de largura, máscara alfa (A8): marca
                   d'água do papel de parede, tingida pela cor do tema em tempo
                   de execução (core/wallpaper.c)
@@ -58,6 +60,7 @@ def main():
          '#include "lvgl.h"', ""]
     emit(c, h, "bf_logo_icon", logo_svg.render("icon", width=72), "ARGB8888")
     emit(c, h, "bf_logo_mark", logo_svg.render("mark", height=30), "ARGB8888")
+    emit(c, h, "bf_logo_big", logo_svg.render("nobg", width=260), "ARGB8888")
     emit(c, h, "bf_logo_wm", logo_svg.render("mark", width=400), "A8")
     h += ["", "#endif", ""]
     with open(os.path.join(OUT_DIR, "bf_logo.c"), "w") as f:

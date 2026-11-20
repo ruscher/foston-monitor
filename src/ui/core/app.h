@@ -11,4 +11,6 @@ void app_apply_hw_settings(void);  /* brilho/volume salvos -> hardware */
 void app_power(bool reboot);
 lv_display_t *app_display(void);
 lv_obj_t    *app_content(void);   /* área de conteúdo (800x360) */
+bool         app_shutting_down(void);
+lv_obj_t   *app_bye_screen(bool reboot);   /* tela "Desligando/Reiniciando" */   /* desligar/reiniciar em andamento */
 #endif

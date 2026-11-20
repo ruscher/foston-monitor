@@ -10,6 +10,7 @@
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
+#include "../assets/logo/bf_logo.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -101,6 +102,33 @@ void app_rebuild(void) { lv_async_call(rebuild_async, NULL); }
 
 static void power_err_cb(int b, void *ud) { (void)b; (void)ud; }
 
+static bool shutting_down;
+bool app_shutting_down(void) { return shutting_down; }
+
+/* Tela de encerramento (como a de abertura): fica até o aparelho apagar. O
+ * shell mantém o console de texto do kernel pausado (main.c, on_term). */
+lv_obj_t *app_bye_screen(bool reboot)
+{
+    lv_obj_t *o = lv_obj_create(lv_layer_sys());
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, BF_SCREEN_W, BF_SCREEN_H);
+    lv_obj_set_style_bg_color(o, lv_color_hex(0x0a226a), 0);
+    lv_obj_set_style_bg_grad_color(o, lv_color_hex(0x03102e), 0);
+    lv_obj_set_style_bg_grad_dir(o, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);          /* engole os toques */
+    lv_obj_t *img = lv_image_create(o);
+    lv_image_set_src(img, &bf_logo_big);
+    lv_obj_align(img, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_t *l = bf_label(o, tr(reboot ? S_BYE_REBOOT : S_BYE_OFF), BF_FONT_L, lv_color_hex(0xeef1ff));
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 330);
+    if(reboot) {
+        lv_obj_t *h = bf_label(o, tr(S_BYE_REBOOT_HINT), BF_FONT_S, lv_color_hex(0x8d9cc8));
+        lv_obj_align(h, LV_ALIGN_TOP_MID, 0, 386);
+    }
+    return o;
+}
+
 void app_power(bool reboot)
 {
     if(status_provider()->simulated) {
@@ -110,6 +138,9 @@ void app_power(bool reboot)
     }
     const char *cmd = getenv(reboot ? "BIGFOSTON_REBOOT_CMD" : "BIGFOSTON_POWEROFF_CMD");
     if(!cmd || !*cmd) cmd = reboot ? "/sbin/reboot" : "/sbin/poweroff";
+    lv_obj_t *bye = app_bye_screen(reboot);      /* camada do sistema: cobre o diálogo */
+    lv_refr_now(NULL);
+    shutting_down = true;
     pid_t pid = fork();
     if(pid == 0) {
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
@@ -118,6 +149,8 @@ void app_power(bool reboot)
     int st = -1;
     if(pid > 0) waitpid(pid, &st, 0);
     if(pid < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        shutting_down = false;
+        lv_obj_delete(bye);
         static const char *btn[1];
         btn[0] = tr(S_CLOSE);
         dialog_open(BF_SYMBOL_ALERT, pal()->warning, tr(S_RUN_FAILED), cmd, btn, 1, 0, -1,
