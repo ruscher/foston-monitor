@@ -6,6 +6,7 @@ BIGFOSTON_SHELL_SITE = $(BR2_EXTERNAL_BIGFOSTON_PATH)/../../src/ui
 BIGFOSTON_SHELL_SITE_METHOD = local
 BIGFOSTON_SHELL_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = --exclude build
 BIGFOSTON_SHELL_LICENSE = GPL-3.0-or-later, MIT (LVGL)
+BIGFOSTON_SHELL_DEPENDENCIES = mpg123
 
 # LVGL is not versioned in git: src/ui/tools/fetch_lvgl.sh downloads it
 # (SHA-256 checked) and applies src/ui/patches/.

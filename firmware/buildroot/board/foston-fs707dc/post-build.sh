@@ -33,5 +33,5 @@ if [ -f "$HOSTKEY" ]; then
     echo "post-build: fixed SSH host key installed"
 fi
 
-# mpg123 extras not used on the device (~680 KB of the initrd)
-rm -f "$TARGET_DIR/usr/bin/mpg123-id3dump" "$TARGET_DIR/usr/bin/mpg123-strip" "$TARGET_DIR/usr/bin/out123"
+# mpg123 programs: the shell links libmpg123 itself (~1.4 MB of the initrd)
+rm -f "$TARGET_DIR/usr/bin/mpg123" "$TARGET_DIR/usr/bin/mpg123-id3dump" "$TARGET_DIR/usr/bin/mpg123-strip" "$TARGET_DIR/usr/bin/out123"

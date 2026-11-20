@@ -1,0 +1,18 @@
+#!/bin/sh
+# Mounts the SD card read-only at /mnt/sd (music, books, maps). Read-only on
+# purpose: the card also holds the Windows CE side of BigFoston and the
+# current card fails on writes (docs/sd-controller.md). Never formats.
+DEV=/dev/mmcblk0p1
+MNT=/mnt/sd
+case "$1" in
+start)
+    mkdir -p "$MNT"
+    n=0
+    while [ ! -b "$DEV" ] && [ $n -lt 10 ]; do sleep 0.5; n=$((n + 1)); done
+    [ -b "$DEV" ] || { echo "sdcard: no card"; exit 0; }
+    mount -t vfat -o ro,noatime,iocharset=utf8 "$DEV" "$MNT" && echo "sdcard: $DEV on $MNT (ro)"
+    ;;
+stop)
+    umount "$MNT" 2>/dev/null
+    ;;
+esac

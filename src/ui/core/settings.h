@@ -13,6 +13,8 @@ typedef struct {
     int  volume;        /* 0..100 % */
     bool show_date;     /* data na barra superior */
     bool clock_24h;
+    int  music_repeat;  /* 0 desligado, 1 todas, 2 uma */
+    bool music_shuffle;
 } bf_settings_t;
 
 bf_settings_t *settings(void);

@@ -47,3 +47,21 @@ initrd (1,2 → 2,5 MB).
 
 `dd` para `/dev/mem` numa faixa `no-map` causa *oops* (o `write()` usa o mapeamento linear,
 que não existe ali). Para testes com buffer fora da RAM do Linux, use `devmem` (mmap).
+
+## Tocador do Multimídia (shell)
+
+`src/ui/core/player.c` + `src/ui/screens/scr_music.c`:
+
+- **Motor:** a `libmpg123` (decodificador `arm_nofpu` em ponto fixo, linkada estaticamente no shell) decodifica numa thread e escreve em `/dev/dsp` (emulação OSS do kernel). Não usa `alsa-lib`, que num rootfs estático custaria ~600 KB por programa.
+- **Fontes:** `*.mp3` em `/mnt/sd` (cartão SD montado só leitura pelo `S30sdcard`) e em `<dados>/music`.
+- **Tela:**
+  - capa do álbum (JPEG da tag ID3 APIC, decodificado com o TJpgDec do LVGL e reduzido para 176×176 RGB565);
+  - título, artista, álbum e ano;
+  - formato real (MPEG, kbps — média do arquivo em VBR —, kHz, canais);
+  - espectro de 24 faixas calculado do som tocado (FFT inteira de 256 pontos);
+  - barra de progresso com avanço por toque;
+  - aleatório, repetir (desligado/todas/uma), lista de reprodução, informações e estatísticas da sessão;
+  - tela cheia.
+- A música continua ao sair da tela.
+
+Medido no FS-707DC com MP3 de 320 kbps e a tela do tocador aberta: decodificação 11 % da CPU, interface 7 %, sistema 19 %. O espectro é desenhado por **um único objeto** com desenho próprio: com 24 objetos-barra eram ~1000 áreas invalidadas por segundo e a interface gastava ~33 %.

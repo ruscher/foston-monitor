@@ -67,6 +67,8 @@ void settings_load(void)
         else if(!strcmp(k, "theme"))     cur.dark = strcmp(v, "light") != 0;
         else if(!strcmp(k, "backlight")) cur.backlight = clampi(atoi(v), 5, 100);
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
+        else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
+        else if(!strcmp(k, "music_shuffle")) cur.music_shuffle = atoi(v) != 0;
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
     }
@@ -88,6 +90,8 @@ bool settings_save(void)
     fprintf(f, "theme = %s\n", cur.dark ? "dark" : "light");
     fprintf(f, "backlight = %d\n", cur.backlight);
     fprintf(f, "volume = %d\n", cur.volume);
+    fprintf(f, "music_repeat = %d\n", cur.music_repeat);
+    fprintf(f, "music_shuffle = %d\n", cur.music_shuffle ? 1 : 0);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
     bool ok = fflush(f) == 0;

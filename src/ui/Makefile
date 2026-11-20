@@ -72,6 +72,18 @@ ifeq ($(SCREENSHOT),1)
   EXTRA_SRCS := third_party/lodepng/lodepng.c
 endif
 
+# MP3 (Multimídia): libmpg123. No alvo vem do Buildroot (estática, arm_nofpu);
+# no PC, do sistema se existir. MPG123=0 compila sem (a tela diz que falta).
+ifeq ($(filter target target-host,$(VARIANT)),)
+  MPG123 ?= $(shell pkg-config --exists libmpg123 2>/dev/null && echo 1 || echo 0)
+else
+  MPG123 ?= 1
+endif
+ifeq ($(MPG123),1)
+  DEFS   += -DBIGFOSTON_HAVE_MPG123
+  LDLIBS += -lmpg123 -lpthread -lm
+endif
+
 CFLAGS_BASE := -std=gnu11 $(OPT) $(DEFS) $(INCLUDES) $(EXTRA_CF) $(CFLAGS)
 
 APP_OBJS   := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS))

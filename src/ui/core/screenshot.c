@@ -150,7 +150,11 @@ int screenshot_run(const char *dir)
     go(SCR_RESET, 0);               shot("18-reset-settings");
     go(SCR_SSH, 0);                 shot("19-ssh");
     go(SCR_ADVANCED, 0);            shot("20-avancado");
-    go(SCR_FEATURE, FEAT_MULTIMEDIA); shot("21-multimidia");
+    go(SCR_MUSIC, 0);               shot("21-multimidia");
+    scr_music_demo(0); pump(2500);  shot("21b-multimidia-tocando");
+    scr_music_demo(1); pump(100);   shot("21c-multimidia-lista");
+    scr_music_demo(2); pump(800);   shot("21d-multimidia-tela-cheia");
+    scr_music_demo(3); pump(100);
     go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
     go(SCR_FEATURE, FEAT_TERMINAL); shot("23-terminal");
     go(SCR_FEATURE, FEAT_BOOK);     shot("24-livro");
