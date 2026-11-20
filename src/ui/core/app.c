@@ -7,6 +7,7 @@
 #include "settings.h"
 #include "status.h"
 #include "fx.h"
+#include "clock.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
@@ -28,6 +29,7 @@ static void tick_cb(lv_timer_t *t)
     (void)t;
     topbar_update();
     fx_tick();
+    clock_tick();
     /* modo Automático: troca claro/escuro quando passa das 7h/19h */
     if(theme_dark_now() != pal()->dark) app_rebuild();
 }
@@ -74,6 +76,7 @@ void app_init(lv_display_t *d)
     char cat[300];
     snprintf(cat, sizeof cat, "%s/lang/%s.txt", data_dir(), i18n_lang_code(settings()->lang));
     i18n_load_catalog(cat);
+    clock_init();                 /* fuso antes do tema (modo Automático usa a hora local) */
     theme_init(disp);
     build();
     nav_init(content);

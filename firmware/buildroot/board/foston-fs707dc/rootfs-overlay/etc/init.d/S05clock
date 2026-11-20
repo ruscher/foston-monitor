@@ -12,6 +12,7 @@ start)
     epoch=$((0x$(hexdump -v -e '1/1 "%02x"' "$P")))
     [ "$epoch" -ge 1704067200 ] || { echo "clock: sem hora válida no boot"; exit 0; }
     up=$(cut -d. -f1 /proc/uptime)
-    date -s "@$((epoch + up))" > /dev/null && echo "clock: $(date)"
+    # /run/bigfoston-clock: o shell mostra "acertada no início do sistema"
+    date -s "@$((epoch + up))" > /dev/null && echo "clock: $(date)" && date +%s > /run/bigfoston-clock
     ;;
 esac

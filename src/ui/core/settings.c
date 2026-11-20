@@ -27,6 +27,10 @@ void settings_defaults(bf_settings_t *s)
     s->sounds = true;
     s->boot_sound = false;
     s->dim_min = 0;
+    snprintf(s->tz, sizeof s->tz, "%s", "brasilia");
+    s->dst = false;
+    s->auto_time = true;
+    snprintf(s->ntp, sizeof s->ntp, "%s", BF_NTP_DEFAULT);
     s->backlight = 80;
     s->volume = 60;
     s->book_font = 1;
@@ -90,6 +94,10 @@ void settings_load(void)
         else if(!strcmp(k, "sounds"))    cur.sounds = atoi(v) != 0;
         else if(!strcmp(k, "boot_sound")) cur.boot_sound = atoi(v) != 0;
         else if(!strcmp(k, "dim_minutes")) cur.dim_min = clampi(atoi(v), 0, 60);
+        else if(!strcmp(k, "timezone"))  snprintf(cur.tz, sizeof cur.tz, "%.*s", (int)sizeof cur.tz - 1, v);
+        else if(!strcmp(k, "dst"))       cur.dst = atoi(v) != 0;
+        else if(!strcmp(k, "auto_time")) cur.auto_time = atoi(v) != 0;
+        else if(!strcmp(k, "ntp_servers")) snprintf(cur.ntp, sizeof cur.ntp, "%s", v);
         else if(!strcmp(k, "backlight")) cur.backlight = clampi(atoi(v), 5, 100);
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
         else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
@@ -120,6 +128,8 @@ bool settings_save(void)
     fprintf(f, "palette = %d\nwallpaper = %d\n", cur.palette, cur.wallpaper);
     fprintf(f, "animations = %d\nsounds = %d\nboot_sound = %d\n", cur.anim, cur.sounds, cur.boot_sound);
     fprintf(f, "dim_minutes = %d\n", cur.dim_min);
+    fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\nntp_servers = %s\n",
+            cur.tz, cur.dst, cur.auto_time, cur.ntp);
     fprintf(f, "backlight = %d\n", cur.backlight);
     fprintf(f, "volume = %d\n", cur.volume);
     fprintf(f, "music_repeat = %d\n", cur.music_repeat);

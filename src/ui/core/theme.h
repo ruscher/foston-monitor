@@ -66,6 +66,7 @@ typedef struct {
 #define BF_SYMBOL_ADJUST    "\xEF\x81\x82"  /* F042 */
 #define BF_SYMBOL_IMAGE     "\xEF\x80\xBE"  /* F03E */
 #define BF_SYMBOL_MAGIC     "\xEF\x83\x90"  /* F0D0 */
+#define BF_SYMBOL_GLOBE     "\xEF\x82\xAC"  /* F0AC */
 #define BF_SYMBOL_TOWER     "\xEF\x94\x99"  /* F519 */
 #define BF_SYMBOL_KEY       "\xEF\x82\x84"  /* F084 */
 #define BF_SYMBOL_LANGUAGE  "\xEF\x86\xAB"  /* F1AB */

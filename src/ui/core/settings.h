@@ -15,6 +15,10 @@ typedef struct {
     bool sounds;        /* sons de toque */
     bool boot_sound;    /* som ao iniciar a interface */
     int  dim_min;       /* escurecer a tela após N min sem toque (0 = nunca) */
+    char tz[24];        /* fuso horário: id estável da tabela de core/clock.c */
+    bool dst;           /* horário de verão manual (+1 h) nos fusos sem regra */
+    bool auto_time;     /* atualizar a hora automaticamente (NTP) */
+    char ntp[160];      /* servidores NTP separados por espaço (host ou host:porta) */
     int  backlight;     /* 5..100 % */
     int  volume;        /* 0..100 % */
     bool show_date;     /* data na barra superior */
@@ -30,6 +34,8 @@ typedef struct {
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
 enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL__N };
 #define BF_DIM_CHOICES { 0, 1, 2, 5, 10 }
+/* o PC pela rede USB (se servir NTP), depois o NTP.br e o pool */
+#define BF_NTP_DEFAULT "192.168.7.1 a.st1.ntp.br pool.ntp.org"
 
 bf_settings_t *settings(void);
 void settings_defaults(bf_settings_t *s);

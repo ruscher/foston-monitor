@@ -148,6 +148,9 @@ int screenshot_run(const char *dir)
     go(SCR_VOLUME, 0);              shot("14-volume");
     go(SCR_LANGUAGE, 0);            shot("15-lingua");
     go(SCR_DATE, 0);                shot("16-data");
+    scroll_content_end();           shot("16b-data-fim");
+    go(SCR_DATE, 1);                shot("16c-data-ajustar");
+    go(SCR_DATE, 2);                shot("16d-data-fuso");
     go(SCR_POWER, 0);               shot("17-potencia");
     go(SCR_RESET, 0);               shot("18-reset-settings");
     go(SCR_SSH, 0);                 shot("19-ssh");

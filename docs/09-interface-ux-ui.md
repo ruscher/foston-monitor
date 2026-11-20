@@ -129,7 +129,10 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 | ![](images/ui/28-luz-posterior-real.png) | **Luz Posterior** sem `/sys/class/backlight` — estado honesto. |
 | ![](images/ui/14-volume.png) | **Volume**. |
 | ![](images/ui/15-lingua.png) | **Língua** — pt-BR, English, Español. |
-| ![](images/ui/16-data.png) | **Data** — hora ao vivo, fuso, data na barra, relógio 24 h. |
+| ![](images/ui/16-data.png) | **Data** — hora atual com a origem (início do sistema, à mão, NTP), atalhos para ajustar e para o fuso, atualização automática. |
+| ![](images/ui/16b-data-fim.png) | **Data (fim)** — horário de verão, formato e o aviso de que a hora vale até desligar. |
+| ![](images/ui/16c-data-ajustar.png) | **Ajustar data e hora** — dia, mês, ano, hora e minuto com ▲/▼ (segurar repete); prévia por extenso. |
+| ![](images/ui/16d-data-fuso.png) | **Fuso horário** — 20 fusos (4 do Brasil); os com regra de horário de verão têm o selo "verão". |
 | ![](images/ui/17-potencia.png) | **Potência** (simulador) — bateria com selo "valor simulado". |
 | ![](images/ui/27-potencia-real.png) | **Potência** sem medidor de bateria — "—" + aviso. |
 | ![](images/ui/18-reset-settings.png) | **Reset Settings** — explica o que muda; confirmação obrigatória. |
@@ -185,6 +188,30 @@ As imagens do shell (ícone 72 px, símbolo da barra, marca d'água) saem de
 `src/ui/tools/make_logo.py`; ambos rasterizam o SVG com `rsvg-convert`
 (`src/ui/tools/logo_svg.py`).
 
+## Data e hora (Ajustes > Data)
+
+`core/clock.c`. O Linux não tem driver de RTC: a hora vem do boot (carimbo do PC
+ou do relógio do Windows CE no DTB; `S05clock` marca `/run/bigfoston-clock`),
+do ajuste manual (`settimeofday`, só no alvo como root) ou do NTP, e vale até
+desligar. Antes de 2024 é "não acertada" e a barra mostra `--:--`.
+
+| Recurso | Como funciona |
+|---|---|
+| Ajustar data e hora | editor com ▲/▼; aplica no fuso atual (`mktime`) |
+| Fuso horário | tabela de TZ POSIX (o rootfs não tem zoneinfo); vale para o shell, os programas que ele abre e as sessões SSH novas (`/etc/profile.d/tz.sh`) |
+| Horário de verão | automático nos fusos com regra (Santiago, Nova York, Lisboa, Paris, Sydney…); manual (+1 h) nos demais |
+| Atualizar automaticamente | `ntpd -n -q` do BusyBox numa thread, 12 s por servidor, ao abrir e a cada 60 min (10 min após falha); servidores em `ntp_servers` (padrão `192.168.7.1 a.st1.ntp.br pool.ntp.org`) |
+| Formato | 24 h e data na barra superior |
+
+**Hora pelo PC:** a rede USB não tem rota para a internet, então o primeiro
+servidor é o próprio PC. `tools/bigfoston/sntp_server.py` é um servidor SNTP
+mínimo (`sudo python3 tools/bigfoston/sntp_server.py`, porta 123 em
+192.168.7.1); com firewall (ufw) é preciso liberar a porta:
+`sudo ufw allow from 192.168.7.0/24 to any port 123 proto udp`. Testado no
+aparelho em 20/11/2026: de 2025-03-03 para a hora do PC em menos de 14 s.
+O GPS não serve de fonte: o MT3328 fala um protocolo binário proprietário
+(ver [uart.md](uart.md)).
+
 ## Tela de encerramento
 
 Desligar e Reiniciar mostram o logotipo com "Desligando…" / "Reiniciando…"
@@ -215,7 +242,7 @@ também o desliga (a tela avisa).
 | Item | Estado hoje |
 |---|---|
 | Luz Posterior, Volume, Potência | reais se o driver existir; senão aviso |
-| Língua, Data (formato), Aparência, Avançado, Reset, Run, Monitor, Sistema de Informação, SSH (leitura) | funcionam |
+| Língua, Data (ajuste, fuso, horário de verão, NTP, formato), Aparência, Avançado, Reset, Run, Monitor, Sistema de Informação, SSH (leitura) | funcionam |
 | Calibrar | assistente completo; grava `pointercal`; `touch_calibration_apply()` é *stub* |
 | GpsInfo, GPS, TV, Bluetooth, FM, USB, Multimídia, Big Screen | não disponível neste hardware ainda |
 | Livro, Arquivos, Terminal | em desenvolvimento (só software) |
