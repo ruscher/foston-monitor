@@ -723,6 +723,15 @@ def main(argv=None):
             if not ok:
                 return 1
         elif args.cmd == "boot-mem":
+            # The OEM menu (jwdmain.exe) keeps the CPU busy while the agent runs
+            # behind it after an autostart: PC->device writes fall from ~50 to
+            # ~2 KB/s (measured 2026-11-20). Windows CE is about to be replaced
+            # anyway, so close it before sending the kernel.
+            for line in link.text(bfp.PS, b"\0", timeout=60)[0].splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == "P" and parts[-1].lower() == "jwdmain.exe":
+                    link.request(bfp.KILL, struct.pack("<I", int(parts[1], 16)))
+                    print("menu do CE (jwdmain.exe) encerrado para a transferência")
             files = {}
             # the DTB goes last, stamped with the PC's clock (there is no RTC driver):
             # /chosen/bigfoston,boot-epoch = time of the jump; /etc/init.d/S05clock uses it

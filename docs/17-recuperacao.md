@@ -1,8 +1,15 @@
 # 17 · Recuperação: como voltar ao FOSTON original
 
-Nada do que o BigFoston OS faz hoje grava na NAND interna. O Windows CE, o EBoot e as
-partições da flash continuam como saíram de fábrica. Toda a recuperação abaixo é
-reversível e não exige abrir o aparelho.
+O Windows CE, o EBoot e as partições do sistema continuam como saíram de fábrica.
+Desde 20/11/2026 há **duas gravações pequenas e reversíveis** na memória interna,
+autorizadas pelo dono do aparelho:
+
+- o agente em `\ResidentFlash\BigFoston\bfagent.exe` (partição FAT de dados, ~39 KB);
+- a entrada `HKLM\init\Launch90` = esse caminho, com `Depend90` = `14 00 32 00`, no
+  registro persistente (`system.hv`). Ela faz o agente abrir sozinho no boot; o menu
+  original continua funcionando.
+
+Toda a recuperação abaixo é reversível e não exige abrir o aparelho.
 
 ## Situações e o que fazer
 
@@ -11,6 +18,9 @@ reversível e não exige abrir o aparelho.
 | Linux/payload rodando, tela parada ou com faixas | **reset** (furinho com clipe, ou segurar liga/desliga ~10 s): volta ao Windows CE |
 | Botão **Navegação** abre o agente em vez do GPS | Ajustes → Caminho da navegação → escolher o navegador original (`7 pole 2012\IGO8.exe` nesta unidade) |
 | O PC vê o FOSTON como porta serial (`045e:00ce`) e não como pendrive | no FOSTON: **Ajustes → USB → armazenamento/Mass Storage** |
+| Desfazer o autostart do agente | com o agente aberto: `bfagent.py autostart off` (apaga `Launch90`/`Depend90`); depois, se quiser, `bfagent.py rm '\ResidentFlash\BigFoston\bfagent.exe'` |
+| O PC vê porta serial em vez de pendrive logo no boot | com o agente aberto: `bfagent.py usb-default mass` (o driver USB do CE às vezes grava a troca do agente como padrão de boot) |
+| `reboot` (Linux ou `bfagent.py reboot`) **desliga** o aparelho | comportamento do próprio hardware com o watchdog (o CE faz igual): é só ligar no botão; o agente abre sozinho |
 | Agente não abre / tela branca | reset; conferir `BigFoston\bfagent.exe` no cartão e o hash em `bfagent.exe.sha256` |
 | Cartão SD corrompido | o sistema original não depende dele; restaurar os arquivos de `backup/2026-11-18-volume/volume-files.tar` (conferir `files.sha256`) |
 

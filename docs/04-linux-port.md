@@ -48,6 +48,9 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | Framebuffer `/dev/fb0` | **FUNCIONANDO** | `simplefb` 800×480 RGB565 em `0x03E00030` (não alinhado à página: mmap + 0x30) |
 | Interface LVGL no aparelho | **FUNCIONANDO** | `bigfoston-shell` sobe no boot (`S90bigfoston-shell`), toque calibrado, 1,7 MB de RAM |
 | SD (MSDC1) | **LEITURA FUNCIONANDO**, escrita bloqueada | driver `mt3351-msdc` (polling/PIO): cartão de 1,91 GiB, FAT32 montado ro, SHA-256 confere, ~6 MB/s — [sd-controller.md](sd-controller.md) |
+| Brilho da tela | **FUNCIONANDO** | `mt3351-backlight` (`/sys/class/backlight`), palavra da PMU `0x80061308` (3–19), testado pelo slider da interface |
+| Reinício (`reboot`) | PARCIAL | `mt3351-reboot` dispara o watchdog como o CE (`0x80003000`); o aparelho **desliga** em vez de reiniciar (o CE faz igual) e volta no botão liga |
+| GPS | NÃO IMPLEMENTADO | MT3328 *host-based*: a posição é calculada pela biblioteca proprietária MNL do `gps.dll` (UART1, 921600 baud). Caminho viável: carregar o `gps.dll` do próprio aparelho num processo Linux com uma camada de API do CE (estimativa 4–6 semanas); primeiro passo é o driver de UART |
 | Relógio | PARCIAL | sem driver de RTC; a hora do PC vai no DTB (`bigfoston,boot-epoch`) e o `S05clock` acerta no boot |
 | USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
 | UARTs | NÃO IMPLEMENTADO | 16550 MTK em `0x80026000…0x80029000`, IRQ 3–6; clock desconhecido |
