@@ -13,7 +13,9 @@ start)
         while :; do
             sleep 10
             n=$((n + 10))
-            say "alive ${n}s | load $(cut -d' ' -f1-3 /proc/loadavg) | timer irqs $(grep -m1 mt3351-gpt /proc/interrupts | tr -s ' ' | cut -d' ' -f3)"
+            udc=$(cat /sys/class/udc/*/state 2>/dev/null)
+            usbirq=$(grep -m1 musb /proc/interrupts | tr -s ' ' | cut -d' ' -f3)
+            say "alive ${n}s | load $(cut -d' ' -f1-3 /proc/loadavg) | timer irqs $(grep -m1 mt3351-gpt /proc/interrupts | tr -s ' ' | cut -d' ' -f3) | usb ${udc:-none} irqs ${usbirq:-0}"
         done
     ) &
     ;;

@@ -11,8 +11,9 @@ add() { # file, line: append the line once
     grep -qxF "$2" "$1" || printf '%s\n' "$2" >> "$1"
 }
 add_before() { # file, anchor, line: insert the line before the first anchor line, once
-    grep -qxF "$3" "$1" && return 0
-    awk -v a="$2" -v l="$3" '!done && $0 == a { print l; done = 1 } { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+    grep -qxF "$(printf '%s\n' "$3" | head -n1)" "$1" && return 0   # first line marks it as applied
+    A="$2" L="$3" awk '!done && $0 == ENVIRON["A"] { print ENVIRON["L"]; done = 1 } { print }' "$1" > "$1.tmp"
+    mv "$1.tmp" "$1"
 }
 
 add_before "$T/arch/arm/Kconfig" 'source "arch/arm/mach-mmp/Kconfig"' 'source "arch/arm/mach-mt3351/Kconfig"'
@@ -44,4 +45,13 @@ add "$T/drivers/clocksource/Makefile" 'obj-$(CONFIG_MT3351_GPT_TIMER)	+= timer-m
 
 add "$T/drivers/video/fbdev/Makefile" 'obj-$(CONFIG_MT3351_BOOTCON)	+= mt3351-bootcon.o'
 add "$T/arch/arm/boot/dts/mediatek/Makefile" 'dtb-$(CONFIG_ARCH_MT3351) += mt3351-foston-fs707dc.dtb'
+add_before "$T/drivers/usb/musb/Kconfig" 'config USB_MUSB_MEDIATEK' 'config USB_MUSB_MT3351
+	tristate "MediaTek MT3351"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	depends on OF
+	depends on NOP_USB_XCEIV
+	help
+	  Mentor MUSB function controller of the MediaTek MT3351 (FOSTON FS-707DC).
+'
+add "$T/drivers/usb/musb/Makefile" 'obj-$(CONFIG_USB_MUSB_MT3351)			+= mt3351.o'
 echo "BigFoston MT3351 support applied to $T"

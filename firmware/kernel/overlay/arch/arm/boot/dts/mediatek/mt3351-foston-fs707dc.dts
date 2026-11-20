@@ -72,6 +72,12 @@
 		format = "r5g6b5";
 	};
 
+	usb_phy: usb-phy {
+		/* the PHY is left powered and configured by Windows CE */
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
+	};
+
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <1>;
@@ -91,6 +97,16 @@
 			interrupts = <39 IRQ_TYPE_LEVEL_HIGH>;
 			/* 468 MHz / 32 as configured by the boot loader, measured */
 			clock-frequency = <14625000>;
+		};
+
+		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
+		usb@80100000 {
+			compatible = "mediatek,mt3351-musb";
+			reg = <0x80100000 0x1000>;
+			interrupts = <8 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "mc";
+			phys = <&usb_phy>;
+			dr_mode = "peripheral";
 		};
 	};
 };
