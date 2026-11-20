@@ -241,16 +241,18 @@ também o desliga (a tela avisa).
 4. Desconhecido ≠ desligado: ícone a 30 % e "—", nunca um valor padrão.
 5. No simulador tudo que é falso tem o selo **SIM** / "valor simulado", e
    "Desligar" avisa que só fecha o programa.
-6. Ações que não estão prontas (acertar o relógio, ligar/desligar SSH, aplicar a
-   calibração no driver) dizem isso em texto, em vez de fingir que funcionaram.
+6. Ações que não estão prontas (ligar/desligar o SSH) dizem isso em texto, em vez
+   de fingir que funcionaram.
 
 | Item | Estado hoje |
 |---|---|
 | Luz Posterior, Volume, Potência | reais se o driver existir; senão aviso |
 | Língua, Data (ajuste, fuso, horário de verão, NTP, formato), Aparência, Avançado, Reset, Run, Monitor, Sistema de Informação, SSH (leitura) | funcionam |
-| Calibrar | assistente completo; grava `pointercal`; `touch_calibration_apply()` é *stub* |
-| GpsInfo, GPS, TV, Bluetooth, FM, USB, Multimídia, Big Screen | não disponível neste hardware ainda |
-| Livro, Arquivos, Terminal | em desenvolvimento (só software) |
+| Calibrar | assistente completo; grava `pointercal` (no SD) e aplica no leitor de toque |
+| Multimídia, Livros, Arquivos (leitura), Terminal | funcionam (ver [apps.md](apps.md)) |
+| GpsInfo, GPS, TV, Bluetooth, FM, USB, Big Screen | não disponível neste hardware ainda |
+
+Estado geral do projeto: [implementation-status.md](implementation-status.md).
 
 ## Run — segurança
 
