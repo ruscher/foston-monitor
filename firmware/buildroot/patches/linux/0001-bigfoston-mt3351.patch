@@ -207,7 +207,7 @@ diff -Nur a/drivers/clocksource/Makefile b/drivers/clocksource/Makefile
 diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-mt3351-gpt.c
 --- a/drivers/clocksource/timer-mt3351-gpt.c
 +++ b/drivers/clocksource/timer-mt3351-gpt.c
-@@ -0,0 +1,354 @@
+@@ -0,0 +1,377 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * MediaTek MT3351 GPT (general purpose timer), FOSTON FS-707DC / BigFoston OS.
@@ -417,8 +417,27 @@ diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-m
 +	return 0;
 +}
 +
++/* bring-up watchers are opt-in: "bfwatch" / "memwatch" on the kernel command line */
++static bool bfwatch_on, memwatch_on;
++
++static int __init bfwatch_setup(char *unused)
++{
++	bfwatch_on = true;
++	return 1;
++}
++__setup("bfwatch", bfwatch_setup);
++
++static int __init memwatch_setup(char *unused)
++{
++	memwatch_on = true;
++	return 1;
++}
++__setup("memwatch", memwatch_setup);
++
 +static int __init bfwatch_start(void)
 +{
++	if (!bfwatch_on)
++		return 0;
 +	kthread_run(bfwatch_thread, NULL, "bfwatch");
 +	return 0;
 +}
@@ -488,6 +507,8 @@ diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-m
 +	size_t words = (PAGE_SIZE << MEMWATCH_ORDER) / 4, i;
 +	unsigned int b;
 +
++	if (!memwatch_on)
++		return 0;
 +	for (b = 0; b < MEMWATCH_BLOCKS; b++) {
 +		u32 *w;
 +		phys_addr_t pa;
@@ -510,6 +531,8 @@ diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-m
 +
 +static int __init memwatch_start(void)
 +{
++	if (!memwatch_on)
++		return 0;
 +	kthread_run(memwatch_thread, NULL, "memwatch");
 +	return 0;
 +}
@@ -795,7 +818,7 @@ diff -Nur a/drivers/usb/musb/Makefile b/drivers/usb/musb/Makefile
 diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 --- a/drivers/usb/musb/mt3351.c
 +++ b/drivers/usb/musb/mt3351.c
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,211 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * MediaTek MT3351 MUSB glue (FOSTON FS-707DC), BigFoston OS.
@@ -817,12 +840,45 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +#include <linux/of.h>
 +#include <linux/platform_device.h>
 +#include <linux/usb/usb_phy_generic.h>
++#include <linux/workqueue.h>
 +
 +#include "musb_core.h"
 +
 +struct mt3351_glue {
 +	struct platform_device *musb;
 +};
++
++/* Bring-up trace: every interrupt (first 64) and the controller state every 3 s. */
++static unsigned int mt3351_irqs, mt3351_empty;
++static struct musb *mt3351_musb;
++static struct delayed_work mt3351_state_work;
++
++static void mt3351_state(struct work_struct *work)
++{
++	struct musb *musb = mt3351_musb;
++	void __iomem *r = musb->mregs;
++	unsigned long flags;
++	u8 power, devctl, faddr, usbe, index, csr0l;
++	u16 txe, rxe, frame;
++
++	spin_lock_irqsave(&musb->lock, flags);
++	power = musb_readb(r, MUSB_POWER);
++	devctl = musb_readb(r, MUSB_DEVCTL);
++	faddr = musb_readb(r, MUSB_FADDR);
++	usbe = musb_readb(r, MUSB_INTRUSBE);
++	txe = musb_readw(r, MUSB_INTRTXE);
++	rxe = musb_readw(r, MUSB_INTRRXE);
++	frame = musb_readw(r, MUSB_FRAME);
++	index = musb_readb(r, MUSB_INDEX);
++	musb_writeb(r, MUSB_INDEX, 0);
++	csr0l = musb_readb(r, 0x12);
++	musb_writeb(r, MUSB_INDEX, index);
++	spin_unlock_irqrestore(&musb->lock, flags);
++	pr_info("mt3351-usb: POWER %02x DEVCTL %02x FADDR %02x FRAME %u USBE %02x TXE %04x RXE %04x CSR0 %02x irqs %u (%u empty) %s\n",
++		power, devctl, faddr, frame, usbe, txe, rxe, csr0l, mt3351_irqs, mt3351_empty,
++		musb_otg_state_string(musb));
++	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
++}
 +
 +static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 +{
@@ -834,8 +890,15 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	musb->int_usb = musb_readb(musb->mregs, MUSB_INTRUSB);
 +	musb->int_tx = musb_readw(musb->mregs, MUSB_INTRTX);
 +	musb->int_rx = musb_readw(musb->mregs, MUSB_INTRRX);
++	if (++mt3351_irqs <= 64)
++		pr_info("mt3351-usb: irq %u usb %02x tx %04x rx %04x power %02x devctl %02x faddr %02x\n",
++			mt3351_irqs, musb->int_usb, musb->int_tx, musb->int_rx,
++			musb_readb(musb->mregs, MUSB_POWER), musb_readb(musb->mregs, MUSB_DEVCTL),
++			musb_readb(musb->mregs, MUSB_FADDR));
 +	if (musb->int_usb || musb->int_tx || musb->int_rx)
 +		ret = musb_interrupt(musb);
++	else
++		mt3351_empty++;
 +	spin_unlock_irqrestore(&musb->lock, flags);
 +	return ret;
 +}
@@ -889,6 +952,10 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +
 +	musb->dyn_fifo = true;
 +	musb->isr = mt3351_musb_interrupt;
++
++	mt3351_musb = musb;
++	INIT_DELAYED_WORK(&mt3351_state_work, mt3351_state);
++	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
 +	return 0;
 +}
 +

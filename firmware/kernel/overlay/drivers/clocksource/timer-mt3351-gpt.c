@@ -207,8 +207,27 @@ static int bfwatch_thread(void *unused)
 	return 0;
 }
 
+/* bring-up watchers are opt-in: "bfwatch" / "memwatch" on the kernel command line */
+static bool bfwatch_on, memwatch_on;
+
+static int __init bfwatch_setup(char *unused)
+{
+	bfwatch_on = true;
+	return 1;
+}
+__setup("bfwatch", bfwatch_setup);
+
+static int __init memwatch_setup(char *unused)
+{
+	memwatch_on = true;
+	return 1;
+}
+__setup("memwatch", memwatch_setup);
+
 static int __init bfwatch_start(void)
 {
+	if (!bfwatch_on)
+		return 0;
 	kthread_run(bfwatch_thread, NULL, "bfwatch");
 	return 0;
 }
@@ -278,6 +297,8 @@ static int __init memwatch_fill(void)
 	size_t words = (PAGE_SIZE << MEMWATCH_ORDER) / 4, i;
 	unsigned int b;
 
+	if (!memwatch_on)
+		return 0;
 	for (b = 0; b < MEMWATCH_BLOCKS; b++) {
 		u32 *w;
 		phys_addr_t pa;
@@ -300,6 +321,8 @@ early_initcall(memwatch_fill);
 
 static int __init memwatch_start(void)
 {
+	if (!memwatch_on)
+		return 0;
 	kthread_run(memwatch_thread, NULL, "memwatch");
 	return 0;
 }

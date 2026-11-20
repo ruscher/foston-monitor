@@ -19,12 +19,45 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/usb/usb_phy_generic.h>
+#include <linux/workqueue.h>
 
 #include "musb_core.h"
 
 struct mt3351_glue {
 	struct platform_device *musb;
 };
+
+/* Bring-up trace: every interrupt (first 64) and the controller state every 3 s. */
+static unsigned int mt3351_irqs, mt3351_empty;
+static struct musb *mt3351_musb;
+static struct delayed_work mt3351_state_work;
+
+static void mt3351_state(struct work_struct *work)
+{
+	struct musb *musb = mt3351_musb;
+	void __iomem *r = musb->mregs;
+	unsigned long flags;
+	u8 power, devctl, faddr, usbe, index, csr0l;
+	u16 txe, rxe, frame;
+
+	spin_lock_irqsave(&musb->lock, flags);
+	power = musb_readb(r, MUSB_POWER);
+	devctl = musb_readb(r, MUSB_DEVCTL);
+	faddr = musb_readb(r, MUSB_FADDR);
+	usbe = musb_readb(r, MUSB_INTRUSBE);
+	txe = musb_readw(r, MUSB_INTRTXE);
+	rxe = musb_readw(r, MUSB_INTRRXE);
+	frame = musb_readw(r, MUSB_FRAME);
+	index = musb_readb(r, MUSB_INDEX);
+	musb_writeb(r, MUSB_INDEX, 0);
+	csr0l = musb_readb(r, 0x12);
+	musb_writeb(r, MUSB_INDEX, index);
+	spin_unlock_irqrestore(&musb->lock, flags);
+	pr_info("mt3351-usb: POWER %02x DEVCTL %02x FADDR %02x FRAME %u USBE %02x TXE %04x RXE %04x CSR0 %02x irqs %u (%u empty) %s\n",
+		power, devctl, faddr, frame, usbe, txe, rxe, csr0l, mt3351_irqs, mt3351_empty,
+		musb_otg_state_string(musb));
+	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
+}
 
 static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 {
@@ -36,8 +69,15 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 	musb->int_usb = musb_readb(musb->mregs, MUSB_INTRUSB);
 	musb->int_tx = musb_readw(musb->mregs, MUSB_INTRTX);
 	musb->int_rx = musb_readw(musb->mregs, MUSB_INTRRX);
+	if (++mt3351_irqs <= 64)
+		pr_info("mt3351-usb: irq %u usb %02x tx %04x rx %04x power %02x devctl %02x faddr %02x\n",
+			mt3351_irqs, musb->int_usb, musb->int_tx, musb->int_rx,
+			musb_readb(musb->mregs, MUSB_POWER), musb_readb(musb->mregs, MUSB_DEVCTL),
+			musb_readb(musb->mregs, MUSB_FADDR));
 	if (musb->int_usb || musb->int_tx || musb->int_rx)
 		ret = musb_interrupt(musb);
+	else
+		mt3351_empty++;
 	spin_unlock_irqrestore(&musb->lock, flags);
 	return ret;
 }
@@ -91,6 +131,10 @@ static int mt3351_musb_init(struct musb *musb)
 
 	musb->dyn_fifo = true;
 	musb->isr = mt3351_musb_interrupt;
+
+	mt3351_musb = musb;
+	INIT_DELAYED_WORK(&mt3351_state_work, mt3351_state);
+	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
 	return 0;
 }
 
