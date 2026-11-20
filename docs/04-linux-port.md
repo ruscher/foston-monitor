@@ -49,6 +49,7 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | Interface LVGL no aparelho | **FUNCIONANDO** | `bigfoston-shell` sobe no boot (`S90bigfoston-shell`), toque calibrado, 1,7 MB de RAM |
 | SD (MSDC1) | **LEITURA FUNCIONANDO**, escrita bloqueada | driver `mt3351-msdc` (polling/PIO): cartão de 1,91 GiB, FAT32 montado ro, SHA-256 confere, ~6 MB/s — [sd-controller.md](sd-controller.md) |
 | Brilho da tela | **FUNCIONANDO** | `mt3351-backlight` (`/sys/class/backlight`), palavra da PMU `0x80061308` (3–19), testado pelo slider da interface |
+| Áudio (alto-falante) | **FUNCIONANDO** | `mt3351-audio` (ALSA): DMA de áudio `0x8004B000`, DAC interno, amplificador no GPIO 5; `aplay` de WAV com som limpo — [audio.md](audio.md) |
 | Reinício (`reboot`) | PARCIAL | `mt3351-reboot` dispara o watchdog como o CE (`0x80003000`); o aparelho **desliga** em vez de reiniciar (o CE faz igual) e volta no botão liga |
 | GPS | NÃO IMPLEMENTADO | MT3328 *host-based*: a posição é calculada pela biblioteca proprietária MNL do `gps.dll` (UART1, 921600 baud). Caminho viável: carregar o `gps.dll` do próprio aparelho num processo Linux com uma camada de API do CE (estimativa 4–6 semanas); primeiro passo é o driver de UART |
 | Relógio | PARCIAL | sem driver de RTC; a hora do PC vai no DTB (`bigfoston,boot-epoch`) e o `S05clock` acerta no boot |

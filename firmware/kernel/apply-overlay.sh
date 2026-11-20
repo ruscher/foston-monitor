@@ -82,4 +82,12 @@ add_before "$T/drivers/power/reset/Kconfig" 'config POWER_RESET_MT6323' 'config 
 	  Restart of the FOSTON FS-707DC, as its Windows CE OAL does it.
 '
 add "$T/drivers/power/reset/Makefile" 'obj-$(CONFIG_POWER_RESET_MT3351)	+= mt3351-reboot.o'
+add_before "$T/sound/arm/Kconfig" 'config SND_PXA2XX_AC97' 'config SND_MT3351
+	tristate "FOSTON FS-707DC speaker (MediaTek MT3351 audio DMA)"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	select SND_PCM
+	help
+	  Speaker playback of the FOSTON FS-707DC.
+'
+add "$T/sound/arm/Makefile" 'obj-$(CONFIG_SND_MT3351)	+= mt3351-audio.o'
 echo "BigFoston MT3351 support applied to $T"

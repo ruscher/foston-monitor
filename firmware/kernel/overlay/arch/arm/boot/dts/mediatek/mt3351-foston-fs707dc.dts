@@ -136,6 +136,18 @@
 			reg = <0x80003000 0x20>;
 		};
 
+		/*
+		 * Speaker: audio DMA (CE wavedev_drv.dll, IRQ 55 not used yet), the
+		 * analog words of the PMU page, the clock gates and GPIO 5 (amplifier).
+		 * The shared pages are mapped by the driver without claiming them.
+		 */
+		audio@8004b000 {
+			compatible = "foston,fs707dc-audio";
+			reg = <0x8004b000 0x210>, <0x80061100 0x110>,
+			      <0x80001300 0x50>, <0x80002000 0x400>;
+			reg-names = "dma", "analog", "pdn", "gpio";
+		};
+
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";

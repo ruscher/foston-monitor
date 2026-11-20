@@ -15,7 +15,8 @@ arch/arm/boot/dts/mediatek/Makefile drivers/usb/musb/Kconfig drivers/usb/musb/Ma
 drivers/input/touchscreen/Kconfig drivers/input/touchscreen/Makefile
 drivers/mmc/host/Kconfig drivers/mmc/host/Makefile
 drivers/video/backlight/Kconfig drivers/video/backlight/Makefile
-drivers/power/reset/Kconfig drivers/power/reset/Makefile"
+drivers/power/reset/Kconfig drivers/power/reset/Makefile
+sound/arm/Kconfig sound/arm/Makefile"
 for f in $GLUE; do
     mkdir -p "$TMP/a/$(dirname "$f")" "$TMP/b/$(dirname "$f")"
     cp "$SRC/$f" "$TMP/a/$f"
