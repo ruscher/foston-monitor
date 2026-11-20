@@ -818,7 +818,7 @@ diff -Nur a/drivers/usb/musb/Makefile b/drivers/usb/musb/Makefile
 diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 --- a/drivers/usb/musb/mt3351.c
 +++ b/drivers/usb/musb/mt3351.c
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,217 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * MediaTek MT3351 MUSB glue (FOSTON FS-707DC), BigFoston OS.
@@ -919,6 +919,12 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	.multipoint	= 0,
 +	.num_eps	= 5,	/* ep0 + 4 (EPINFO 0x44) */
 +	.ram_bits	= 10,
++	/*
++	 * High speed chirps fine but every transaction then fails on the PC
++	 * (EPROTO, "device descriptor read/64, error -71"): the PHY is not
++	 * tuned for HS after the hand-over from CE.  Full speed for now.
++	 */
++	.maximum_speed	= USB_SPEED_FULL,
 +	.fifo_cfg	= mt3351_fifo_cfg,
 +	.fifo_cfg_size	= ARRAY_SIZE(mt3351_fifo_cfg),
 +};

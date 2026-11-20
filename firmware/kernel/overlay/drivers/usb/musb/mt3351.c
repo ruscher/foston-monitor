@@ -98,6 +98,12 @@ static const struct musb_hdrc_config mt3351_musb_config = {
 	.multipoint	= 0,
 	.num_eps	= 5,	/* ep0 + 4 (EPINFO 0x44) */
 	.ram_bits	= 10,
+	/*
+	 * High speed chirps fine but every transaction then fails on the PC
+	 * (EPROTO, "device descriptor read/64, error -71"): the PHY is not
+	 * tuned for HS after the hand-over from CE.  Full speed for now.
+	 */
+	.maximum_speed	= USB_SPEED_FULL,
 	.fifo_cfg	= mt3351_fifo_cfg,
 	.fifo_cfg_size	= ARRAY_SIZE(mt3351_fifo_cfg),
 };
