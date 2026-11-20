@@ -54,4 +54,11 @@ add_before "$T/drivers/usb/musb/Kconfig" 'config USB_MUSB_MEDIATEK' 'config USB_
 	  Mentor MUSB function controller of the MediaTek MT3351 (FOSTON FS-707DC).
 '
 add "$T/drivers/usb/musb/Makefile" 'obj-$(CONFIG_USB_MUSB_MT3351)			+= mt3351.o'
+add_before "$T/drivers/input/touchscreen/Kconfig" 'config TOUCHSCREEN_MTOUCH' 'config TOUCHSCREEN_MT3351
+	tristate "MediaTek MT3351 resistive touchscreen"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	help
+	  Resistive touchscreen ADC of the MediaTek MT3351 (FOSTON FS-707DC).
+'
+add "$T/drivers/input/touchscreen/Makefile" 'obj-$(CONFIG_TOUCHSCREEN_MT3351)	+= mt3351-ts.o'
 echo "BigFoston MT3351 support applied to $T"

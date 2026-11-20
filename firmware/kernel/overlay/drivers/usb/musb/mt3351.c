@@ -29,7 +29,14 @@ struct mt3351_glue {
 	struct platform_device *musb;
 };
 
-/* Bring-up trace: every interrupt (first 64) and the controller state every 3 s. */
+/*
+ * Bring-up trace, off unless booted with mt3351.trace=1: every interrupt
+ * (first 64) and the controller state every 3 s on the console.
+ */
+static bool mt3351_trace;
+module_param_named(trace, mt3351_trace, bool, 0444);
+MODULE_PARM_DESC(trace, "print the USB bring-up trace on the console");
+
 static unsigned int mt3351_irqs, mt3351_empty;
 static struct musb *mt3351_musb;
 static struct delayed_work mt3351_state_work;
@@ -94,9 +101,9 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 		musb_ep_select(musb->mregs, 0);
 		musb_writeb(musb->mregs, MUSB_FADDR, 0);
 	}
-	if (mt3351_irqs < 40)
+	if (mt3351_trace && mt3351_irqs < 40)
 		mt3351_event("I%x/%x/%x ", musb->int_usb, musb->int_tx, musb->int_rx);
-	if (++mt3351_irqs <= 64)
+	if (++mt3351_irqs <= 64 && mt3351_trace)
 		pr_info("mt3351-usb: irq %u usb %02x tx %04x rx %04x power %02x devctl %02x faddr %02x\n",
 			mt3351_irqs, musb->int_usb, musb->int_tx, musb->int_rx,
 			musb_readb(musb->mregs, MUSB_POWER), musb_readb(musb->mregs, MUSB_DEVCTL),
@@ -118,7 +125,7 @@ static unsigned int mt3351_ep0_logged;
 
 static void mt3351_trace_fifo(const char *dir, struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
 {
-	if (hw_ep->epnum || mt3351_ep0_logged >= 24)
+	if (!mt3351_trace || hw_ep->epnum || mt3351_ep0_logged >= 24)
 		return;
 	mt3351_ep0_logged++;
 	mt3351_event("%s%u:%*phN ", dir, len, min_t(int, len, 8), buf);
@@ -203,8 +210,10 @@ static int mt3351_musb_init(struct musb *musb)
 	musb->isr = mt3351_musb_interrupt;
 
 	mt3351_musb = musb;
-	INIT_DELAYED_WORK(&mt3351_state_work, mt3351_state);
-	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
+	if (mt3351_trace) {
+		INIT_DELAYED_WORK(&mt3351_state_work, mt3351_state);
+		schedule_delayed_work(&mt3351_state_work, 3 * HZ);
+	}
 	return 0;
 }
 
