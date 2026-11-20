@@ -891,10 +891,10 @@ int main(void)
     mount("sysfs", "/sys", "sysfs", 0, NULL);
     kmsg = open("/dev/kmsg", O_WRONLY);
     {
-        /* log every user-mode alignment trap the kernel emulates (mode 3 = warn + fixup) */
+        /* emulate user-mode alignment traps silently (mode 2 = fixup); counters stay in /proc/cpu/alignment */
         int fd = open("/proc/cpu/alignment", O_WRONLY);
         if (fd >= 0) {
-            write(fd, "3", 1);
+            write(fd, "2", 1);
             close(fd);
         }
     }
