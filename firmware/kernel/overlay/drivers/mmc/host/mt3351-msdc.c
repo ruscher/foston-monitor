@@ -68,7 +68,9 @@ enum { RSP_NONE, RSP_R1, RSP_R2, RSP_R3, RSP_R6 = 6, RSP_R1B = 7 };
 #define MSDC_SRC_HZ		48000000	/* UPLL 48 MHz, as left by CE */
 
 static bool readonly = true;
-module_param(readonly, bool, 0444);
+/* writable at run time; it takes effect when the card is (re)initialised, so
+ * /etc/init.d/S30sdcard unbinds and binds the host after clearing it */
+module_param(readonly, bool, 0644);
 MODULE_PARM_DESC(readonly, "refuse writes to the card (default: yes)");
 
 static unsigned int max_hz = 24000000;

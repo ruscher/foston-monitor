@@ -172,9 +172,11 @@ Valores de CPU, RAM, kernel, IP etc. nelas são do PC onde foram geradas.
 | Som ao iniciar | desligado (padrão) / ligado | acorde dó-mi-sol-dó, 0,9 s, quando a interface abre |
 | Escurecer a tela sem uso | Nunca (padrão), 1, 2, 5, 10 min | luz posterior a 5 %; o toque seguinte só acende a tela (é consumido, não aciona nada). Só aparece com o driver de luz posterior. |
 
-**Persistência:** os ajustes vão para `$BIGFOSTON_DATA/settings.conf`. No aparelho a
-pasta de dados está no initramfs (RAM), então valem até desligar; a tela avisa
-isso (`data_dir_volatile()`, por `statfs`). Gravação permanente depende do SD.
+**Persistência:** os ajustes vão para `$BIGFOSTON_DATA/settings.conf`. Com um cartão SD
+liberado para gravação (ver [sd-controller.md](sd-controller.md)) a pasta de dados fica
+no cartão; sem ele fica na RAM e vale até desligar, e a tela avisa isso
+(`data_dir_volatile()`, por `statfs`). A RAM não sobrevive ao desligar: o pstore do
+boot anterior volta vazio (testado em 20/11/2026), então não serve de ponte.
 
 ## Tela de abertura
 

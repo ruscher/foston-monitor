@@ -1,19 +1,67 @@
 #!/bin/sh
-# Mounts the SD card read-only at /mnt/sd (music, books, maps). Read-only on
-# purpose: the card also holds the Windows CE side of BigFoston and the
-# current card fails on writes (docs/sd-controller.md). Never formats.
+# Monta o cartão SD em /mnt/sd. Nunca formata.
+#
+# Somente leitura, a não ser que o cartão traga BigFoston/linux-rw com o número
+# de série DESTE cartão ("serial=0x..."), arquivo criado depois que o cartão
+# passou no teste de gravação (tools/bigfoston/sd-write-test.sh). Assim um
+# cartão desgastado, ou uma cópia da marca em outro cartão, nunca é gravado.
+# Com gravação liberada, a pasta de dados do shell (/data/bigfoston: ajustes,
+# calibração, livros) passa a ficar no cartão, em BigFoston/data.
 DEV=/dev/mmcblk0p1
 MNT=/mnt/sd
+DATA=/data/bigfoston
+PARAM=/sys/module/mt3351_msdc/parameters/readonly
+DRV=/sys/bus/platform/drivers/mt3351-msdc
+RO_OPTS=ro,noatime,iocharset=iso8859-1,utf8
+RW_OPTS=rw,noatime,flush,iocharset=iso8859-1,utf8,errors=remount-ro
+
+wait_dev() {
+    n=0
+    while [ ! -b "$DEV" ] && [ $n -lt "$1" ]; do sleep 0.5; n=$((n + 1)); done
+    [ -b "$DEV" ]
+}
+
+# o driver só aplica "readonly" ao (re)iniciar o cartão: desliga e religa o host
+enable_writes() {
+    echo 0 > "$PARAM" || return 1
+    for d in "$DRV"/*.*; do
+        [ -e "$d" ] || continue
+        name=$(basename "$d")
+        echo "$name" > "$DRV/unbind" && echo "$name" > "$DRV/bind"
+    done
+    sleep 1
+    wait_dev 20 && [ "$(cat /sys/block/mmcblk0/ro 2>/dev/null)" = 0 ]
+}
+
 case "$1" in
 start)
     echo 50 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
     mkdir -p "$MNT"
-    n=0
-    while [ ! -b "$DEV" ] && [ $n -lt 10 ]; do sleep 0.5; n=$((n + 1)); done
-    [ -b "$DEV" ] || { echo "sdcard: no card"; exit 0; }
-    mount -t vfat -o ro,noatime,iocharset=utf8 "$DEV" "$MNT" && echo "sdcard: $DEV on $MNT (ro)"
+    wait_dev 10 || { echo "sdcard: sem cartão"; exit 0; }
+    mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT" || exit 0
+    serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null)
+    if [ -n "$serial" ] && grep -qx "serial=$serial" "$MNT/BigFoston/linux-rw" 2>/dev/null; then
+        umount "$MNT"
+        if enable_writes && mount -t vfat -o "$RW_OPTS" "$DEV" "$MNT"; then
+            mkdir -p "$MNT/BigFoston/data" "$DATA"
+            # primeira vez: leva para o cartão o que já estiver na RAM
+            if [ -z "$(ls -A "$MNT/BigFoston/data")" ] && [ -n "$(ls -A "$DATA")" ]; then
+                cp -r "$DATA"/. "$MNT/BigFoston/data/" && sync
+            fi
+            mount --bind "$MNT/BigFoston/data" "$DATA"
+            echo "sdcard: $DEV em $MNT (gravação liberada, cartão $serial); dados em $DATA"
+        else
+            echo 1 > "$PARAM"
+            wait_dev 20 && mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT"
+            echo "sdcard: falha ao liberar a gravação; $DEV em $MNT (ro)"
+        fi
+    else
+        echo "sdcard: $DEV em $MNT (ro)"
+    fi
     ;;
 stop)
+    sync
+    umount "$DATA" 2>/dev/null
     umount "$MNT" 2>/dev/null
     ;;
 esac

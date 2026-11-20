@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <sys/statfs.h>
 
 #ifdef BIGFOSTON_TARGET
@@ -138,7 +139,8 @@ bool settings_save(void)
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
-    bool ok = fflush(f) == 0;
+    /* no cartão SD (FAT): o conteúdo vai ao cartão antes da troca de nome */
+    bool ok = fflush(f) == 0 && fsync(fileno(f)) == 0;
     fclose(f);
     if(ok) ok = rename(tmp, path) == 0;
     return ok;

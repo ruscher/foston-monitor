@@ -1,9 +1,11 @@
 # Cartão SD (MSDC1) no Linux
 
-Estado: **leitura funcionando** no aparelho (driver `mt3351-msdc`, 2026-11-20).
-**Escrita bloqueada de propósito** (parâmetro `readonly`, padrão 1). Dois motivos:
-o cartão atual falha em gravações (veja [01-hardware.md](01-hardware.md)) e guarda o lado
-WinCE do BigFoston (`\SDMMC\BigFoston`).
+Estado: **leitura e escrita funcionando** no aparelho (driver `mt3351-msdc`,
+2026-11-20). A escrita é liberada **por cartão**: o kernel sobe com `readonly=1`, e o
+`/etc/init.d/S30sdcard` só libera se o cartão traz `BigFoston/linux-rw` com o número de
+série dele (`serial=0x...`), arquivo gravado depois que o cartão passa no teste
+`tools/bigfoston/sd-write-test.sh`. O cartão antigo (gravação falhando, veja
+[01-hardware.md](01-hardware.md)) nunca é gravado.
 
 ## Origem
 
@@ -57,7 +59,19 @@ Por isso o driver não anuncia CMD23.
 driver do CE: comando, dados e detecção do cartão (`MMC_CAP_NEEDS_POLL`). A transferência
 é PIO, feita em uma workqueue. Suporta SD de 4 bits; SDIO e MMC estão desligados.
 
-Parâmetros: `readonly` (padrão 1) e `max_hz` (padrão 24 MHz, o mesmo do CE).
+Parâmetros: `readonly` (padrão 1; gravável em tempo de execução, vale quando o cartão
+é reiniciado: o S30sdcard desliga e religa o host por `unbind`/`bind`) e `max_hz`
+(padrão 24 MHz, o mesmo do CE).
+
+## Montagem e persistência (S30sdcard)
+
+1. Monta `/dev/mmcblk0p1` em `/mnt/sd` só leitura (`iocharset=iso8859-1,utf8`: nomes em
+   UTF-8 e sem distinção de maiúsculas nos nomes ASCII, como no CE).
+2. Se `BigFoston/linux-rw` tem `serial=<este cartão>`: `readonly=0`, `unbind`/`bind`,
+   monta com gravação (`flush,errors=remount-ro`) e liga `BigFoston/data` em
+   `/data/bigfoston` (`mount --bind`): ajustes, calibração do toque e livros do shell
+   ficam no cartão. O shell grava os ajustes com `fsync` antes de trocar o nome.
+3. No desligamento: `sync` e desmontagem.
 
 ## Testes no aparelho
 
@@ -65,11 +79,18 @@ Parâmetros: `readonly` (padrão 1) e `max_hz` (padrão 24 MHz, o mesmo do CE).
 - **CID** `000000534420202000000061ed00b903`: nome "SD", série `0x61ed`, fabricado em 09/2011. Os campos saem coerentes, o que confirma a ordem dos bytes da resposta R2.
 - **FAT32** montado com `-o ro`: `BigFoston/` listado, e o SHA-256 do `bfagent.exe` bate com o `bfagent.exe.sha256` do cartão.
 - **Leitura:** 8 MB em 1,34 s (cerca de 6 MB/s). Duas leituras de 64 MB deram o mesmo MD5.
+- **SDHC (cartão novo SanDisk SS32G, 32 GB, CID `035344535333324780253e4a4a00e46b`):**
+  o setor 0 lido pelo FOSTON e por um leitor no PC tem o mesmo MD5 (`52dd4a54…`);
+  formatado no PC (MBR, FAT32 a partir de 4 MiB).
+- **Escrita** (`sd-write-test.sh`, duas rodadas): arquivos aleatórios de 1 KB a 64 MB e
+  200 arquivos pequenos conferidos por MD5 após limpar o cache e após remontar, sem
+  erros de `mmc0` no log. Gravação ≈ 1,4 MB/s (inclui gerar os dados com
+  `/dev/urandom`), leitura de 64 MB com o cache limpo em 7,97 s (≈ 8 MB/s).
 
 ## Pendente
 
-- **Escrita.** Testar só com um cartão novo, e com `readonly=0` explícito.
 - **Interrupção de detecção** (IRQ 15). Não se sabe como reconhecê-la, então o driver consulta o slot periodicamente.
 - **DMA.** O canal periférico com master = 1 está documentado no `dmadrv.dll`.
 - **Montagem automática** e **ejeção segura** pela interface.
-- **Persistência:** a calibração e os ajustes do shell no SD, quando a escrita estiver liberada.
+- **Queda de energia** no meio de uma gravação: o FAT pode ficar inconsistente
+  (`errors=remount-ro` protege o resto da sessão); conferir com `fsck.vfat` no PC.

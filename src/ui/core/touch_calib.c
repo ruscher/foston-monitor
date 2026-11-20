@@ -1,6 +1,7 @@
 #include "touch_calib.h"
 #include "settings.h"
 #include <stdio.h>
+#include <unistd.h>
 
 /* Resolve [sxx sxy sx; sxy syy sy; sx sy n] * [p q r]^T = [v1 v2 v3]^T (Cramer).
  * ARMv6 sem VFP: double é emulado em software, mas isto roda uma vez só. */
@@ -61,7 +62,8 @@ bool calib_save(const bf_calib_t *c)
     if(!f) return false;
     fprintf(f, "%d %d %d %d %d %d %d 800 480\n", (int)c->a, (int)c->b, (int)c->c,
             (int)c->d, (int)c->e, (int)c->f, (int)c->s);
-    return fclose(f) == 0;
+    bool ok = fflush(f) == 0 && fsync(fileno(f)) == 0;   /* cartão SD */
+    return fclose(f) == 0 && ok;
 }
 
 /* Calibração gravada pelo usuário ($BIGFOSTON_DATA/pointercal) ou, se não houver,

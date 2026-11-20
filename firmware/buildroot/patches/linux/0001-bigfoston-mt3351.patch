@@ -1337,7 +1337,7 @@ diff -Nur a/drivers/mmc/host/Makefile b/drivers/mmc/host/Makefile
 diff -Nur a/drivers/mmc/host/mt3351-msdc.c b/drivers/mmc/host/mt3351-msdc.c
 --- a/drivers/mmc/host/mt3351-msdc.c
 +++ b/drivers/mmc/host/mt3351-msdc.c
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,378 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * MediaTek MT3351 MSDC SD host controller (FOSTON FS-707DC), polled PIO.
@@ -1408,7 +1408,9 @@ diff -Nur a/drivers/mmc/host/mt3351-msdc.c b/drivers/mmc/host/mt3351-msdc.c
 +#define MSDC_SRC_HZ		48000000	/* UPLL 48 MHz, as left by CE */
 +
 +static bool readonly = true;
-+module_param(readonly, bool, 0444);
++/* writable at run time; it takes effect when the card is (re)initialised, so
++ * /etc/init.d/S30sdcard unbinds and binds the host after clearing it */
++module_param(readonly, bool, 0644);
 +MODULE_PARM_DESC(readonly, "refuse writes to the card (default: yes)");
 +
 +static unsigned int max_hz = 24000000;
