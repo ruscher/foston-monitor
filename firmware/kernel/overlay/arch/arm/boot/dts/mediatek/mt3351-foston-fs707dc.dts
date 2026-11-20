@@ -130,6 +130,12 @@
 			reg = <0x80061308 0x4>;
 		};
 
+		/* watchdog: used only to restart, as the CE OAL does (nk.exe OALIoCtlHalReboot) */
+		watchdog@80003000 {
+			compatible = "mediatek,mt3351-wdt-reboot";
+			reg = <0x80003000 0x20>;
+		};
+
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";

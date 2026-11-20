@@ -563,6 +563,10 @@ def main(argv=None):
     p.add_argument("root", choices=sorted(ROOTS))
     p.add_argument("path", nargs="?", default="")
     p.add_argument("-d", "--depth", type=int, default=0)
+    p = sub.add_parser("autostart", help="agent autostart entry HKLM\\init\\Launch90 (agent >= 0.4.0)")
+    p.add_argument("action", choices=["on", "off"])
+    p.add_argument("--exe", default="\\SDMMC\\BigFoston\\bfagent.exe")
+    sub.add_parser("reboot", help="restart the device from Windows CE (agent >= 0.4.0)")
     p = sub.add_parser("ps")
     p.add_argument("-m", "--modules", action="store_true")
     p = sub.add_parser("phys")
@@ -649,6 +653,18 @@ def main(argv=None):
             print(text, end="")
             if status == bfp.E_TOOBIG:
                 print("# TRUNCATED: ask for a deeper path", file=sys.stderr)
+        elif args.cmd == "autostart":
+            if args.action == "on":
+                # after device.exe (20) and the OEM launcher (50), like btpower.exe (Launch80)
+                link.request(bfp.REGSET, b"\x01Launch90\0" + args.exe.encode() + b"\0")
+                link.request(bfp.REGSET, b"\x03Depend90\0" + bytes([0x14, 0x00, 0x32, 0x00]))
+            else:
+                link.request(bfp.REGSET, b"\x04Launch90\0")
+                link.request(bfp.REGSET, b"\x04Depend90\0")
+            print(link.reg("HKLM", "init")[0], end="")
+        elif args.cmd == "reboot":
+            link.request(bfp.REBOOT)
+            print("reboot pedido")
         elif args.cmd == "ps":
             print(link.text(bfp.PS, bytes([1 if args.modules else 0]), timeout=60)[0], end="")
         elif args.cmd == "phys":

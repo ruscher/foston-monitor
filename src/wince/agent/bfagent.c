@@ -30,8 +30,8 @@
 #include "bfp.h"
 #include "boot.h"
 
-#define AGENT_VERSION "bfagent 0.3.1"
-#define AGENT_VERSION_W L"bfagent 0.3.1"
+#define AGENT_VERSION "bfagent 0.4.0"
+#define AGENT_VERSION_W L"bfagent 0.4.0"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -458,6 +458,93 @@ static void cmd_reg(const bfp_msg *req)
     reg_dump(&b, roots[req->payload[0]], path, req->payload[1]);
     respond_buf(req, &b);
     free(b.data);
+}
+
+/*
+ * The only registry writes a client may ask for: the agent's own autostart
+ * entry in HKLM\init (Launch90 / Depend90). Anything else is refused. The
+ * registry of this device is a hive in flash, so the key is flushed.
+ */
+static void cmd_regset(const bfp_msg *req)
+{
+    typedef LONG (WINAPI *RegFlushKey_t)(HKEY);
+    RegFlushKey_t flush = (RegFlushKey_t)core_proc(L"RegFlushKey");
+    WCHAR name[32], value[260];
+    uint32_t used = 0, n;
+    const uint8_t *data;
+    uint8_t op;
+    HKEY key;
+    DWORD disp;
+    LONG rc;
+    if (req->len < 2 || (op = req->payload[0]) < 1 || op > 4 ||
+        !arg_path(req->payload + 1, req->len - 1, name, 32, &used)) {
+        respond_error(req, BFP_E_ARGS, 0, "op, name expected");
+        return;
+    }
+    if (_wcsicmp(name, L"Launch90") && _wcsicmp(name, L"Depend90")) {
+        respond_error(req, BFP_E_DENIED, 0, "only HKLM\\init Launch90/Depend90 may be written");
+        return;
+    }
+    data = req->payload + 1 + used;
+    n = req->len - 1 - used;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, NULL, 0, 0, NULL, &key, &disp) != ERROR_SUCCESS) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "open HKLM\\init failed");
+        return;
+    }
+    if (op == 4) {
+        rc = RegDeleteValueW(key, name);
+    } else if (op == 3) {
+        rc = RegSetValueExW(key, name, 0, REG_BINARY, data, n);
+    } else {
+        /* REG_SZ / REG_MULTI_SZ from one UTF-8 string */
+        DWORD chars;
+        if (!arg_path(data, n, value, 258, NULL)) {
+            RegCloseKey(key);
+            respond_error(req, BFP_E_ARGS, 0, "string value expected");
+            return;
+        }
+        chars = (DWORD)wcslen(value) + 1;
+        if (op == 2)
+            value[chars++] = 0;     /* MULTI_SZ: second terminator */
+        rc = RegSetValueExW(key, name, 0, op == 2 ? REG_MULTI_SZ : REG_SZ, (const BYTE *)value,
+                            chars * sizeof(WCHAR));
+    }
+    if (rc == ERROR_SUCCESS && flush)
+        flush(key);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS && !(op == 4 && rc == ERROR_FILE_NOT_FOUND)) {
+        respond_error(req, BFP_E_SYSTEM, (uint32_t)rc, "registry write failed");
+        return;
+    }
+    log_line("HKLM\\init\\%ls %ls", name, op == 4 ? L"deleted" : L"written");
+    respond(req, BFP_OK, NULL, 0);
+}
+
+/* Restart the whole device: answered first, done from a thread a moment later. */
+static DWORD WINAPI reboot_thread(LPVOID unused)
+{
+    typedef DWORD (WINAPI *SetSystemPowerState_t)(LPCWSTR, DWORD, DWORD);
+    SetSystemPowerState_t power = (SetSystemPowerState_t)core_proc(L"SetSystemPowerState");
+    Sleep(500);
+    log_line("reboot requested");
+    if (power)
+        power(NULL, 0x00800000 /* POWER_STATE_RESET */, 0x1000 /* POWER_FORCE */);
+    Sleep(3000);
+    if (p_KernelIoControl)
+        p_KernelIoControl(0x0101003C /* IOCTL_HAL_REBOOT */, NULL, 0, NULL, 0, NULL);
+    log_line("reboot did not happen");
+    return 0;
+}
+
+static void cmd_reboot(const bfp_msg *req)
+{
+    HANDLE t = CreateThread(NULL, 0, reboot_thread, NULL, 0, NULL);
+    if (!t) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "thread failed");
+        return;
+    }
+    CloseHandle(t);
+    respond(req, BFP_OK, NULL, 0);
 }
 
 static void cmd_exec(const bfp_msg *req)
@@ -1018,6 +1105,8 @@ static const char *command_name(uint8_t type)
     case BFP_MKDIR: return "mkdir";
     case BFP_DELETE: return "delete";
     case BFP_REG: return "reg";
+    case BFP_REGSET: return "regset";
+    case BFP_REBOOT: return "reboot";
     case BFP_EXEC: return "exec";
     case BFP_PS: return "ps";
     case BFP_KILL: return "kill";
@@ -1053,6 +1142,8 @@ static void handle(const bfp_msg *m)
     case BFP_MKDIR:
     case BFP_DELETE: cmd_path_op(m); break;
     case BFP_REG: cmd_reg(m); break;
+    case BFP_REGSET: cmd_regset(m); break;
+    case BFP_REBOOT: cmd_reboot(m); break;
     case BFP_EXEC: cmd_exec(m); break;
     case BFP_PS: cmd_ps(m); break;
     case BFP_KILL: cmd_kill(m); break;

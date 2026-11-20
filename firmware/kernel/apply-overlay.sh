@@ -75,4 +75,11 @@ add_before "$T/drivers/video/backlight/Kconfig" 'config BACKLIGHT_PWM' 'config B
 	  LCD backlight level register of the FOSTON FS-707DC.
 '
 add "$T/drivers/video/backlight/Makefile" 'obj-$(CONFIG_BACKLIGHT_MT3351)	+= mt3351_bl.o'
+add_before "$T/drivers/power/reset/Kconfig" 'config POWER_RESET_MT6323' 'config POWER_RESET_MT3351
+	bool "MediaTek MT3351 restart through the watchdog"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	help
+	  Restart of the FOSTON FS-707DC, as its Windows CE OAL does it.
+'
+add "$T/drivers/power/reset/Makefile" 'obj-$(CONFIG_POWER_RESET_MT3351)	+= mt3351-reboot.o'
 echo "BigFoston MT3351 support applied to $T"
