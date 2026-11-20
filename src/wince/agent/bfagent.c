@@ -30,8 +30,8 @@
 #include "bfp.h"
 #include "boot.h"
 
-#define AGENT_VERSION "bfagent 0.4.0"
-#define AGENT_VERSION_W L"bfagent 0.4.0"
+#define AGENT_VERSION "bfagent 0.4.1"
+#define AGENT_VERSION_W L"bfagent 0.4.1"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -465,6 +465,8 @@ static void cmd_reg(const bfp_msg *req)
  * entry in HKLM\init (Launch90 / Depend90). Anything else is refused. The
  * registry of this device is a hive in flash, so the key is flushed.
  */
+static void write_default_client(const WCHAR *value);
+
 static void cmd_regset(const bfp_msg *req)
 {
     typedef LONG (WINAPI *RegFlushKey_t)(HKEY);
@@ -481,12 +483,23 @@ static void cmd_regset(const bfp_msg *req)
         respond_error(req, BFP_E_ARGS, 0, "op, name expected");
         return;
     }
+    data = req->payload + 1 + used;
+    n = req->len - 1 - used;
+    /* the USB boot default may only be put back to one of the two known clients */
+    if (!_wcsicmp(name, L"DefaultClientDriver")) {
+        if (op != 1 || !arg_path(data, n, value, 64, NULL) ||
+            (_wcsicmp(value, L"Mass_Storage_Class") && _wcsicmp(value, L"Serial_Class"))) {
+            respond_error(req, BFP_E_DENIED, 0, "DefaultClientDriver: Mass_Storage_Class or Serial_Class only");
+            return;
+        }
+        write_default_client(value);
+        respond(req, BFP_OK, NULL, 0);
+        return;
+    }
     if (_wcsicmp(name, L"Launch90") && _wcsicmp(name, L"Depend90")) {
         respond_error(req, BFP_E_DENIED, 0, "only HKLM\\init Launch90/Depend90 may be written");
         return;
     }
-    data = req->payload + 1 + used;
-    n = req->len - 1 - used;
     if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"init", 0, NULL, 0, 0, NULL, &key, &disp) != ERROR_SUCCESS) {
         respond_error(req, BFP_E_SYSTEM, GetLastError(), "open HKLM\\init failed");
         return;
@@ -526,6 +539,9 @@ static DWORD WINAPI reboot_thread(LPVOID unused)
     typedef DWORD (WINAPI *SetSystemPowerState_t)(LPCWSTR, DWORD, DWORD);
     SetSystemPowerState_t power = (SetSystemPowerState_t)core_proc(L"SetSystemPowerState");
     Sleep(500);
+    /* the USB client switch is saved as the boot default on this device:
+     * make sure the device boots as USB storage, as it did originally */
+    write_default_client(L"Mass_Storage_Class");
     log_line("reboot requested");
     if (power)
         power(NULL, 0x00800000 /* POWER_STATE_RESET */, 0x1000 /* POWER_FORCE */);

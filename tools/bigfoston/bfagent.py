@@ -567,6 +567,8 @@ def main(argv=None):
     p.add_argument("action", choices=["on", "off"])
     p.add_argument("--exe", default="\\SDMMC\\BigFoston\\bfagent.exe")
     sub.add_parser("reboot", help="restart the device from Windows CE (agent >= 0.4.0)")
+    p = sub.add_parser("usb-default", help="USB client the device boots with (agent >= 0.4.1)")
+    p.add_argument("client", choices=["mass", "serial"])
     p = sub.add_parser("ps")
     p.add_argument("-m", "--modules", action="store_true")
     p = sub.add_parser("phys")
@@ -662,6 +664,10 @@ def main(argv=None):
                 link.request(bfp.REGSET, b"\x04Launch90\0")
                 link.request(bfp.REGSET, b"\x04Depend90\0")
             print(link.reg("HKLM", "init")[0], end="")
+        elif args.cmd == "usb-default":
+            name = "Mass_Storage_Class" if args.client == "mass" else "Serial_Class"
+            link.request(bfp.REGSET, b"\x01DefaultClientDriver\0" + name.encode() + b"\0")
+            print(link.reg("HKLM", "Drivers\\USB\\FunctionDrivers")[0].splitlines()[1])
         elif args.cmd == "reboot":
             link.request(bfp.REBOOT)
             print("reboot pedido")

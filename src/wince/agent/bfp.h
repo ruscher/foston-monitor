@@ -62,7 +62,8 @@
 #define BFP_QUIT      0x70   /* agent exits and restores the previous USB client */
 #define BFP_REBOOT    0x71   /* restart the device (SetSystemPowerState reset, then IOCTL_HAL_REBOOT) */
 #define BFP_REGSET    0x21   /* u8 op (1 REG_SZ, 2 REG_MULTI_SZ, 3 REG_BINARY, 4 delete), name NUL, data;
-                                only HKLM\init Launch90/Depend90 (autostart of the agent) */
+                                only HKLM\\init Launch90/Depend90 (agent autostart) and the USB boot
+                                default DefaultClientDriver = Mass_Storage_Class | Serial_Class */
 
 /* status */
 #define BFP_OK         0
