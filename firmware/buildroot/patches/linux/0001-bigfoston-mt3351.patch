@@ -818,7 +818,7 @@ diff -Nur a/drivers/usb/musb/Makefile b/drivers/usb/musb/Makefile
 diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 --- a/drivers/usb/musb/mt3351.c
 +++ b/drivers/usb/musb/mt3351.c
-@@ -0,0 +1,254 @@
+@@ -0,0 +1,301 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * MediaTek MT3351 MUSB glue (FOSTON FS-707DC), BigFoston OS.
@@ -832,7 +832,9 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 + *
 + * The PHY is left powered by Windows CE; it is modelled as a no-op
 + * transceiver ("usb-nop-xceiv").  Peripheral only, PIO until the Inventra DMA
-+ * is validated on this board.
++ * is validated on this board.  MediaTek MUSB traits seen on the device (as
++ * handled by mediatek.c): interrupt status is write-1-to-clear and a bus
++ * reset does not clear FADDR.
 + */
 +#include <linux/dma-mapping.h>
 +#include <linux/kernel.h>
@@ -852,6 +854,21 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +static unsigned int mt3351_irqs, mt3351_empty;
 +static struct musb *mt3351_musb;
 +static struct delayed_work mt3351_state_work;
++
++/* compact event list repeated every 3 s, so a photo always catches it */
++static char mt3351_ev[600];
++static unsigned int mt3351_ev_len;
++
++static void mt3351_event(const char *fmt, ...)
++{
++	va_list ap;
++
++	if (mt3351_ev_len >= sizeof(mt3351_ev) - 40)
++		return;
++	va_start(ap, fmt);
++	mt3351_ev_len += vscnprintf(mt3351_ev + mt3351_ev_len, sizeof(mt3351_ev) - mt3351_ev_len, fmt, ap);
++	va_end(ap);
++}
 +
 +static void mt3351_state(struct work_struct *work)
 +{
@@ -877,6 +894,8 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	pr_info("mt3351-usb: POWER %02x DEVCTL %02x FADDR %02x FRAME %u USBE %02x TXE %04x RXE %04x CSR0 %02x irqs %u (%u empty) %s\n",
 +		power, devctl, faddr, frame, usbe, txe, rxe, csr0l, mt3351_irqs, mt3351_empty,
 +		musb_otg_state_string(musb));
++	for (unsigned int i = 0; i < mt3351_ev_len; i += 96)
++		pr_info("mt3351-ev: %.96s\n", mt3351_ev + i);
 +	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
 +}
 +
@@ -887,9 +906,17 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	unsigned long flags;
 +
 +	spin_lock_irqsave(&musb->lock, flags);
-+	musb->int_usb = musb_readb(musb->mregs, MUSB_INTRUSB);
-+	musb->int_tx = musb_readw(musb->mregs, MUSB_INTRTX);
-+	musb->int_rx = musb_readw(musb->mregs, MUSB_INTRRX);
++	/* MediaTek MUSB: interrupt status is write-1-to-clear (as in mediatek.c) */
++	musb->int_usb = musb_clearb(musb->mregs, MUSB_INTRUSB);
++	musb->int_rx = musb_clearw(musb->mregs, MUSB_INTRRX);
++	musb->int_tx = musb_clearw(musb->mregs, MUSB_INTRTX);
++	/* ...and FADDR is not cleared by a bus reset (FADDR stayed at CE's 0x04) */
++	if ((musb->int_usb & MUSB_INTR_RESET) && !is_host_active(musb)) {
++		musb_ep_select(musb->mregs, 0);
++		musb_writeb(musb->mregs, MUSB_FADDR, 0);
++	}
++	if (mt3351_irqs < 40)
++		mt3351_event("I%x/%x/%x ", musb->int_usb, musb->int_tx, musb->int_rx);
 +	if (++mt3351_irqs <= 64)
 +		pr_info("mt3351-usb: irq %u usb %02x tx %04x rx %04x power %02x devctl %02x faddr %02x\n",
 +			mt3351_irqs, musb->int_usb, musb->int_tx, musb->int_rx,
@@ -915,6 +942,7 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	if (hw_ep->epnum || mt3351_ep0_logged >= 24)
 +		return;
 +	mt3351_ep0_logged++;
++	mt3351_event("%s%u:%*phN ", dir, len, min_t(int, len, 8), buf);
 +	pr_info("mt3351-usb: ep0 %s %u: %*ph\n", dir, len, min_t(int, len, 18), buf);
 +}
 +
@@ -987,9 +1015,10 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	/* stop the Inventra DMA channels CE may have left running (CNTL at 0x204 + 0x10 * ch) */
 +	for (int ch = 0; ch < 4; ch++)
 +		musb_writew(musb->mregs, 0x204 + 0x10 * ch, 0);
-+	musb_readb(musb->mregs, MUSB_INTRUSB);
-+	musb_readw(musb->mregs, MUSB_INTRTX);
-+	musb_readw(musb->mregs, MUSB_INTRRX);
++	musb_writeb(musb->mregs, MUSB_INTRUSB, 0xff);	/* write-1-to-clear */
++	musb_writew(musb->mregs, MUSB_INTRTX, 0xffff);
++	musb_writew(musb->mregs, MUSB_INTRRX, 0xffff);
++	musb_writeb(musb->mregs, MUSB_FADDR, 0);
 +
 +	musb->dyn_fifo = true;
 +	musb->isr = mt3351_musb_interrupt;
@@ -1000,10 +1029,28 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	return 0;
 +}
 +
++static u8 mt3351_clearb(void __iomem *addr, unsigned int offset)
++{
++	u8 data = musb_readb(addr, offset);
++
++	musb_writeb(addr, offset, data);
++	return data;
++}
++
++static u16 mt3351_clearw(void __iomem *addr, unsigned int offset)
++{
++	u16 data = musb_readw(addr, offset);
++
++	musb_writew(addr, offset, data);
++	return data;
++}
++
 +static const struct musb_platform_ops mt3351_musb_ops = {
 +	.quirks		= MUSB_INDEXED_EP,
 +	.fifo_mode	= 2,
 +	.init		= mt3351_musb_init,
++	.clearb		= mt3351_clearb,
++	.clearw		= mt3351_clearw,
 +	.read_fifo	= mt3351_read_fifo,
 +	.write_fifo	= mt3351_write_fifo,
 +};
