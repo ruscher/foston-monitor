@@ -96,6 +96,7 @@ só o DTB (3 KB) vai pela USB, carimbado com a hora do PC.
 | `boot-mem` (2,9 MB pela USB, 25–60 KB/s) | ~2 min só de envio |
 | `install-linux` (uma vez por versão) | 125 s |
 | `boot-flash` | o comando volta em 1 s; o Linux começa ~9 s depois; a interface sobe 4,7 s após o início do kernel |
+| `boot-flash` com a correção do `ipaq` no PC | rede USB do Linux respondendo **15 s** após o comando (contagem de 5 s incluída); SSH já disponível (o `dropbear` sobe aos 4,7 s; o `crng` fica pronto no instante 0 graças ao `rng-seed` do DTB) |
 
 ### PC: driver `ipaq` e o atraso de ~100 s na rede USB
 
