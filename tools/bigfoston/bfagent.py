@@ -521,6 +521,52 @@ def parse_int(text):
     return int(text, 0)
 
 
+def close_ce_menu(link):
+    """The OEM menu (jwdmain.exe) keeps the CPU busy while the agent runs behind
+    it after an autostart: PC->device writes fall from ~50 to ~2 KB/s (measured
+    2026-11-20). Close it before a large transfer (it comes back on the next boot)."""
+    for line in link.text(bfp.PS, b"\0", timeout=60)[0].splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "P" and parts[-1].lower() == "jwdmain.exe":
+            link.request(bfp.KILL, struct.pack("<I", int(parts[1], 16)))
+            print("menu do CE (jwdmain.exe) encerrado para a transferência")
+
+
+FLASH_LINUX = "\\ResidentFlash\\BigFoston\\linux"
+
+
+def install_linux(link, local_dir, dest):
+    """Copy zImage/initrd.img to the device unless the copy there is the same (SHA256SUMS),
+    read each one back and compare its SHA-256 before recording it."""
+    names = ["zImage", "initrd.img"]
+    local = {}
+    for n in names:
+        with open(os.path.join(local_dir, n), "rb") as f:
+            local[n] = f.read()
+    want = "".join(f"{hashlib.sha256(local[n]).hexdigest()}  {n}\n" for n in names)
+    try:
+        have = link.read_file(dest + "\\SHA256SUMS").decode()
+    except AgentError:
+        have = ""
+    if have == want:
+        print("cópia na memória interna já é esta versão")
+        return
+    close_ce_menu(link)
+    for part in ["\\ResidentFlash\\BigFoston", dest]:
+        try:
+            link.request(bfp.MKDIR, part.encode() + b"\0")
+        except AgentError:
+            pass                                  # já existe
+    for n in names:
+        link.write_file(dest + "\\" + n, local[n], progress=progress_bar(n))
+        back = link.read_file(dest + "\\" + n)
+        if hashlib.sha256(back).digest() != hashlib.sha256(local[n]).digest():
+            raise AgentError(f"{n}: SHA-256 da cópia gravada não confere")
+        print(f"{n}: gravado e conferido ({len(back)} bytes)")
+    link.write_file(dest + "\\SHA256SUMS", want.encode())
+    print("SHA256SUMS gravado")
+
+
 def dtb_with_epoch(path, epoch):
     """Copy of the DTB with /chosen/bigfoston,boot-epoch set (needs fdtput, dtc package)."""
     import shutil
@@ -615,6 +661,13 @@ def main(argv=None):
     p.add_argument("--initrd", required=True)
     p.add_argument("--delay", type=int, default=30)
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("install-linux", help="copy zImage and initrd.img to the device's internal flash (SHA-256 checked)")
+    p.add_argument("--dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../firmware/build/out/images/bigfoston"))
+    p.add_argument("--dest", default=FLASH_LINUX)
+    p = sub.add_parser("boot-flash", help="boot the Linux copy in internal flash; only the DTB (with the clock) goes over USB")
+    p.add_argument("--dtb", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../firmware/build/out/images/bigfoston/fs707dc.dtb"))
+    p.add_argument("--dest", default=FLASH_LINUX)
+    p.add_argument("--delay", type=int, default=5)
     p = sub.add_parser("ramoops", help="kernel log left by the last Linux boot")
     p.add_argument("-o", "--out")
     p = sub.add_parser("quit")
@@ -723,15 +776,7 @@ def main(argv=None):
             if not ok:
                 return 1
         elif args.cmd == "boot-mem":
-            # The OEM menu (jwdmain.exe) keeps the CPU busy while the agent runs
-            # behind it after an autostart: PC->device writes fall from ~50 to
-            # ~2 KB/s (measured 2026-11-20). Windows CE is about to be replaced
-            # anyway, so close it before sending the kernel.
-            for line in link.text(bfp.PS, b"\0", timeout=60)[0].splitlines():
-                parts = line.split()
-                if len(parts) >= 3 and parts[0] == "P" and parts[-1].lower() == "jwdmain.exe":
-                    link.request(bfp.KILL, struct.pack("<I", int(parts[1], 16)))
-                    print("menu do CE (jwdmain.exe) encerrado para a transferência")
+            close_ce_menu(link)
             files = {}
             # the DTB goes last, stamped with the PC's clock (there is no RTC driver):
             # /chosen/bigfoston,boot-epoch = time of the jump; /etc/init.d/S05clock uses it
@@ -753,6 +798,13 @@ def main(argv=None):
                 return 1
             if not args.dry_run:
                 print(link.boot("mem:0", "mem:1", "mem:2", delay=args.delay))
+        elif args.cmd == "install-linux":
+            install_linux(link, args.dir, args.dest)
+        elif args.cmd == "boot-flash":
+            # the DTB goes over USB so it carries the PC's clock (no RTC driver)
+            link.stage(1, dtb_with_epoch(args.dtb, int(time.time()) + args.delay + 4),
+                       progress=progress_bar("fs707dc.dtb"))
+            print(link.boot(args.dest + "\\zImage", "mem:1", args.dest + "\\initrd.img", delay=args.delay))
         elif args.cmd == "ramoops":
             zones = ramoops_zones(link.phys(RAMOOPS_BASE, RAMOOPS_SIZE))
             if not zones:

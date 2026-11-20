@@ -81,3 +81,30 @@ Payload bare-metal: `bfagent.py boot '\SDMMC\BigFoston\fbtest.bin' --kernel-pa 0
   controladores precisam ser parados antes do salto (registradores em [01-hardware.md](01-hardware.md)).
 - O watchdog (`ANWDOG.exe` é de software; existência de watchdog de hardware não verificada)
   pode reiniciar o aparelho durante o Linux.
+
+
+## Boot a partir da memória interna (sem enviar o Linux pela USB)
+
+`bfagent.py install-linux` grava `zImage` e `initrd.img` em `\ResidentFlash\BigFoston\linux\`.
+Ele fecha o menu do CE durante a cópia, lê cada arquivo de volta para conferir o SHA-256
+e grava um `SHA256SUMS`. Se a versão gravada já for a mesma, não envia nada.
+Depois, `bfagent.py boot-flash` faz o boot com kernel e initrd lidos da memória interna;
+só o DTB (3 KB) vai pela USB, carimbado com a hora do PC.
+
+| Caminho | Medido em 2026-11-20 |
+|---|---|
+| `boot-mem` (2,9 MB pela USB, 25–60 KB/s) | ~2 min só de envio |
+| `install-linux` (uma vez por versão) | 125 s |
+| `boot-flash` | o comando volta em 1 s; o Linux começa ~9 s depois; a interface sobe 4,7 s após o início do kernel |
+
+### PC: driver `ipaq` e o atraso de ~100 s na rede USB
+
+Depois do salto, o PC às vezes leva ~100 s para enxergar o gadget do Linux. O FOSTON fica
+"usb not attached" enquanto isso. A causa está no PC: o driver `ipaq` tenta abrir a porta
+serial do CE até `connect_retries` vezes (padrão 100, 1 s cada) se algum programa abrir
+`/dev/ttyUSB0` no instante do salto. Correção no PC (root):
+
+```sh
+sudo cp tools/pc/bigfoston-ipaq.conf /etc/modprobe.d/
+echo 3 | sudo tee /sys/module/ipaq/parameters/connect_retries   # vale já, sem reiniciar
+```
