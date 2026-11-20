@@ -1,4 +1,5 @@
 menu "BigFoston OS"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bigscreen/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bringup/Config.in"
+source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-shell/Config.in"
 endmenu

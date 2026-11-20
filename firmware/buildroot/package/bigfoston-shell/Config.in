@@ -1,0 +1,6 @@
+config BR2_PACKAGE_BIGFOSTON_SHELL
+	bool "bigfoston-shell"
+	help
+	  BigFoston OS graphical shell (LVGL 9.2, /dev/fb0 + evdev touch),
+	  started at boot by /etc/init.d/S90bigfoston-shell unless the
+	  kernel command line contains "nogui".

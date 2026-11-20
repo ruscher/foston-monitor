@@ -521,6 +521,19 @@ def parse_int(text):
     return int(text, 0)
 
 
+def dtb_with_epoch(path, epoch):
+    """Copy of the DTB with /chosen/bigfoston,boot-epoch set (needs fdtput, dtc package)."""
+    import shutil
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "boot.dtb")
+        shutil.copyfile(path, out)
+        subprocess.run(["fdtput", "-t", "u", out, "/chosen", "bigfoston,boot-epoch", str(epoch)], check=True)
+        with open(out, "rb") as f:
+            return f.read()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--port")
@@ -689,10 +702,15 @@ def main(argv=None):
                 return 1
         elif args.cmd == "boot-mem":
             files = {}
-            for idx, (pa, path) in enumerate(((0x00800000, args.kernel), (0x01F00000, args.dtb),
-                                               (0x01000000, args.initrd))):
-                with open(path, "rb") as f:
-                    files[pa] = f.read()
+            # the DTB goes last, stamped with the PC's clock (there is no RTC driver):
+            # /chosen/bigfoston,boot-epoch = time of the jump; /etc/init.d/S05clock uses it
+            for idx, pa, path in ((0, 0x00800000, args.kernel), (2, 0x01000000, args.initrd),
+                                  (1, 0x01F00000, args.dtb)):
+                if pa == 0x01F00000:
+                    files[pa] = dtb_with_epoch(path, int(time.time()) + args.delay + 5)
+                else:
+                    with open(path, "rb") as f:
+                        files[pa] = f.read()
                 link.stage(idx, files[pa], progress=progress_bar(os.path.basename(path)))
             text = link.boot("mem:0", "mem:1", "mem:2", dry_run=True)
             print(text)

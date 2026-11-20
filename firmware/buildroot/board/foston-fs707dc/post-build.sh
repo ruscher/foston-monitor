@@ -21,3 +21,14 @@ else
     rm -f "$TARGET_DIR/root/.ssh/authorized_keys"
     echo "post-build: no SSH public key ($KEY), SSH login disabled"
 fi
+
+# SSH host key: the rootfs lives in RAM, so dropbear would make a new key at
+# every boot and the PC would warn of a changed host. A key kept outside git
+# (firmware/build/, generated once on the device) is installed if present.
+HOSTKEY=${BIGFOSTON_SSH_HOSTKEY:-$(cd "$(dirname "$0")/../../.." && pwd)/build/dropbear_ed25519_host_key}
+if [ -f "$HOSTKEY" ]; then
+    [ -L "$TARGET_DIR/etc/dropbear" ] && rm -f "$TARGET_DIR/etc/dropbear"
+    install -d -m 700 "$TARGET_DIR/etc/dropbear"
+    install -m 600 "$HOSTKEY" "$TARGET_DIR/etc/dropbear/dropbear_ed25519_host_key"
+    echo "post-build: fixed SSH host key installed"
+fi

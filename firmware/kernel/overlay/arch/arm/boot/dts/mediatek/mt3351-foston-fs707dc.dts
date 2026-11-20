@@ -110,6 +110,16 @@
 			touchscreen-inverted-y;
 		};
 
+		/*
+		 * SD slot, MSDC1 (CE sdhc_drv.dll: MemBase 0x8002E000 + 0x1000 * MsdcIndex 1,
+		 * card-detect IRQ 15). CE leaves it powered and clocked from UPLL 48 MHz.
+		 */
+		mmc@8002f000 {
+			compatible = "mediatek,mt3351-msdc";
+			reg = <0x8002f000 0x100>;
+			bus-width = <4>;
+		};
+
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";

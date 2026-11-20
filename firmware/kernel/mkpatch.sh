@@ -12,7 +12,8 @@ trap 'rm -rf "$TMP"' EXIT
 GLUE="arch/arm/Kconfig arch/arm/Makefile drivers/irqchip/Kconfig drivers/irqchip/Makefile
 drivers/clocksource/Kconfig drivers/clocksource/Makefile drivers/video/fbdev/Makefile
 arch/arm/boot/dts/mediatek/Makefile drivers/usb/musb/Kconfig drivers/usb/musb/Makefile
-drivers/input/touchscreen/Kconfig drivers/input/touchscreen/Makefile"
+drivers/input/touchscreen/Kconfig drivers/input/touchscreen/Makefile
+drivers/mmc/host/Kconfig drivers/mmc/host/Makefile"
 for f in $GLUE; do
     mkdir -p "$TMP/a/$(dirname "$f")" "$TMP/b/$(dirname "$f")"
     cp "$SRC/$f" "$TMP/a/$f"

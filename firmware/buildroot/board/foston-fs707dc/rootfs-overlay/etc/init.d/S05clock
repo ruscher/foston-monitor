@@ -1,0 +1,13 @@
+#!/bin/sh
+# Sets the clock from the PC's time that bfagent.py boot-mem stamps into the
+# device tree (/chosen/bigfoston,boot-epoch = moment of the jump to Linux).
+# There is no RTC driver yet, so without it the clock starts in 1970.
+P=/proc/device-tree/chosen/bigfoston,boot-epoch
+case "$1" in
+start)
+    [ -f "$P" ] || exit 0
+    epoch=$((0x$(hexdump -v -e '1/1 "%02x"' "$P")))
+    up=$(cut -d. -f1 /proc/uptime)
+    date -s "@$((epoch + up))" > /dev/null && echo "clock: $(date)"
+    ;;
+esac

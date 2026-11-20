@@ -61,4 +61,11 @@ add_before "$T/drivers/input/touchscreen/Kconfig" 'config TOUCHSCREEN_MTOUCH' 'c
 	  Resistive touchscreen ADC of the MediaTek MT3351 (FOSTON FS-707DC).
 '
 add "$T/drivers/input/touchscreen/Makefile" 'obj-$(CONFIG_TOUCHSCREEN_MT3351)	+= mt3351-ts.o'
+add_before "$T/drivers/mmc/host/Kconfig" 'config MMC_MTK' 'config MMC_MT3351
+	tristate "MediaTek MT3351 MSDC SD host (polled PIO)"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	help
+	  SD card slot of the MediaTek MT3351 (FOSTON FS-707DC).
+'
+add "$T/drivers/mmc/host/Makefile" 'obj-$(CONFIG_MMC_MT3351)		+= mt3351-msdc.o'
 echo "BigFoston MT3351 support applied to $T"
