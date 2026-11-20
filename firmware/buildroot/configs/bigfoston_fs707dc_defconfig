@@ -3,6 +3,8 @@ BR2_arm=y
 BR2_arm1176jz_s=y
 BR2_ARM_EABI=y
 BR2_ARM_INSTRUCTIONS_ARM=y
+# MT3351 defect: odd-address STRH after a copy-on-write fault loses a byte (docs/04-linux-port.md)
+BR2_TARGET_OPTIMIZATION="-mno-unaligned-access"
 BR2_DL_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/../build/dl"
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
 # static userland while bringing up (removes the dynamic loader from the picture)

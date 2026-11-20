@@ -33,22 +33,56 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | Etapa | Estado | Evidência |
 |---|---|---|
 | Tomar a CPU a partir do CE (payload bare-metal) | **FUNCIONANDO** | `fbtest` no aparelho, 19/11/2026 |
-| Kernel compila | **FUNCIONANDO** | Buildroot 2026.02.3: zImage 1,4 MB, initrd 1,0 MB |
-| Kernel inicia, mensagens na tela | **FUNCIONANDO** | log do kernel até `Run /init as init process` (1,10 s) — [foto](images/foto-linux-primeiro-boot.jpg) |
-| Timer e interrupções | **PARCIAL** | timestamps do printk avançam (contador GPT/sched_clock ok); interrupção do timer **não comprovada** |
-| initramfs descompactado | **FUNCIONANDO** | `Freeing initrd memory: 984K` na foto |
-| userland (BusyBox) | **NÃO FUNCIONA** | nenhuma linha `bigfoston:` aparece; tela para em `Run /init` (confirmado pelo usuário) |
-| self-test `blake2s` | **FALHA** | `random compress align 1 self-test 15: FAIL` — suspeita de acesso desalinhado/memória |
-
-![Primeiro boot do Linux no FS-707DC](images/foto-linux-primeiro-boot.jpg)
-
-**Próximo diagnóstico:** autoteste de timer/IRQ e de acesso desalinhado no kernel, `/init`
-que reporta cada passo em `/dev/kmsg`, `user_debug=31 print_fatal_signals=1`.
+| Kernel compila | **FUNCIONANDO** | Buildroot 2026.02.3: zImage 1,4 MB, initrd 1,1 MB |
+| Kernel inicia, mensagens na tela | **FUNCIONANDO** | log do kernel no framebuffer — [foto](images/foto-linux-primeiro-boot.jpg) |
+| Timer e interrupções | **FUNCIONANDO** | `selfcheck`: jiffies e ticks do GPT avançam com `mdelay`/`msleep`; `bfwatch` a cada segundo |
+| initramfs descompactado | **FUNCIONANDO** | `bfcheck` confere o CRC32 do initrd antes de descompactar |
+| Memória (103 MB vigiados) | **FUNCIONANDO** | `memwatch: no change` durante todos os testes |
+| Processos, fork, sinais, COW, exec | **FUNCIONANDO** | `bftest` passos 1–13, 19/11/2026 |
+| Shell do BusyBox | **FUNCIONANDO** com alignment trap | `bftest` passo 9: `echo`, `func`, `subst`, `grep`, `sleep`, `init-like` → exit 0 |
+| `/init` + init do BusyBox | **NÃO TESTADO** com `-mno-unaligned-access` | com o alignment trap, kernel panic em `strncpy_from_user` (ver abaixo) |
 | Touchscreen | NÃO IMPLEMENTADO | ADC/registradores ainda não identificados |
 | SD (MSDC) | NÃO IMPLEMENTADO | driver CE `sdhc_drv` (família MSDC) |
 | USB device (rede/serial → SSH) | NÃO IMPLEMENTADO | base `0x80100000`, IRQ 8; IP ainda não identificado |
 | UARTs | NÃO IMPLEMENTADO | 16550 MTK em `0x80026000…0x80029000`, IRQ 3–6; clock desconhecido |
 | Luz de fundo (PWM) | NÃO IMPLEMENTADO | PWM em `0x8002B000` |
+
+## Problemas encontrados e corrigidos
+
+| Sintoma | Causa | Correção |
+|---|---|---|
+| Nada na tela após o salto | CE deixa o **FCSE PID** (CP15 c13) ligado | o stub do loader zera o PID |
+| initramfs "malformed archive" | DMA do USB do CE continua escrevendo na RAM | boot com contagem e **cabo USB desconectado** |
+| páginas do BusyBox corrompidas em `0x007e8000` | buffers DMA do CE | `reserved-memory` de 1 MB em `0x00700000` |
+| espera de 255 s no CRNG | sem fonte de entropia | `rng-seed` no DTB |
+| `cachepolicy=writethrough` sem efeito | ARMv6 só aceita writeback | — (teste inválido descartado) |
+| **ash trava em PC 0x5333c** | **defeito do MT3351**, abaixo | `-mno-unaligned-access` |
+
+### Defeito do MT3351: STRH em endereço ímpar após copy-on-write
+
+Medido com `bftest=bytes` (19/11/2026). Uma escrita de meia-palavra em endereço
+**ímpar**, logo depois de uma falha de copy-on-write na mesma página, **desfaz a
+escrita de byte feita imediatamente antes na mesma palavra**: o byte volta ao valor
+antigo ou ao conteúdo da página antes da cópia.
+
+| Teste (página recém-copiada por COW, 400 repetições) | trap OFF | trap ON |
+|---|---|---|
+| `memset(p,0,8)` da musl (`strb b0; strb b7; strh b1-2; strh b5-6; …`) | 388 erros | **0** |
+| `strb b0; strh p+1` | **400 erros** | 0 |
+| `strb b0; strb b1; strb b2` | 0 | 0 |
+
+Não é cache de dados (com o D-cache desligado o erro persiste), nem TLB, nem
+aliasing. O GCC gera esses `strh` desalinhados porque o ARMv6 os permite
+(`-munaligned-access` é o padrão). O BusyBox `ash` morria pelo `memset` da musl
+zerando estruturas recém-copiadas após `fork`.
+
+- **Ligar `SCTLR.A`** (alignment trap) elimina o erro no espaço do usuário, mas o
+  kernel passa a gerar exceções em cópias palavra-a-palavra de dados do usuário
+  (`strncpy_from_user`) e entra em pânico ao abrir arquivos. Fica só como chave de
+  teste: `timer_mt3351_gpt.align_trap=1`.
+- **Correção adotada:** kernel e todo o userland compilados com
+  `-mno-unaligned-access` (`apply-overlay.sh` e `BR2_TARGET_OPTIMIZATION`), para
+  que o compilador nunca emita escritas desalinhadas.
 
 O estado de cada linha é atualizado conforme os testes no aparelho
 ([15-testes.md](15-testes.md)).

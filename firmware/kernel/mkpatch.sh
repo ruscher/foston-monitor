@@ -9,7 +9,7 @@ SRC=$(cd "$1" && pwd)
 OUT="$HERE/../buildroot/patches/linux/0001-bigfoston-mt3351.patch"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-GLUE="arch/arm/Kconfig drivers/irqchip/Kconfig drivers/irqchip/Makefile
+GLUE="arch/arm/Kconfig arch/arm/Makefile drivers/irqchip/Kconfig drivers/irqchip/Makefile
 drivers/clocksource/Kconfig drivers/clocksource/Makefile drivers/video/fbdev/Makefile
 arch/arm/boot/dts/mediatek/Makefile"
 for f in $GLUE; do

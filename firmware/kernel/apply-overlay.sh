@@ -17,6 +17,11 @@ add_before() { # file, anchor, line: insert the line before the first anchor lin
 
 add_before "$T/arch/arm/Kconfig" 'source "arch/arm/mach-mmp/Kconfig"' 'source "arch/arm/mach-mt3351/Kconfig"'
 
+# MT3351 defect: an odd-address STRH right after a copy-on-write fault loses the
+# byte stored just before it in the same word. Never let the compiler emit
+# unaligned stores (user space gets the same flag from BR2_TARGET_OPTIMIZATION).
+add_before "$T/arch/arm/Makefile" 'ifeq ($(CONFIG_FRAME_POINTER),y)' 'KBUILD_CFLAGS	+= $(if $(CONFIG_ARCH_MT3351),-mno-unaligned-access)'
+
 cat_once() { # file, marker, text
     grep -qF "$2" "$1" || printf '%s\n' "$3" >> "$1"
 }

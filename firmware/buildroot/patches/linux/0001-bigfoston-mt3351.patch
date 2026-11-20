@@ -155,6 +155,17 @@ diff -Nur a/arch/arm/mach-mt3351/Kconfig b/arch/arm/mach-mt3351/Kconfig
 +	  The board has no known serial console.
 +
 +endif
+diff -Nur a/arch/arm/Makefile b/arch/arm/Makefile
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -34,6 +34,7 @@
+ KBUILD_CFLAGS	+= $(call cc-option,-mno-unaligned-access)
+ endif
+ 
++KBUILD_CFLAGS	+= $(if $(CONFIG_ARCH_MT3351),-mno-unaligned-access)
+ ifeq ($(CONFIG_FRAME_POINTER),y)
+ KBUILD_CFLAGS	+=-fno-omit-frame-pointer
+ ifeq ($(CONFIG_CC_IS_GCC),y)
 diff -Nur a/drivers/clocksource/Kconfig b/drivers/clocksource/Kconfig
 --- a/drivers/clocksource/Kconfig
 +++ b/drivers/clocksource/Kconfig
@@ -489,20 +500,20 @@ diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-m
 +late_initcall_sync(memwatch_start);
 +
 +/*
-+ * Alignment trap, on by default.  Measured on the FS-707DC (bftest=bytes):
-+ * a halfword store to an odd address right after a copy-on-write fault
-+ * loses the byte store made just before it to the same word (400 of 400
-+ * with musl's memset pattern "strb b0; strh b1-b2").  With SCTLR.A set every
-+ * unaligned access faults and arch/arm/mm/alignment.c redoes it with byte
-+ * accesses, which removes the corruption (0 of 400).  Applied at
-+ * fs_initcall_sync, right after alignment_init() cleared the bit and before
-+ * the initramfs is unpacked.  Run-time switch:
++ * Alignment trap switch, off by default.  Measured on the FS-707DC
++ * (bftest=bytes): a halfword store to an odd address right after a
++ * copy-on-write fault loses the byte store made just before it to the same
++ * word (400 of 400 with musl's memset pattern "strb b0; strh b1-b2").  The
++ * fix is to never emit unaligned stores (-mno-unaligned-access for kernel and
++ * user space).  Setting SCTLR.A also hides the defect for user space (0 of
++ * 400) but makes kernel word-at-a-time user copies (strncpy_from_user) fault,
++ * so it stays a test switch: timer_mt3351_gpt.align_trap=1 or
 + * /sys/module/timer_mt3351_gpt/parameters/align_trap
 + */
 +#include <linux/moduleparam.h>
 +#include <asm/cp15.h>
 +
-+static bool align_trap = true;
++static bool align_trap;
 +
 +static void align_trap_apply(void)
 +{

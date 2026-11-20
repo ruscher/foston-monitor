@@ -306,20 +306,20 @@ static int __init memwatch_start(void)
 late_initcall_sync(memwatch_start);
 
 /*
- * Alignment trap, on by default.  Measured on the FS-707DC (bftest=bytes):
- * a halfword store to an odd address right after a copy-on-write fault
- * loses the byte store made just before it to the same word (400 of 400
- * with musl's memset pattern "strb b0; strh b1-b2").  With SCTLR.A set every
- * unaligned access faults and arch/arm/mm/alignment.c redoes it with byte
- * accesses, which removes the corruption (0 of 400).  Applied at
- * fs_initcall_sync, right after alignment_init() cleared the bit and before
- * the initramfs is unpacked.  Run-time switch:
+ * Alignment trap switch, off by default.  Measured on the FS-707DC
+ * (bftest=bytes): a halfword store to an odd address right after a
+ * copy-on-write fault loses the byte store made just before it to the same
+ * word (400 of 400 with musl's memset pattern "strb b0; strh b1-b2").  The
+ * fix is to never emit unaligned stores (-mno-unaligned-access for kernel and
+ * user space).  Setting SCTLR.A also hides the defect for user space (0 of
+ * 400) but makes kernel word-at-a-time user copies (strncpy_from_user) fault,
+ * so it stays a test switch: timer_mt3351_gpt.align_trap=1 or
  * /sys/module/timer_mt3351_gpt/parameters/align_trap
  */
 #include <linux/moduleparam.h>
 #include <asm/cp15.h>
 
-static bool align_trap = true;
+static bool align_trap;
 
 static void align_trap_apply(void)
 {
