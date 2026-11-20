@@ -39,8 +39,8 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | initramfs descompactado | **FUNCIONANDO** | `bfcheck` confere o CRC32 do initrd antes de descompactar |
 | Memória (103 MB vigiados) | **FUNCIONANDO** | `memwatch: no change` durante todos os testes |
 | Processos, fork, sinais, COW, exec | **FUNCIONANDO** | `bftest` passos 1–13, 19/11/2026 |
-| Shell do BusyBox | **FUNCIONANDO** com alignment trap | `bftest` passo 9: `echo`, `func`, `subst`, `grep`, `sleep`, `init-like` → exit 0 |
-| `/init` + init do BusyBox | **NÃO TESTADO** com `-mno-unaligned-access` | com o alignment trap, kernel panic em `strncpy_from_user` (ver abaixo) |
+| Shell do BusyBox | **FUNCIONANDO** | `bftest` passo 9: `echo`, `func`, `subst`, `grep`, `sleep`, `init-like` → exit 0 |
+| `/init` + init do BusyBox + `rcS` | **FUNCIONANDO** | build com `-mno-unaligned-access`, 19/11/2026: `bigfoston: alive 630s`, timer irqs 17254→19708, `memwatch: no change (103 MB)` |
 | Touchscreen | NÃO IMPLEMENTADO | ADC/registradores ainda não identificados |
 | SD (MSDC) | NÃO IMPLEMENTADO | driver CE `sdhc_drv` (família MSDC) |
 | USB device (rede/serial → SSH) | NÃO IMPLEMENTADO | base `0x80100000`, IRQ 8; IP ainda não identificado |
