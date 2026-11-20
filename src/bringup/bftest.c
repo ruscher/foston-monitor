@@ -697,9 +697,10 @@ static uint32_t strb_postindex(volatile uint8_t *p, uint32_t step)
 static void cow_fault_experiments(void)
 {
     enum { ROUNDS = 400 };
-    const char *names[3] = {"COW memset(8) musl", "COW strb post-index", "COW strb plain"};
+    const char *names[5] = {"COW memset(8) musl", "COW strb post-index", "COW strb plain",
+                            "COW strb b0 + strh odd p+1", "COW strb b0 + strb b1,b2"};
     int kind;
-    for (kind = 0; kind < 3; kind++) {
+    for (kind = 0; kind < 5; kind++) {
         int r, lost = 0, base_wrong = 0, shown = 0;
         for (r = 0; r < ROUNDS; r++) {
             uint8_t *buf = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -726,13 +727,20 @@ static void cow_fault_experiments(void)
                 if (end != (uint32_t)(uintptr_t)(q + 8))
                     base_wrong++, ok = 0;
                 ok &= q[0] == 0;
-            } else {
+            } else if (kind == 2) {
                 ((volatile uint8_t *)q)[0] = 0;
                 ok &= q[0] == 0;
+            } else {                               /* the musl pair: byte store then odd halfword */
+                uint8_t *q1 = q + 1;
+                if (kind == 3)
+                    __asm__ __volatile__("strb %2, [%0]\n\tstrh %2, [%1]" :: "r"(q), "r"(q1), "r"(0) : "memory");
+                else
+                    __asm__ __volatile__("strb %2, [%0]\n\tstrb %2, [%1]\n\tstrb %2, [%1, #1]" :: "r"(q), "r"(q1), "r"(0) : "memory");
+                ok &= q[0] == 0 && q[1] == 0 && q[2] == 0 && q[3] == 0xA5;
             }
             for (i = 1; i <= 8; i++)              /* neighbours untouched */
                 ok &= q[-(long)i] == 0xA5;
-            ok &= (kind != 0 || q[8] == 0xA5) && (kind == 0 || q[1] == 0xA5);
+            ok &= (kind != 0 || q[8] == 0xA5) && (kind == 0 || kind >= 3 || q[1] == 0xA5);
             if (!ok) {
                 if (shown++ < 3)
                     say("bytes %s WRONG: %02x %02x %02x %02x %02x %02x %02x %02x | before %02x %02x %02x %02x\n",
@@ -879,6 +887,8 @@ int main(void)
     unsigned round = 0;
     mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
     mount("proc", "/proc", "proc", 0, NULL);
+    mkdir("/sys", 0755);
+    mount("sysfs", "/sys", "sysfs", 0, NULL);
     kmsg = open("/dev/kmsg", O_WRONLY);
     {
         /* log every user-mode alignment trap the kernel emulates (mode 3 = warn + fixup) */
