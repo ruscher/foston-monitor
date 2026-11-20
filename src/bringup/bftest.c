@@ -24,6 +24,13 @@
  *  11  large memcpy/memmove (0..1100 bytes, every src/dst alignment 0..7,
  *      near page boundaries) against a byte loop: musl's ARM memcpy uses
  *      ldm/stm blocks, pld and shift-merging for misaligned copies
+ *  12  r4-r11 held across a blocking read() that SIGCHLD/SIGALRM handlers
+ *      interrupt (syscall restart path); every crash of the shell had
+ *      LR in the sigpage (sigreturn trampoline) with r4 = top byte only
+ *  13  memset(p, 0, 8) via musl's byte-store order (0,7,1,2,6,5,3,4) millions
+ *      of times over dirty memory, with timer signals and a busy sibling
+ *      process: every shell crash had a freshly xzalloc'ed 8-byte object
+ *      whose second word kept only its old top byte (lost byte store?)
  *   6  /bin/busybox in the page cache against per-page CRC32s computed on the
  *      PC at build time (/etc/busybox.pagecrc): a changed page is reported
  *      with its physical address (/proc/self/pagemap), to find a bus master
@@ -488,6 +495,323 @@ static int bigcopy_test(unsigned round)
     return bad;
 }
 
+static volatile sig_atomic_t chld12;
+
+static void on_chld12(int sig)
+{
+    (void)sig;
+    chld12++;
+}
+
+/* read(fd, buf, n) through svc with r4-r6, r8-r11 holding patterns (r7 =
+ * syscall number). Returns the first callee-saved register changed (4..11)
+ * or 0; *ret gets the syscall result. */
+static int read_regs_hold(int fd, void *buf, unsigned n, int *ret)
+{
+    register int r0 __asm__("r0") = fd;
+    register void *r1 __asm__("r1") = buf;
+    register unsigned r2 __asm__("r2") = n;
+    register unsigned r3 __asm__("r3") = 0;
+    __asm__ __volatile__(
+        "push  {r4-r11}\n"
+        "ldr   r4, =0x44444444\n ldr r5, =0x55555555\n ldr r6, =0x66666666\n"
+        "ldr   r8, =0x88888888\n ldr r9, =0x99999999\n ldr r10, =0xaaaaaaaa\n ldr r11, =0xbbbbbbbb\n"
+        "mov   r7, #3\n"                       /* __NR_read (EABI) */
+        "svc   #0\n"
+        "ldr   r12, =0x44444444\n cmp r4, r12\n movne r3, #4\n bne 2f\n"
+        "ldr   r12, =0x55555555\n cmp r5, r12\n movne r3, #5\n bne 2f\n"
+        "ldr   r12, =0x66666666\n cmp r6, r12\n movne r3, #6\n bne 2f\n"
+        "ldr   r12, =0x88888888\n cmp r8, r12\n movne r3, #8\n bne 2f\n"
+        "ldr   r12, =0x99999999\n cmp r9, r12\n movne r3, #9\n bne 2f\n"
+        "ldr   r12, =0xaaaaaaaa\n cmp r10, r12\n movne r3, #10\n bne 2f\n"
+        "ldr   r12, =0xbbbbbbbb\n cmp r11, r12\n movne r3, #11\n bne 2f\n"
+        "cmp   r7, #3\n movne r3, #7\n"
+        "2:\n"
+        "pop   {r4-r11}\n"
+        "b     3f\n"
+        ".ltorg\n"
+        "3:\n"
+        : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3)
+        :
+        : "r12", "cc", "memory");
+    *ret = r0;
+    return (int)r3;
+}
+
+static int syscall_signal_test(unsigned round)
+{
+    struct sigaction sa;
+    struct itimerval it = {{0, 1000}, {0, 1000}};
+    int i, bad = 0, short_reads = 0;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_chld12;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGCHLD, &sa, NULL);
+    sa.sa_handler = on_alarm;
+    sigaction(SIGALRM, &sa, NULL);
+    chld12 = 0;
+    alarms = 0;
+    setitimer(ITIMER_REAL, &it, NULL);
+    for (i = 0; i < 200; i++) {
+        int p[2], ret = 0, reg;
+        char buf[128];
+        pid_t pid;
+        if (pipe(p))
+            break;
+        pid = fork();
+        if (pid == 0) {
+            /* like $(uname -a): ~90 bytes, then exit (SIGCHLD to the parent) */
+            static const char line[] = "Linux (none) 6.12.117-bigfoston #1 Thu Nov 19 11:57:25 -03 2026 armv6l GNU/Linux\n";
+            usleep(3000 + (i % 7) * 1000);
+            write(p[1], line, sizeof(line) - 1);
+            _exit(0);
+        }
+        close(p[1]);
+        reg = read_regs_hold(p[0], buf, sizeof(buf), &ret);
+        if (reg) {
+            if (bad < 6)
+                say("round %u step12 REGISTER r%d CHANGED across interrupted read (iter %d, ret %d)\n",
+                    round, reg, i, ret);
+            bad++;
+        }
+        if (ret != 81)
+            short_reads++;
+        close(p[0]);
+        waitpid(pid, NULL, 0);
+    }
+    memset(&it, 0, sizeof(it));
+    setitimer(ITIMER_REAL, &it, NULL);
+    signal(SIGALRM, SIG_DFL);
+    signal(SIGCHLD, SIG_DFL);
+    if (!bad)
+        say("round %u step12 OK registers intact across 200 interrupted reads (%d alarms, %d SIGCHLD, %d short)\n",
+            round, (int)alarms, (int)chld12, short_reads);
+    else
+        say("round %u step12 %d FAILURES: registers changed across interrupted syscalls\n", round, bad);
+    return bad;
+}
+
+static void *(*volatile memset_ptr)(void *, int, size_t) = memset;   /* never inlined */
+
+static int byte_store_test(unsigned round)
+{
+    enum { SLOTS = 16384 };                 /* 128 KB of 8-byte slots */
+    static uint32_t slots[SLOTS * 2];
+    struct itimerval it = {{0, 1000}, {0, 1000}};
+    struct sigaction sa;
+    unsigned long iter, total = 0;
+    int bad = 0, pass;
+    pid_t sibling;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_alarm;
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGALRM, &sa, NULL);
+    alarms = 0;
+    sibling = fork();                       /* competes for the CPU: context switches */
+    if (sibling == 0) {
+        volatile unsigned x = 0;
+        for (;;)
+            x++;
+    }
+    setitimer(ITIMER_REAL, &it, NULL);
+    for (pass = 0; pass < 40; pass++) {
+        size_t i;
+        uint32_t stale = 0xb6f00000u + (uint32_t)pass * 0x10101u;
+        for (i = 0; i < SLOTS * 2; i++)
+            slots[i] = stale + (uint32_t)i;
+        for (iter = 0; iter < SLOTS; iter++) {
+            uint32_t *p = &slots[iter * 2];
+            memset_ptr(p, 0, 8);
+            if (p[0] || p[1]) {
+                if (bad < 6)
+                    say("round %u step13 memset(8) LOST: slot %lu words %08x %08x (were %08x %08x)\n", round,
+                        iter, p[0], p[1], stale + (uint32_t)(iter * 2), stale + (uint32_t)(iter * 2 + 1));
+                bad++;
+            }
+        }
+        total += SLOTS;
+    }
+    memset(&it, 0, sizeof(it));
+    setitimer(ITIMER_REAL, &it, NULL);
+    signal(SIGALRM, SIG_DFL);
+    kill(sibling, SIGKILL);
+    waitpid(sibling, NULL, 0);
+    if (!bad)
+        say("round %u step13 OK %lu x memset(8) with %d alarms and a busy sibling\n", round, total, (int)alarms);
+    else
+        say("round %u step13 %d LOST STORES in %lu x memset(8)\n", round, bad, total);
+    return bad;
+}
+
+/* ---- byte-store experiments (kernel command line: bftest=bytes) ---- */
+
+#define BX_SLOTS 16384
+static uint32_t bx[BX_SLOTS * 2] __attribute__((aligned(32)));
+
+static inline void dsb(void)
+{
+    __asm__ __volatile__("mcr p15, 0, %0, c7, c10, 4" :: "r"(0) : "memory");
+}
+
+static void v_memset(uint32_t *p) { memset_ptr(p, 0, 8); }
+static void v_words(uint32_t *p) { ((volatile uint32_t *)p)[0] = 0; ((volatile uint32_t *)p)[1] = 0; }
+static void v_bytes_musl(uint32_t *p)
+{
+    volatile uint8_t *b = (volatile uint8_t *)p;
+    b[0] = 0; b[7] = 0; b[1] = 0; b[2] = 0; b[6] = 0; b[5] = 0; b[3] = 0; b[4] = 0;
+}
+static void v_one_byte(uint32_t *p)      /* a single byte store to byte 7 */
+{
+    ((volatile uint8_t *)p)[7] = 0;
+}
+static void v_halfwords(uint32_t *p)
+{
+    volatile uint16_t *h = (volatile uint16_t *)p;
+    h[0] = 0; h[3] = 0; h[1] = 0; h[2] = 0;
+}
+
+/* Unaligned stores: the suspected MT3351 defect (halfword store to an odd address). */
+static void v_strh_odd1(uint32_t *p) { uint8_t *b = (uint8_t *)p + 1; __asm__ __volatile__("strh %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+static void v_strh_odd5(uint32_t *p) { uint8_t *b = (uint8_t *)p + 5; __asm__ __volatile__("strh %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+static void v_strh_odd3(uint32_t *p) { uint8_t *b = (uint8_t *)p + 3; __asm__ __volatile__("strh %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+static void v_strh_even2(uint32_t *p) { uint8_t *b = (uint8_t *)p + 2; __asm__ __volatile__("strh %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+static void v_str_off1(uint32_t *p) { uint8_t *b = (uint8_t *)p + 1; __asm__ __volatile__("str %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+static void v_str_off2(uint32_t *p) { uint8_t *b = (uint8_t *)p + 2; __asm__ __volatile__("str %1, [%0]" :: "r"(b), "r"(0) : "memory"); }
+
+struct bx_variant {
+    const char *name;
+    void (*fn)(uint32_t *);
+    unsigned mask;                          /* bit i set: byte i must become 0; clear: byte i unchanged */
+};
+
+/* Store with a write fault (copy-on-write after fork) on the store itself. */
+static uint32_t strb_postindex(volatile uint8_t *p, uint32_t step)
+{
+    register volatile uint8_t *r3 __asm__("r3") = p;
+    register uint32_t r2 __asm__("r2") = step;
+    register uint32_t r1 __asm__("r1") = 0;
+    __asm__ __volatile__("strb r1, [r3], r2" : "+r"(r3) : "r"(r1), "r"(r2) : "memory");
+    return (uint32_t)(uintptr_t)r3;
+}
+
+static void cow_fault_experiments(void)
+{
+    enum { ROUNDS = 400 };
+    const char *names[3] = {"COW memset(8) musl", "COW strb post-index", "COW strb plain"};
+    int kind;
+    for (kind = 0; kind < 3; kind++) {
+        int r, lost = 0, base_wrong = 0, shown = 0;
+        for (r = 0; r < ROUNDS; r++) {
+            uint8_t *buf = mmap(NULL, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            uint8_t *q;
+            pid_t pid;
+            size_t i;
+            int ok = 1;
+            if (buf == MAP_FAILED)
+                break;
+            for (i = 0; i < 8192; i++)
+                buf[i] = 0xA5;
+            pid = fork();                          /* pages become copy-on-write */
+            if (pid == 0) {
+                pause();
+                _exit(0);
+            }
+            q = buf + 4096 + 64;                  /* first write to this page faults */
+            if (kind == 0) {
+                memset_ptr(q, 0, 8);
+                for (i = 0; i < 8; i++)
+                    ok &= q[i] == 0;
+            } else if (kind == 1) {
+                uint32_t end = strb_postindex(q, 8);
+                if (end != (uint32_t)(uintptr_t)(q + 8))
+                    base_wrong++, ok = 0;
+                ok &= q[0] == 0;
+            } else {
+                ((volatile uint8_t *)q)[0] = 0;
+                ok &= q[0] == 0;
+            }
+            for (i = 1; i <= 8; i++)              /* neighbours untouched */
+                ok &= q[-(long)i] == 0xA5;
+            ok &= (kind != 0 || q[8] == 0xA5) && (kind == 0 || q[1] == 0xA5);
+            if (!ok) {
+                if (shown++ < 3)
+                    say("bytes %s WRONG: %02x %02x %02x %02x %02x %02x %02x %02x | before %02x %02x %02x %02x\n",
+                        names[kind], q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[-4], q[-3], q[-2], q[-1]);
+                lost++;
+            }
+            kill(pid, SIGKILL);
+            waitpid(pid, NULL, 0);
+            munmap(buf, 8192);
+        }
+        say("bytes '%s': %d wrong of %d (base register wrong %d)\n", names[kind], lost, ROUNDS, base_wrong);
+    }
+}
+
+static void bytes_experiments(void)
+{
+    static const struct bx_variant v[] = {
+        {"memset(8) musl", v_memset, 0xFF},
+        {"strh odd p+1", v_strh_odd1, 0x06},
+        {"strh odd p+5", v_strh_odd5, 0x60},
+        {"strh odd p+3", v_strh_odd3, 0x18},
+        {"strh even p+2", v_strh_even2, 0x0C},
+        {"str p+1", v_str_off1, 0x1E},
+        {"str p+2", v_str_off2, 0x3C},
+        {"words str+str", v_words, 0xFF},
+        {"bytes musl order", v_bytes_musl, 0xFF},
+        {"halfwords", v_halfwords, 0xFF},
+        {"one byte 7", v_one_byte, 0x80},
+    };
+    unsigned run;
+    size_t k;
+    for (run = 1;; run++) {
+        int trap = !(run & 1);              /* odd runs: trap off; even runs: trap on */
+        int fd = open("/sys/module/timer_mt3351_gpt/parameters/align_trap", O_WRONLY);
+        if (fd >= 0) {
+            if (write(fd, trap ? "1" : "0", 1) != 1)
+                say("bytes: align_trap write failed\n");
+            close(fd);
+        } else {
+            say("bytes: no align_trap switch\n");
+        }
+        say("bytes ===== run %u, alignment trap %s =====\n", run, trap ? "ON" : "OFF");
+        cow_fault_experiments();
+        for (k = 0; k < sizeof(v) / sizeof(v[0]); k++) {
+            unsigned long it, lost = 0;
+            int shown = 0, pass;
+            for (pass = 0; pass < 10; pass++) {
+                size_t i;
+                uint32_t stale = 0xb6f00000u + (uint32_t)pass * 0x10101u + (uint32_t)k;
+                for (i = 0; i < BX_SLOTS * 2; i++)
+                    bx[i] = stale + (uint32_t)i * 0x01010101u;
+                for (it = 0; it < BX_SLOTS; it++) {
+                    uint32_t *p = &bx[it * 2], w0, w1, b0 = p[0], b1 = p[1];
+                    uint64_t before, after, keep = 0;
+                    int ok, j;
+                    v[k].fn(p);
+                    w0 = p[0];
+                    w1 = p[1];
+                    for (j = 0; j < 8; j++)
+                        if (!(v[k].mask & (1u << j)))
+                            keep |= 0xFFull << (8 * j);
+                    before = (uint64_t)b1 << 32 | b0;
+                    after = (uint64_t)w1 << 32 | w0;
+                    ok = after == (before & keep);
+                    if (!ok) {
+                        if (shown < 2 && run <= 2)
+                            say("bytes '%s' LOST at %p (word offs %lu): %08x %08x  before %08x %08x\n",
+                                v[k].name, (void *)p, (unsigned long)((uintptr_t)p & 31), w0, w1, b0, b1);
+                        shown++;
+                        lost++;
+                    }
+                }
+            }
+            say("bytes run %u trap %s '%s': %lu lost of %u\n", run, trap ? "ON" : "OFF", v[k].name, lost, 10u * BX_SLOTS);
+        }
+        sleep(5);
+    }
+}
+
 static uint32_t *ref_crc;
 static size_t ref_pages;
 
@@ -556,6 +880,25 @@ int main(void)
     mount("devtmpfs", "/dev", "devtmpfs", 0, NULL);
     mount("proc", "/proc", "proc", 0, NULL);
     kmsg = open("/dev/kmsg", O_WRONLY);
+    {
+        /* log every user-mode alignment trap the kernel emulates (mode 3 = warn + fixup) */
+        int fd = open("/proc/cpu/alignment", O_WRONLY);
+        if (fd >= 0) {
+            write(fd, "3", 1);
+            close(fd);
+        }
+    }
+    {
+        char cmd[512] = "";
+        int fd = open("/proc/cmdline", O_RDONLY);
+        if (fd >= 0) {
+            ssize_t n = read(fd, cmd, sizeof(cmd) - 1);
+            cmd[n > 0 ? n : 0] = 0;
+            close(fd);
+        }
+        if (strstr(cmd, "bftest=bytes") || (getenv("BFTEST") && !strcmp(getenv("BFTEST"), "bytes")))
+            bytes_experiments();
+    }
     sum0 = code_sum();
     load_reference();
     {
@@ -583,6 +926,10 @@ int main(void)
         say("round %u step5 exec...\n", round);
         if (execs(50) == 0)
             say("round %u step5 OK (50 fork+exec)\n", round);
+        say("round %u step13 byte stores...\n", round);
+        byte_store_test(round);
+        say("round %u step12 interrupted syscalls...\n", round);
+        syscall_signal_test(round);
         say("round %u step11 large memcpy...\n", round);
         bigcopy_test(round);
         say("round %u step10 unaligned access...\n", round);
@@ -599,6 +946,21 @@ int main(void)
         {
             int bad = check_busybox(round);
             say("round %u step6 busybox: %d of %zu pages differ\n", round, bad, ref_pages);
+        }
+        {
+            char abuf[400];
+            int fd = open("/proc/cpu/alignment", O_RDONLY), n = -1, j;
+            if (fd >= 0) {
+                n = (int)read(fd, abuf, sizeof(abuf) - 1);
+                close(fd);
+            }
+            if (n > 0) {
+                abuf[n] = 0;
+                for (j = 0; j < n; j++)
+                    if (abuf[j] == '\n')
+                        abuf[j] = ' ';
+                say("round %u alignment: %s\n", round, abuf);
+            }
         }
         sleep(2);
     }

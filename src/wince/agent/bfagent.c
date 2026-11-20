@@ -30,8 +30,8 @@
 #include "bfp.h"
 #include "boot.h"
 
-#define AGENT_VERSION "bfagent 0.3.0"
-#define AGENT_VERSION_W L"bfagent 0.3.0"
+#define AGENT_VERSION "bfagent 0.3.1"
+#define AGENT_VERSION_W L"bfagent 0.3.1"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -641,6 +641,7 @@ static void cmd_cpu(const bfp_msg *req)
 {
     DWORD id = 0, cache = 0, tcm = 0, ctrl = 0, ttb = 0, dacr = 0, pid = 0, cpsr = 0;
     DWORD aux = 0, cpacr = 0, fpsid = 0, dtcm = 0, itcm = 0;
+    DWORD dlock = 0, ilock = 0, cbor = 0, tlblock = 0, secure = 0;
     BOOL previous;
     buf_t b;
     if (!p_SetKMode) {
@@ -668,6 +669,15 @@ static void cmd_cpu(const bfp_msg *req)
         "mrc p15, 0, %0, c9, c1, 0\n\t"     /* data TCM region (base, size, enable) */
         "mrc p15, 0, %1, c9, c1, 1\n\t"     /* instruction TCM region */
         : "=r"(dtcm), "=r"(itcm));
+    /* ARM1176 state a Linux kernel never sets up and Windows CE might:
+     * cache lockdown, cache behaviour override, TLB lockdown, secure config */
+    __asm__ __volatile__(
+        "mrc p15, 0, %0, c9, c0, 0\n\t"     /* data cache lockdown */
+        "mrc p15, 0, %1, c9, c0, 1\n\t"     /* instruction cache lockdown */
+        "mrc p15, 0, %2, c9, c8, 0\n\t"     /* cache behaviour override */
+        "mrc p15, 0, %3, c10, c0, 0\n\t"    /* TLB lockdown */
+        "mrc p15, 0, %4, c1, c1, 0\n\t"     /* secure configuration */
+        : "=r"(dlock), "=r"(ilock), "=r"(cbor), "=r"(tlblock), "=r"(secure));
     /* FPSID only when the OS granted cp10 access: otherwise the read is undefined */
     if ((cpacr & (3u << 20)) == (3u << 20))
         __asm__ __volatile__("mrc p10, 7, %0, c0, c0, 0\n\t" : "=r"(fpsid));
@@ -680,6 +690,8 @@ static void cmd_cpu(const bfp_msg *req)
     BUFF(&b, L"ttb=0x%08lx\ndacr=0x%08lx\nfcse_pid=0x%08lx\ncpsr=0x%08lx\n", ttb, dacr, pid, cpsr);
     BUFF(&b, L"aux_control=0x%08lx\ncpacr=0x%08lx\nfpsid=0x%08lx\n", aux, cpacr, fpsid);
     BUFF(&b, L"dtcm_region=0x%08lx\nitcm_region=0x%08lx\n", dtcm, itcm);
+    BUFF(&b, L"dcache_lockdown=0x%08lx\nicache_lockdown=0x%08lx\ncache_behaviour_override=0x%08lx\n", dlock, ilock, cbor);
+    BUFF(&b, L"tlb_lockdown=0x%08lx\nsecure_config=0x%08lx\n", tlblock, secure);
     respond_buf(req, &b);
     free(b.data);
 }
