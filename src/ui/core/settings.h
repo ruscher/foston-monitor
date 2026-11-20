@@ -15,6 +15,10 @@ typedef struct {
     bool clock_24h;
     int  music_repeat;  /* 0 desligado, 1 todas, 2 uma */
     bool music_shuffle;
+    int  book_font;     /* Livros: 0..2 tamanho da letra */
+    int  book_space;    /* 0..2 espaçamento entre linhas */
+    int  book_margin;   /* 0..2 margens */
+    int  book_theme;    /* 0 escuro, 1 sépia, 2 claro */
 } bf_settings_t;
 
 bf_settings_t *settings(void);

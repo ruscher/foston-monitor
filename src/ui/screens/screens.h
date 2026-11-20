@@ -30,5 +30,6 @@ void music_play_file(const char *path);   /* Arquivos -> Multimídia */
 void scr_files_demo(const char *path);    /* NULL: locais */
 void scr_term_demo_type(const char *s);   /* digita no shell do Terminal */
 void scr_book_demo(const char *path);     /* NULL: biblioteca */
+void book_open_file(const char *path);     /* Arquivos -> Livros */
 
 #endif

@@ -21,7 +21,7 @@ LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
 APP_SRCS  := main.c $(wildcard core/*.c) $(wildcard screens/*.c) $(wildcard widgets/*.c)
 ASSET_SRCS:= $(wildcard assets/fonts/*.c) $(wildcard assets/icons/*.c)
 
-INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Iassets/icons
+INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iassets/icons
 DEFS      := -DLV_CONF_INCLUDE_SIMPLE -DBIGFOSTON_VERSION=\"$(VERSION)\"
 WARN      := -Wall -Wextra
 # LVGL é código de terceiros: compila sem -Wextra para não poluir a saída

@@ -15,3 +15,5 @@ src/*/*/build/
 src/baremetal/*/build/
 # LVGL is downloaded and verified by src/ui/tools/fetch_lvgl.sh
 src/ui/third_party/lvgl/
+# nanosvg is downloaded and verified by src/ui/tools/fetch_nanosvg.sh
+src/ui/third_party/nanosvg/

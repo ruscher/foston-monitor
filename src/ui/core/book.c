@@ -4,6 +4,7 @@
 #endif
 #include "book.h"
 #include "lodepng.h"
+#include "pdf.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,31 @@ static void sb_newlines(sbuf_t *b, int want)
     for(size_t i = b->n; i > 0 && b->p[i - 1] == '\n' && have < 2; i--) have++;
     if(!b->n) return;
     while(have < want) { sb_put(b, "\n", 1); have++; }
+}
+
+static void add_chapter(book_t *bk, size_t off, const char *title)
+{
+    book_chapter_t *c = realloc(bk->chapters, sizeof *c * (size_t)(bk->n_chapters + 1));
+    if(!c) return;
+    bk->chapters = c;
+    c[bk->n_chapters].off = off;
+    snprintf(c[bk->n_chapters].title, sizeof c[0].title, "%s", title);
+    bk->n_chapters++;
+}
+
+/* primeira linha não vazia a partir de off, como título de capítulo */
+static void first_line(const char *t, size_t len, size_t off, char *out, size_t n)
+{
+    while(off < len && (t[off] == '\n' || t[off] == ' ')) off++;
+    size_t e = off;
+    while(e < len && t[e] != '\n' && e - off < n - 1) e++;
+    size_t l = e - off;
+    if(l >= n - 1) {                       /* corta em caractere UTF-8 inteiro */
+        l = n - 4;
+        while(l > 0 && ((unsigned char)t[off + l] & 0xc0) == 0x80) l--;
+        snprintf(out, n, "%.*s…", (int)l, t + off);
+    }
+    else snprintf(out, n, "%.*s", (int)l, t + off);
 }
 
 static void *read_all(const char *path, size_t *len)
@@ -369,8 +395,14 @@ static bool load_epub(const char *path, book_t *bk, char *err, size_t errn)
         snprintf(full, sizeof full, "%s%s", dir, href);
         char *x = zip_get(&z, full, NULL);
         if(!x) continue;
+        size_t start = b.n;
         xhtml_text(&b, x);
         free(x);
+        if(b.n > start + 2) {              /* capítulo com texto */
+            char t2[96];
+            first_line(b.p, b.n, start, t2, sizeof t2);
+            add_chapter(bk, start, t2);
+        }
         chapters++;
     }
     if(!chapters || !b.p) { snprintf(err, errn, "nenhum capítulo de texto encontrado"); goto out; }
@@ -387,22 +419,98 @@ out:
     return ok;
 }
 
-bool book_is_supported(const char *name)
+book_kind_t book_kind(const char *name)
 {
     const char *d = strrchr(name, '.');
-    return d && (!strcasecmp(d, ".txt") || !strcasecmp(d, ".epub"));
+    if(!d) return BK_NONE;
+    if(!strcasecmp(d, ".txt")) return BK_TXT;
+    if(!strcasecmp(d, ".epub")) return BK_EPUB;
+    if(!strcasecmp(d, ".pdf")) return BK_PDF;
+    if(!strcasecmp(d, ".svg")) return BK_SVG;
+    return BK_NONE;
+}
+
+bool book_is_supported(const char *name) { return book_kind(name) != BK_NONE; }
+
+static bool load_pdf(const char *path, book_t *bk, char *err, size_t errn)
+{
+    pdf_text_t p;
+    if(!pdf_extract(path, &p, err, errn)) return false;
+    bk->text = p.text;
+    bk->len = p.len;
+    snprintf(bk->title, sizeof bk->title, "%s", p.title);
+    snprintf(bk->author, sizeof bk->author, "%s", p.author);
+    if(!bk->title[0]) title_from_name(bk, path);
+    for(int i = 0; i < p.pages; i++) {
+        char t[32];
+        snprintf(t, sizeof t, "Página %d", i + 1);
+        add_chapter(bk, p.page_off[i], t);
+    }
+    free(p.page_off);
+    return true;
 }
 
 bool book_load(const char *path, book_t *b, char *err, size_t errn)
 {
     memset(b, 0, sizeof *b);
-    const char *d = strrchr(path, '.');
-    if(d && !strcasecmp(d, ".epub")) return load_epub(path, b, err, errn);
-    return load_txt(path, b, err, errn);
+    b->kind = book_kind(path);
+    switch(b->kind) {
+    case BK_EPUB: return load_epub(path, b, err, errn);
+    case BK_PDF:  return load_pdf(path, b, err, errn);
+    case BK_SVG:  snprintf(err, errn, "SVG é imagem"); return false;
+    default:      b->kind = BK_TXT; return load_txt(path, b, err, errn);
+    }
 }
 
 void book_free(book_t *b)
 {
     free(b->text);
+    free(b->chapters);
     memset(b, 0, sizeof *b);
+}
+
+int book_chapter_at(const book_t *b, size_t off)
+{
+    int r = -1;
+    for(int i = 0; i < b->n_chapters && b->chapters[i].off <= off; i++) r = i;
+    return r;
+}
+
+unsigned char *book_cover_jpeg(const char *path, size_t *len)
+{
+    if(book_kind(path) != BK_EPUB) return NULL;
+    size_t n;
+    unsigned char *raw = read_all(path, &n);
+    if(!raw) return NULL;
+    zip_t z = { raw, n };
+    unsigned char *img = NULL;
+    char *cont = zip_get(&z, "META-INF/container.xml", NULL), *opf = NULL;
+    char opf_path[512], dir[512], id[200] = "", href[512] = "", full[1100];
+    const char *rf = cont;
+    while(rf && (rf = strstr(rf, "<rootfile")) && rf[9] != ' ' && rf[9] != '\n' && rf[9] != '\t') rf++;
+    if(!rf || !attr(rf, "full-path", opf_path, sizeof opf_path) || !(opf = zip_get(&z, opf_path, NULL))) goto out;
+    snprintf(dir, sizeof dir, "%s", opf_path);
+    char *sl = strrchr(dir, '/');
+    if(sl) sl[1] = 0; else dir[0] = 0;
+    /* EPUB 2: <meta name="cover" content="id">; EPUB 3: properties="cover-image" */
+    for(const char *m = strstr(opf, "<meta"); m; m = strstr(m + 1, "<meta")) {
+        char nm[32];
+        if(attr(m, "name", nm, sizeof nm) && !strcmp(nm, "cover") && attr(m, "content", id, sizeof id)) break;
+    }
+    for(const char *it = strstr(opf, "<item"); it && !href[0]; it = strstr(it + 1, "<item")) {
+        if(it[5] != ' ' && it[5] != '\n' && it[5] != '\t') continue;
+        char iid[200], props[100];
+        bool is_cover = (id[0] && attr(it, "id", iid, sizeof iid) && !strcmp(iid, id)) ||
+                        (attr(it, "properties", props, sizeof props) && strstr(props, "cover-image"));
+        if(is_cover) attr(it, "href", href, sizeof href);
+    }
+    if(!href[0]) goto out;
+    url_decode(href);
+    snprintf(full, sizeof full, "%s%s", dir, href);
+    img = (unsigned char *)zip_get(&z, full, len);
+out:
+    free(cont);
+    free(opf);
+    free(raw);
+    return img;
 }

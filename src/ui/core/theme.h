@@ -58,6 +58,9 @@ typedef struct {
 #define BF_SYMBOL_SUN       "\xEF\x86\x85"  /* F185 */
 #define BF_SYMBOL_MOON      "\xEF\x86\x86"  /* F186 */
 #define BF_SYMBOL_USB_FA    "\xEF\x8A\x87"  /* F287 */
+#define BF_SYMBOL_SEARCH    "\xEF\x80\x82"  /* F002 */
+#define BF_SYMBOL_EXPAND    "\xEF\x81\xA5"  /* F065 */
+#define BF_SYMBOL_BOOKMARK  "\xEF\x80\xAE"  /* F02E */
 #define BF_SYMBOL_TOWER     "\xEF\x94\x99"  /* F519 */
 #define BF_SYMBOL_KEY       "\xEF\x82\x84"  /* F084 */
 #define BF_SYMBOL_LANGUAGE  "\xEF\x86\xAB"  /* F1AB */

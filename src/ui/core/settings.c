@@ -22,6 +22,9 @@ void settings_defaults(bf_settings_t *s)
     s->dark = true;
     s->backlight = 80;
     s->volume = 60;
+    s->book_font = 1;
+    s->book_space = 1;
+    s->book_margin = 1;
     s->show_date = true;
     s->clock_24h = true;
 }
@@ -69,6 +72,10 @@ void settings_load(void)
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
         else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "music_shuffle")) cur.music_shuffle = atoi(v) != 0;
+        else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
+        else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
+        else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
+        else if(!strcmp(k, "book_theme"))    cur.book_theme = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
     }
@@ -92,6 +99,8 @@ bool settings_save(void)
     fprintf(f, "volume = %d\n", cur.volume);
     fprintf(f, "music_repeat = %d\n", cur.music_repeat);
     fprintf(f, "music_shuffle = %d\n", cur.music_shuffle ? 1 : 0);
+    fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
+            cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
     bool ok = fflush(f) == 0;

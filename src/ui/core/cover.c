@@ -89,6 +89,19 @@ static bool jpeg_scaled(const uint8_t *data, size_t len, unsigned max_w, unsigne
     return ok;
 }
 
+bool jpeg_size(const uint8_t *data, size_t len, unsigned *w, unsigned *h)
+{
+    if(!data || len < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
+    void *pool = malloc(16 * 1024);
+    if(!pool) return false;
+    JDEC jd;
+    src_t s = { data, len, 0, 0, 0, 0, 0, NULL };
+    bool ok = jd_prepare(&jd, in_func, pool, 16 * 1024, &s) == JDR_OK && jd.width && jd.height;
+    if(ok) { *w = jd.width; *h = jd.height; }
+    free(pool);
+    return ok;
+}
+
 bool jpeg_fit(const uint8_t *data, size_t len, unsigned max_w, unsigned max_h, lv_image_dsc_t *img)
 {
     uint16_t *px;

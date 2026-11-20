@@ -10,6 +10,7 @@
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../core/cover.h"
+#include "../widgets/imgview.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +24,7 @@
 #define IMG_MAX     (8 * 1024 * 1024)
 #define C_FILES     0xe0a40c
 
-typedef enum { K_DIR, K_AUDIO, K_IMAGE, K_TEXT, K_OTHER } kind_t;
+typedef enum { K_DIR, K_AUDIO, K_IMAGE, K_BOOK, K_TEXT, K_OTHER } kind_t;
 
 typedef struct {
     char *name;
@@ -57,12 +58,14 @@ static bool ext_in(const char *n, const char *const *list)
 static kind_t kind_of(const char *n, bool dir)
 {
     static const char *const audio[] = { "mp3", NULL };
-    static const char *const image[] = { "jpg", "jpeg", NULL };
+    static const char *const image[] = { "jpg", "jpeg", "svg", NULL };
+    static const char *const book[] = { "epub", "pdf", NULL };
     static const char *const text[] = { "txt", "log", "conf", "cfg", "ini", "sh", "desktop", "md",
                                         "csv", "json", "xml", "srt", "nmea", "sha256", "c", "h", NULL };
     if(dir) return K_DIR;
     if(ext_in(n, audio)) return K_AUDIO;
     if(ext_in(n, image)) return K_IMAGE;
+    if(ext_in(n, book)) return K_BOOK;
     if(ext_in(n, text)) return K_TEXT;
     return K_OTHER;
 }
@@ -73,6 +76,7 @@ static const char *kind_symbol(kind_t k)
     case K_DIR:   return LV_SYMBOL_DIRECTORY;
     case K_AUDIO: return LV_SYMBOL_AUDIO;
     case K_IMAGE: return LV_SYMBOL_IMAGE;
+    case K_BOOK:  return LV_SYMBOL_FILE;
     case K_TEXT:  return LV_SYMBOL_FILE;
     default:      return LV_SYMBOL_FILE;
     }
@@ -275,7 +279,8 @@ static void open_entry(lv_event_t *e)
         rebuild();
         break;
     case K_AUDIO: music_play_file(path); break;
-    case K_IMAGE: open_image(path, ents[i].name); break;
+    case K_IMAGE: if(!imgview_open(path)) open_image(path, ents[i].name); break;
+    case K_BOOK:  book_open_file(path); break;
     default:      open_text(path, ents[i].name); break;    /* texto ou desconhecido: tenta como texto */
     }
 }
@@ -406,6 +411,7 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     viewer_close(NULL);
+    imgview_close();
     free_ents();
     root = NULL;
 }
@@ -416,7 +422,7 @@ void scr_files_demo(const char *path)
     if(path && !stat(path, &st) && S_ISREG(st.st_mode)) {   /* arquivo: abre o visualizador */
         const char *n = strrchr(path, '/');
         n = n ? n + 1 : path;
-        if(kind_of(n, false) == K_IMAGE) open_image(path, n);
+        if(kind_of(n, false) == K_IMAGE) { if(!imgview_open(path)) open_image(path, n); }
         else open_text(path, n);
         return;
     }

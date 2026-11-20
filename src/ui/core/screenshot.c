@@ -16,6 +16,7 @@ int screenshot_run(const char *dir)
 #include "app.h"
 #include "nav.h"
 #include "settings.h"
+#include "../widgets/imgview.h"
 #include "status.h"
 #include "theme.h"
 #include "../screens/screens.h"
@@ -162,8 +163,17 @@ int screenshot_run(const char *dir)
     go(SCR_BOOK, 0);                shot("24-livro");
     {
         char f[600];
-        snprintf(f, sizeof f, "%s/books/conto.epub", data_dir());
-        scr_book_demo(f);            shot("24f-livro-pagina");
+        scr_book_demo("+covers"); pump(50); shot("24-livro");
+        snprintf(f, sizeof f, "%s/books/com-capa.epub", data_dir());
+        scr_book_demo(f); scr_book_demo("+paginate"); pump(50); shot("24f-livro-pagina");
+        scr_book_demo("+controls"); pump(50); shot("24g-livro-controles");
+        scr_book_demo("+toc"); pump(50);        shot("24h-livro-sumario");
+        scr_book_demo("+close");
+        snprintf(f, sizeof f, "%s/books/documento.pdf", data_dir());
+        scr_book_demo(f); scr_book_demo("+paginate"); pump(50); shot("24i-livro-pdf");
+        snprintf(f, sizeof f, "%s/books/desenho.svg", data_dir());
+        scr_book_demo(f); pump(50);              shot("24j-livro-svg");
+        imgview_close();
         scr_book_demo(NULL);
     }
     go(SCR_FILES, 0);               shot("24b-arquivos-locais");
