@@ -72,7 +72,7 @@ static void click(lv_event_t *e)
         case B_HOME:     nav_home(); break;
         case B_BACK:     nav_back(); break;
         case B_RECENTS:  bottombar_open_recents(); break;
-        case B_TERM:     nav_go(SCR_RUN, RUN_ARG_TERMINAL); break;
+        case B_TERM:     nav_go(SCR_TERM, 0); break;
         case B_SETTINGS: nav_go(SCR_SETTINGS, 0); break;
         case B_POWER:    bottombar_open_power(); break;
     }

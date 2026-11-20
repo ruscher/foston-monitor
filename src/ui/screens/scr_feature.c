@@ -26,7 +26,7 @@ static const feature_t feats[FEAT_COUNT] = {
     [FEAT_GPSINFO]    = { &bf_icon_gps,        0x2ec27e, S_SET_GPSINFO,    S_DESC_GPSINFO,    S_MISS_GPSINFO,    true },
 };
 
-static void open_terminal(lv_event_t *e) { (void)e; nav_go(SCR_RUN, RUN_ARG_TERMINAL); }
+static void open_terminal(lv_event_t *e) { (void)e; nav_go(SCR_TERM, 0); }
 
 static void create(lv_obj_t *parent, int arg)
 {

@@ -25,6 +25,13 @@ int  runner_shell(const char *cmd, runner_out_cb out, runner_exit_cb done, void 
 bool runner_busy(void);
 void runner_stop(void);             /* SIGTERM no job atual */
 void runner_forget(void);           /* desliga callbacks (tela fechada); mata o job */
+/* Mesma regra de usuário para o Terminal: se o shell é root, escolhe
+ * $BIGFOSTON_RUN_USER (uid != -1); erro -EPERM se não existir e
+ * BIGFOSTON_ALLOW_ROOT != 1. runner_child_setup roda no filho. */
+#include <sys/types.h>
+int  runner_resolve_user(uid_t *uid, gid_t *gid, char *home, size_t nh, char *name, size_t nn,
+                         char *msg, size_t msgn);
+void runner_child_setup(uid_t uid, gid_t gid, const char *home, const char *name);
 /* Divide uma linha em argv (modifica buf). Retorna argc. */
 int  runner_split(char *buf, char **argv, int max);
 

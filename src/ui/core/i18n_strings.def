@@ -128,6 +128,7 @@ X(S_FILES_BINARY,    "files.binary",    "Arquivo binário: não há visualizador
 X(S_FILES_TRUNCATED, "files.truncated", "Mostrando só os primeiros 16 KB.", "Showing only the first 16 KB.", "Mostrando solo los primeros 16 KB.")
 X(S_FILES_BAD_IMAGE, "files.bad_image", "Imagem não suportada (só JPEG baseline até 8 MB).", "Unsupported image (baseline JPEG up to 8 MB only).", "Imagen no soportada (solo JPEG baseline hasta 8 MB).")
 X(S_FILES_TOO_MANY,  "files.too_many",  "Pasta com mais de 400 itens: mostrando os primeiros.", "More than 400 items: showing the first ones.", "Más de 400 elementos: mostrando los primeros.")
+X(S_TERM_ENDED,      "term.ended",      "O shell terminou — toque para reiniciar", "The shell exited — tap to restart", "El shell terminó — toca para reiniciar")
 X(S_MISS_FILES,      "miss.files",      "Somente software: navegador de arquivos ainda não escrito.", "Software only: file browser not written yet.", "Solo software: navegador de archivos aún no escrito.")
 X(S_DESC_TERMINAL,   "desc.terminal",   "Terminal completo (VT100) com teclado na tela. Hoje, use o Run em modo terminal.", "Full VT100 terminal with on-screen keyboard. For now, use Run in terminal mode.", "Terminal VT100 completa con teclado en pantalla. Por ahora, use Ejecutar en modo terminal.")
 X(S_MISS_TERMINAL,   "miss.terminal",   "Emulador VT100 sobre pty.", "VT100 emulator on a pty.", "Emulador VT100 sobre pty.")

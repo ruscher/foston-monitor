@@ -23,7 +23,7 @@ static void *job_ud;
 bool runner_busy(void) { return job_pid > 0; }
 
 /* Resolve o usuário sem privilégios quando o shell é root. */
-static int resolve_user(uid_t *uid, gid_t *gid, char *home, size_t nh, char *name, size_t nn,
+int runner_resolve_user(uid_t *uid, gid_t *gid, char *home, size_t nh, char *name, size_t nn,
                         char *msg, size_t msgn)
 {
     *uid = (uid_t)-1;
@@ -45,7 +45,7 @@ static int resolve_user(uid_t *uid, gid_t *gid, char *home, size_t nh, char *nam
     return -EPERM;
 }
 
-static void child_setup(uid_t uid, gid_t gid, const char *home, const char *name)
+void runner_child_setup(uid_t uid, gid_t gid, const char *home, const char *name)
 {
     if(uid != (uid_t)-1) {
         if(setgroups(1, &gid) || setgid(gid) || setuid(uid) || setuid(0) == 0) {
@@ -109,7 +109,7 @@ int runner_exec(char *const argv[], bool capture, runner_out_cb out, runner_exit
     if(capture && runner_busy()) { snprintf(msg, msgn, "outro comando ainda está rodando"); return -EBUSY; }
 
     uid_t uid; gid_t gid = 0; char home[256] = "/", name[64] = "";
-    int rc = resolve_user(&uid, &gid, home, sizeof home, name, sizeof name, msg, msgn);
+    int rc = runner_resolve_user(&uid, &gid, home, sizeof home, name, sizeof name, msg, msgn);
     if(rc) return rc;
 
     /* pipe "errpipe" com CLOEXEC: fecha sozinho se o exec der certo */
@@ -151,7 +151,7 @@ int runner_exec(char *const argv[], bool capture, runner_out_cb out, runner_exit
             if(g > 0) _exit(0);
         }
         if(devnull > 2) close(devnull);
-        child_setup(uid, gid, home, name);
+        runner_child_setup(uid, gid, home, name);
         execvp(argv[0], argv);
         int e = errno;
         if(write(ep[1], &e, sizeof e) < 0) { /* ignora */ }

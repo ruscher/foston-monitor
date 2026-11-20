@@ -156,7 +156,9 @@ int screenshot_run(const char *dir)
     scr_music_demo(2); pump(800);   shot("21d-multimidia-tela-cheia");
     scr_music_demo(3); pump(100);
     go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
-    go(SCR_FEATURE, FEAT_TERMINAL); shot("23-terminal");
+    go(SCR_TERM, 0); pump(800);
+    scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
+    pump(1200);                     shot("23-terminal");
     go(SCR_FEATURE, FEAT_BOOK);     shot("24-livro");
     go(SCR_FILES, 0);               shot("24b-arquivos-locais");
     scr_files_demo(data_dir());      shot("24c-arquivos-pasta");
