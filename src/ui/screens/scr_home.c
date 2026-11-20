@@ -18,7 +18,7 @@ static const app_t apps[] = {
     { &bf_icon_bluetooth,  S_APP_BLUETOOTH,  0x3584e4, SCR_FEATURE, FEAT_BLUETOOTH },
     { &bf_icon_book,       S_APP_BOOK,       0xc98b2c, SCR_FEATURE, FEAT_BOOK },
     { &bf_icon_gps,        S_APP_GPS,        0x2ec27e, SCR_FEATURE, FEAT_GPS },
-    { &bf_icon_files,      S_APP_FILES,      0xe0a40c, SCR_FEATURE, FEAT_FILES },
+    { &bf_icon_files,      S_APP_FILES,      0xe0a40c, SCR_FILES, 0 },
     { &bf_icon_terminal,   S_APP_TERMINAL,   0x4b5363, SCR_FEATURE, FEAT_TERMINAL },
     { &bf_icon_run,        S_APP_RUN,        0x1fb5cc, SCR_RUN,     RUN_ARG_NORMAL },
     { &bf_icon_bigscreen,  S_APP_BIGSCREEN,  0x2a6fd0, SCR_FEATURE, FEAT_BIGSCREEN },

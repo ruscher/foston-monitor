@@ -12,4 +12,9 @@
  * Retorna a imagem (buffer estático, válido até a próxima chamada) ou NULL
  * (PNG, JPEG progressivo, dados inválidos). */
 const lv_image_dsc_t *cover_decode(const uint8_t *data, size_t len);
+
+/* JPEG (baseline) reduzido para caber em max_w x max_h mantendo a proporção
+ * (nunca amplia). Aloca os pixels: liberar com jpeg_free. */
+bool jpeg_fit(const uint8_t *data, size_t len, unsigned max_w, unsigned max_h, lv_image_dsc_t *img);
+void jpeg_free(lv_image_dsc_t *img);
 #endif

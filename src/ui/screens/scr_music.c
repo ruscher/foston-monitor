@@ -677,6 +677,32 @@ static void destroy(void)
     dragging = false;
 }
 
+/* Arquivos: toca a pasta de `path` a partir dele e abre o Multimídia */
+void music_play_file(const char *path)
+{
+    char dir[512];
+    snprintf(dir, sizeof dir, "%s", path);
+    char *slash = strrchr(dir, '/');
+    if(!slash) return;
+    *slash = 0;
+    if(!watch) {
+        watch = lv_timer_create(watch_cb, 200, NULL);
+        last_tick = lv_tick_get();
+        srand((unsigned)time(NULL));
+    }
+    player_stop();
+    free_tracks();
+    memset(plays, 0, sizeof plays);
+    n_hist = 0;
+    scan(dir[0] ? dir : "/", 3);          /* só a própria pasta */
+    qsort(tracks, n_tracks, sizeof tracks[0], cmp_track);
+    int at = 0;
+    for(int i = 0; i < n_tracks; i++)
+        if(!strcmp(tracks[i], path)) { at = i; break; }
+    play(at, false);
+    nav_go(SCR_MUSIC, 0);
+}
+
 void scr_music_demo(int step)
 {
     if(step == 0) play(0, false);

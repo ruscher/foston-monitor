@@ -7,7 +7,7 @@
 extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, scr_run_def,
        scr_monitor_def, scr_calibrate_def, scr_backlight_def, scr_volume_def,
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
-       scr_advanced_def, scr_feature_def, scr_music_def;
+       scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {
@@ -26,5 +26,7 @@ void scr_run_demo_keyboard(void);
 void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar */
+void music_play_file(const char *path);   /* Arquivos -> Multimídia */
+void scr_files_demo(const char *path);    /* NULL: locais */
 
 #endif

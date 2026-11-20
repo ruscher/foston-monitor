@@ -158,6 +158,16 @@ int screenshot_run(const char *dir)
     go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
     go(SCR_FEATURE, FEAT_TERMINAL); shot("23-terminal");
     go(SCR_FEATURE, FEAT_BOOK);     shot("24-livro");
+    go(SCR_FILES, 0);               shot("24b-arquivos-locais");
+    scr_files_demo(data_dir());      shot("24c-arquivos-pasta");
+    {
+        char f[600];
+        snprintf(f, sizeof f, "%s/notas.txt", data_dir());
+        scr_files_demo(f);           shot("24d-arquivos-texto");
+        snprintf(f, sizeof f, "%s/cover.jpg", data_dir());
+        scr_files_demo(f);           shot("24e-arquivos-imagem");
+        scr_files_demo(data_dir());
+    }
     nav_home(); pump(50);
     bottombar_open_power();         shot("25-dialogo-desligar");
     dialog_close_all(); pump(30);
