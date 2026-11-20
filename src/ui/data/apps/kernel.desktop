@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kernel
+Name[en]=Kernel
+Name[es]=Kernel
+Comment=uname -a
+Exec=uname -a
+Terminal=true

@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: GPL-2.0-only
+menuconfig ARCH_MT3351
+	bool "MediaTek MT3351 (FOSTON FS-707DC and similar GPS navigators)"
+	depends on ARCH_MULTI_V6
+	depends on CPU_LITTLE_ENDIAN
+	select MT3351_CIRQ
+	select MT3351_GPT_TIMER
+	select ARM_ERRATA_411920
+	help
+	  MediaTek MT3351 SoC (ARM1176JZ-S) found in Windows CE GPS
+	  navigators such as the FOSTON FS-707DC. Started from Windows CE by
+	  the BigFoston loader; RAM at 0, CIRQ interrupt controller and GPT
+	  timer as measured on the device.
+
+if ARCH_MT3351
+
+config MT3351_BOOTCON
+	bool "Text console on the boot loader framebuffer"
+	default y
+	select FONT_SUPPORT
+	select FONT_8x8
+	help
+	  Draws kernel messages into the framebuffer left running by Windows
+	  CE (simple-framebuffer node), starting before the timer is set up.
+	  The board has no known serial console.
+
+endif

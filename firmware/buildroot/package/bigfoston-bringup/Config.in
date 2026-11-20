@@ -1,0 +1,6 @@
+config BR2_PACKAGE_BIGFOSTON_BRINGUP
+	bool "bigfoston-bringup"
+	help
+	  Hardware bring-up tests for the FS-707DC (bftest): processes,
+	  signals, copy-on-write, unaligned access, memcpy, BusyBox page
+	  integrity. Run as rdinit=/bin/bftest.

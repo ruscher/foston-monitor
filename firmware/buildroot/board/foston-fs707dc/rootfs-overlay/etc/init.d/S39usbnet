@@ -1,0 +1,18 @@
+#!/bin/sh
+# USB network (g_cdc, CDC-ECM): the FOSTON is 192.168.7.2, the PC 192.168.7.1.
+case "$1" in
+start)
+    for i in 1 2 3 4 5; do
+        [ -d /sys/class/net/usb0 ] && break
+        sleep 1
+    done
+    if ip link set lo up && ip addr add 192.168.7.2/24 dev usb0 && ip link set usb0 up; then
+        echo "bigfoston: usb0 192.168.7.2 up" > /dev/kmsg
+    else
+        echo "bigfoston: usb0 missing ($(ls /sys/class/net | tr '\n' ' '))" > /dev/kmsg
+    fi
+    ;;
+stop)
+    ip link set usb0 down 2>/dev/null
+    ;;
+esac
