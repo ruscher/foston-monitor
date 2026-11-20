@@ -27,6 +27,8 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | `drivers/clocksource/timer-mt3351-gpt.c` | clocksource, sched_clock e clockevent one-shot no GPT1 | medição: contador a 14,625 MHz, compare em `+0x1C`, IRQ 39 |
 | `drivers/video/fbdev/mt3351-bootcon.c` | console de texto no framebuffer do CE (antes do timer) | framebuffer medido em `0x03E00030` |
 | `drivers/usb/musb/mt3351.c` | cola do controlador USB (Mentor MUSB, traços MediaTek) | registradores lidos no aparelho (abaixo) |
+| `drivers/input/touchscreen/mt3351-ts.c` | touchscreen resistivo (polling, evdev) | `touch.dll` do CE + `devmem` |
+| `drivers/mmc/host/mt3351-msdc.c` | slot SD MSDC1 (polling, PIO, ro por padrão) | `sdhc_drv.dll` do CE + `devmem` |
 | `arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts` | device tree | tudo medido |
 
 ## Etapas e estado
@@ -42,8 +44,11 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | Processos, fork, sinais, COW, exec | **FUNCIONANDO** | `bftest` passos 1–13, 19/11/2026 |
 | Shell do BusyBox | **FUNCIONANDO** | `bftest` passo 9: `echo`, `func`, `subst`, `grep`, `sleep`, `init-like` → exit 0 |
 | `/init` + init do BusyBox + `rcS` | **FUNCIONANDO** | build com `-mno-unaligned-access`, 19/11/2026: `bigfoston: alive 630s`, timer irqs 17254→19708, `memwatch: no change (103 MB)` |
-| Touchscreen | NÃO IMPLEMENTADO | ADC/registradores ainda não identificados |
-| SD (MSDC) | NÃO IMPLEMENTADO | driver CE `sdhc_drv` (família MSDC) |
+| Touchscreen | **FUNCIONANDO** | driver `mt3351-ts` (evdev, filtro de pressão como o CE); calibração de 5 pontos: erro 3,6 px no centro, 10–12 px nos cantos — [touchscreen-driver.md](touchscreen-driver.md) |
+| Framebuffer `/dev/fb0` | **FUNCIONANDO** | `simplefb` 800×480 RGB565 em `0x03E00030` (não alinhado à página: mmap + 0x30) |
+| Interface LVGL no aparelho | **FUNCIONANDO** | `bigfoston-shell` sobe no boot (`S90bigfoston-shell`), toque calibrado, 1,7 MB de RAM |
+| SD (MSDC1) | **LEITURA FUNCIONANDO**, escrita bloqueada | driver `mt3351-msdc` (polling/PIO): cartão de 1,91 GiB, FAT32 montado ro, SHA-256 confere, ~6 MB/s — [sd-controller.md](sd-controller.md) |
+| Relógio | PARCIAL | sem driver de RTC; a hora do PC vai no DTB (`bigfoston,boot-epoch`) e o `S05clock` acerta no boot |
 | USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
 | UARTs | NÃO IMPLEMENTADO | 16550 MTK em `0x80026000…0x80029000`, IRQ 3–6; clock desconhecido |
 | Luz de fundo (PWM) | NÃO IMPLEMENTADO | PWM em `0x8002B000` |
