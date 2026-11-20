@@ -6,6 +6,7 @@ DEV=/dev/mmcblk0p1
 MNT=/mnt/sd
 case "$1" in
 start)
+    echo 50 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
     mkdir -p "$MNT"
     n=0
     while [ ! -b "$DEV" ] && [ $n -lt 10 ]; do sleep 0.5; n=$((n + 1)); done

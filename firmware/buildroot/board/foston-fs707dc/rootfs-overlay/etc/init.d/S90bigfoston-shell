@@ -8,6 +8,8 @@ case "$1" in
 start)
     grep -qw nogui /proc/cmdline && { echo "bigfoston-shell: nogui"; exit 0; }
     [ -c /dev/fb0 ] || { echo "bigfoston-shell: no /dev/fb0" > /dev/kmsg; exit 0; }
+    echo 100 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
+    echo "bigfoston: interface iniciando em $(cut -d' ' -f1 /proc/uptime) s" > /dev/kmsg
     mkdir -p /data/bigfoston
     . /etc/profile.d/tz.sh
     (

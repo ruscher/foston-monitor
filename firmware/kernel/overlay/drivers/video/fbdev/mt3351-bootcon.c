@@ -10,6 +10,12 @@
  *
  * The framebuffer is described by the "simple-framebuffer" node of the
  * device tree (r5g6b5); that memory is not part of the kernel's RAM.
+ *
+ * With "splash" on the command line the BigFoston opening screen is drawn
+ * instead (mt3351-splash.h, made by tools/bigfoston/make_splash.py) and the
+ * boot scripts move its progress bar through the "progress" parameter. The
+ * log is still kept: a panic, or the graphical shell giving the screen back
+ * (paused=0), replaces the splash with the text console.
  */
 #include <linux/console.h>
 #include <linux/font.h>
@@ -21,6 +27,9 @@
 #include <linux/crc32.h>
 #include <linux/mm.h>
 #include <linux/moduleparam.h>
+#include <linux/notifier.h>
+#include <linux/panic_notifier.h>
+#include "mt3351-splash.h"
 
 #define COLS_MAX	128
 #define ROWS_MAX	64
@@ -42,7 +51,17 @@ static char text[ROWS_MAX][COLS_MAX];
  * drawing over it; the text is still kept and comes back on 0.
  */
 static bool paused;
+static bool splash, splash_on;
+static int progress;
 static void redraw(void);
+static void show_text(void);
+
+static int __init splash_param(char *arg)
+{
+	splash = true;
+	return 0;
+}
+early_param("splash", splash_param);
 
 static int paused_set(const char *val, const struct kernel_param *kp)
 {
@@ -50,11 +69,40 @@ static int paused_set(const char *val, const struct kernel_param *kp)
 
 	if (!ret && !paused && fb) {
 		console_lock();
-		redraw();
+		show_text();		/* the shell gave the screen back: show the log */
 		console_unlock();
 	}
 	return ret;
 }
+
+static void draw_progress(void)
+{
+	unsigned int x, y, fill = SPLASH_BAR_W * progress / 100;
+
+	if (!fb || !splash_on || paused)
+		return;
+	for (y = 0; y < SPLASH_BAR_H; y++)
+		for (x = 0; x < SPLASH_BAR_W; x++)
+			writew_relaxed(x < fill ? SPLASH_FG : SPLASH_TRACK,
+				       fb + (SPLASH_BAR_Y + y) * fb_stride + SPLASH_BAR_X + x);
+}
+
+static int progress_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_int(val, kp);
+
+	progress = clamp(progress, 0, 100);
+	if (!ret)
+		draw_progress();
+	return ret;
+}
+
+static const struct kernel_param_ops progress_ops = {
+	.set = progress_set,
+	.get = param_get_int,
+};
+module_param_cb(progress, &progress_ops, &progress, 0644);
+MODULE_PARM_DESC(progress, "boot progress bar of the splash, 0..100");
 
 static const struct kernel_param_ops paused_ops = {
 	.set = paused_set,
@@ -78,7 +126,7 @@ static void redraw(void)
 {
 	unsigned int r, c;
 
-	if (paused)
+	if (paused || splash_on)
 		return;
 
 	for (r = 0; r < rows; r++)
@@ -115,7 +163,7 @@ static void bootcon_write(struct console *con, const char *s, unsigned int n)
 		if (cx >= cols)
 			newline();
 		text[cy][cx] = c;
-		if (!paused)
+		if (!paused && !splash_on)
 			draw_char(cx, cy, c);
 		cx++;
 	}
@@ -128,12 +176,54 @@ static struct console bootcon = {
 	.index	= -1,
 };
 
+/* blue band on top, graphite background, then the text */
+static void clear_screen(void)
+{
+	unsigned int x, y;
+
+	for (y = 0; y < fb_h; y++)
+		for (x = 0; x < fb_w; x++)
+			writew_relaxed(y < 6 ? ACCENT : BG, fb + y * fb_stride + x);
+}
+
+static void show_text(void)
+{
+	if (splash_on) {
+		splash_on = false;
+		clear_screen();
+	}
+	redraw();
+}
+
+static int panic_show_log(struct notifier_block *nb, unsigned long ev, void *p)
+{
+	paused = false;
+	show_text();
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block panic_nb = {
+	.notifier_call = panic_show_log,
+	.priority = INT_MAX,
+};
+
+static void __init draw_splash(void)
+{
+	unsigned int i, n = 0;
+
+	for (i = 0; i + 1 < ARRAY_SIZE(splash_rle) && n < fb_w * fb_h; i += 2) {
+		unsigned int k;
+
+		for (k = 0; k < splash_rle[i] && n < fb_w * fb_h; k++, n++)
+			writew_relaxed(splash_rle[i + 1], fb + (n / fb_w) * fb_stride + n % fb_w);
+	}
+}
+
 void __init mt3351_earlyfb_register(void)
 {
 	struct device_node *np;
 	struct resource res;
 	const char *format;
-	unsigned int x, y;
 
 	np = of_find_compatible_node(NULL, NULL, "simple-framebuffer");
 	if (!np)
@@ -157,10 +247,15 @@ void __init mt3351_earlyfb_register(void)
 	cols = min_t(unsigned int, fb_w / font->width, COLS_MAX);
 	rows = min_t(unsigned int, (fb_h - 16) / font->height, ROWS_MAX);
 	memset(text, ' ', sizeof(text));
-	/* a thin BigLinux-blue band on top, then the console area */
-	for (y = 0; y < fb_h; y++)
-		for (x = 0; x < fb_w; x++)
-			writew_relaxed(y < 6 ? ACCENT : BG, fb + y * fb_stride + x);
+	if (splash && fb_w == SPLASH_W && fb_h == SPLASH_H) {
+		splash_on = true;
+		draw_splash();
+		progress = 5;
+		draw_progress();
+	}
+	else
+		clear_screen();		/* a thin BigLinux-blue band on top, then the console area */
+	atomic_notifier_chain_register(&panic_notifier_list, &panic_nb);
 	register_console(&bootcon);
 	initrd_check("inicio");
 }

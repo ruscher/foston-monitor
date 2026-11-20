@@ -2,6 +2,7 @@
 # USB network (g_cdc, CDC-ECM): the FOSTON is 192.168.7.2, the PC 192.168.7.1.
 case "$1" in
 start)
+    echo 70 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
     for i in 1 2 3 4 5; do
         [ -d /sys/class/net/usb0 ] && break
         sleep 1

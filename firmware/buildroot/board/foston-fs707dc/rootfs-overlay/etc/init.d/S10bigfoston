@@ -3,6 +3,7 @@
 # framebuffer console of the board shows (no serial port, no input yet).
 case "$1" in
 start)
+    echo 30 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
     (
         say() { echo "bigfoston: $*" > /dev/kmsg; }
         say "userland up: BusyBox $(busybox | head -n1 | cut -d' ' -f2), $(uname -srm)"

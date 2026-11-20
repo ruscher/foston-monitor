@@ -65,11 +65,11 @@ traduzir pelo FCSE.
 # no PC, com o agente aberto no aparelho e o cabo conectado
 tools/bigfoston/bfagent.py put zImage '\SDMMC\BigFoston\zImage'
 tools/bigfoston/bfagent.py put fs707dc.dtb '\SDMMC\BigFoston\fs707dc.dtb'
-tools/bigfoston/bfagent.py put initrd.gz '\SDMMC\BigFoston\initrd.gz'
+tools/bigfoston/bfagent.py put initrd.img '\SDMMC\BigFoston\initrd.img'
 tools/bigfoston/bfagent.py boot '\SDMMC\BigFoston\zImage' \
-    --dtb '\SDMMC\BigFoston\fs707dc.dtb' --initrd '\SDMMC\BigFoston\initrd.gz' --dry-run
+    --dtb '\SDMMC\BigFoston\fs707dc.dtb' --initrd '\SDMMC\BigFoston\initrd.img' --dry-run
 tools/bigfoston/bfagent.py boot '\SDMMC\BigFoston\zImage' \
-    --dtb '\SDMMC\BigFoston\fs707dc.dtb' --initrd '\SDMMC\BigFoston\initrd.gz'
+    --dtb '\SDMMC\BigFoston\fs707dc.dtb' --initrd '\SDMMC\BigFoston\initrd.img'
 ```
 
 Payload bare-metal: `bfagent.py boot '\SDMMC\BigFoston\fbtest.bin' --kernel-pa 0x8000`.
