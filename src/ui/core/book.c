@@ -1,5 +1,7 @@
 /* book.c — TXT e EPUB para texto puro (ver book.h). */
-#define _DEFAULT_SOURCE
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE        /* strcasestr (musl) */
+#endif
 #include "book.h"
 #include "lodepng.h"
 #include <stdint.h>
