@@ -105,7 +105,8 @@
 		 */
 		touchscreen@80034000 {
 			compatible = "mediatek,mt3351-ts";
-			reg = <0x80034000 0x100>;
+			/* ADC (touch and battery aux mode), PMU charger status word (read only) */
+			reg = <0x80034000 0x100>, <0x80061420 0x4>;
 			touchscreen-inverted-x;
 			touchscreen-inverted-y;
 		};

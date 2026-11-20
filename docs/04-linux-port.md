@@ -56,7 +56,7 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
 | UARTs | **FUNCIONANDO** (recepção testada) | `8250_mt3351`: ttyS0..3, 16550A a 29,25 MHz; para o DMA que o CE deixa ligado (causa da escrita em 0x7E8000); GPS recebido em ttyS0 — [uart.md](uart.md) |
 | MP3 | **FUNCIONANDO** | `mpg123` (decodificador `arm_nofpu`) pela emulação OSS: MP3 de 128 kbps a ~11 % da CPU |
-| Bateria | LEITURA MANUAL | tensão pelo ADC auxiliar (`0x80034000`, canal `+0x28`, mV = valor × 5600/1023), carregador em `0x80061420` bit 3, carga bit 14; medido 4,0 V (100 %), cheia e sem carregar. **A carga no CE é feita por software a cada 10 s; no Linux a bateria pode não carregar** |
+| Bateria e carregador | **FUNCIONANDO** (leitura) | `power_supply` no `mt3351-ts` (mesmo ADC do touch, com trava): tensão pelo canal auxiliar `+0x28` (mV = valor × 5600/1023), % pela tabela do CE, carregador em `0x80061420` (bit 3 presente, bit 14 carregando). Medido: 3996 mV, 100 %, Full. **A carga é feita por software no CE; no Linux a bateria pode não carregar** — não deixar horas no Linux com bateria baixa |
 | Luz de fundo (PWM) | NÃO IMPLEMENTADO | PWM em `0x8002B000` |
 
 ## Problemas encontrados e corrigidos
