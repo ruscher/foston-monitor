@@ -97,6 +97,23 @@ static void wall_click(lv_event_t *e)
     apply_rebuild();
 }
 
+static void home_click(lv_event_t *e)
+{
+    int v = (int)(intptr_t)lv_event_get_user_data(e);
+    if(settings()->home_mode == v) return;
+    settings()->home_mode = v;
+    apply_rebuild();                 /* a barra inferior muda no quiosque */
+}
+
+static void app_toggle(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *b = lv_event_get_target(e);
+    if(lv_obj_has_state(b, LV_STATE_CHECKED)) settings()->home_apps |= 1u << i;
+    else settings()->home_apps &= ~(1u << i);
+    settings_save();
+}
+
 static void dim_click(lv_event_t *e)
 {
     int v = (int)(intptr_t)lv_event_get_user_data(e);
@@ -237,6 +254,35 @@ static void build_effects(void)
     if(!fx_audio_present()) hint(c, tr(S_AP_NO_AUDIO), p->warning);
 }
 
+static void build_home(void)
+{
+    const bf_palette_t *p = pal();
+    const bf_settings_t *s = settings();
+    lv_obj_t *c = section(LV_SYMBOL_HOME, tr(S_AP_HOME));
+    lv_obj_t *r = seg_row(c);
+    seg_button(r, LV_SYMBOL_LIST, tr(S_AP_HOME_GRID), s->home_mode == BF_HOME_GRID, home_click, BF_HOME_GRID);
+    seg_button(r, BF_SYMBOL_CLOCK, tr(S_AP_HOME_PANEL), s->home_mode == BF_HOME_PANEL, home_click, BF_HOME_PANEL);
+    seg_button(r, BF_SYMBOL_KEY, tr(S_AP_HOME_KIOSK), s->home_mode == BF_HOME_KIOSK, home_click, BF_HOME_KIOSK);
+    hint(c, tr(s->home_mode == BF_HOME_PANEL ? S_AP_HOME_PANEL_HINT :
+               s->home_mode == BF_HOME_KIOSK ? S_AP_HOME_KIOSK_HINT : S_AP_HOME_GRID_HINT), p->text_dim);
+    bf_label(c, tr(S_AP_HOME_APPS), BF_FONT_S, p->text);
+    lv_obj_t *chips = bf_plain(c);
+    lv_obj_set_size(chips, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_row(chips, BF_SP_S, 0);
+    lv_obj_set_style_pad_column(chips, BF_SP_S, 0);
+    for(int i = 0; i < home_app_count(); i++) {
+        /* no quiosque Ajustes nunca aparece na grade (abre segurando o botão) */
+        if(s->home_mode == BF_HOME_KIOSK && home_app_is_settings(i)) continue;
+        bool on = s->home_apps >> i & 1u;
+        lv_obj_t *b = bf_button(chips, NULL, home_app_name(i), 0);   /* marcado = cor principal */
+        lv_obj_set_height(b, 56);
+        lv_obj_add_flag(b, LV_OBJ_FLAG_CHECKABLE);
+        if(on) lv_obj_add_state(b, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(b, app_toggle, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
+    }
+}
+
 static void build_dim(void)
 {
     const bf_palette_t *p = pal();
@@ -267,6 +313,7 @@ static void create(lv_obj_t *parent, int arg)
         lv_obj_set_style_pad_ver(n, 6, 0);
     }
     build_mode();
+    build_home();
     build_colors();
     build_wallpaper();
     build_effects();

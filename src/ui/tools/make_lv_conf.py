@@ -30,7 +30,7 @@ for w in ['ANIMIMG', 'CALENDAR', 'CANVAS', 'CHECKBOX', 'DROPDOWN', 'IMAGEBUTTON'
     setd('LV_USE_' + w, '0')
 setd('LV_FONT_MONTSERRAT_14', '0')
 setd('LV_FONT_CUSTOM_DECLARE', 'LV_FONT_DECLARE(bf_font_14) LV_FONT_DECLARE(bf_font_20) '
-     'LV_FONT_DECLARE(bf_font_28) LV_FONT_DECLARE(bf_mono_16)')
+     'LV_FONT_DECLARE(bf_font_28) LV_FONT_DECLARE(bf_mono_16) LV_FONT_DECLARE(bf_font_clock_72)')
 setd('LV_FONT_DEFAULT', '&bf_font_20')
 setd('LV_USE_TJPGD', '1')                           # capas JPEG (ID3 APIC) do Multimídia
 setd('LV_USE_SDL', 'BIGFOSTON_USE_SDL')

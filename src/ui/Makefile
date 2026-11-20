@@ -25,7 +25,8 @@ INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iass
 DEFS      := -DLV_CONF_INCLUDE_SIMPLE -DBIGFOSTON_VERSION=\"$(VERSION)\"
 WARN      := -Wall -Wextra
 # LVGL é código de terceiros: compila sem -Wextra para não poluir a saída
-LVGL_WARN := -Wall -Wno-unused-parameter -Wno-unused-function
+# -Wno-unused-but-set-variable: lv_buttonmatrix.c (LVGL 9.2.2) só usa txt_tot_i com LV_USE_ASSERT
+LVGL_WARN := -Wall -Wno-unused-parameter -Wno-unused-function -Wno-unused-but-set-variable
 
 ifeq ($(VARIANT),sim)
   CC        ?= gcc

@@ -28,6 +28,17 @@ void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar */
 void music_play_file(const char *path);   /* Arquivos -> Multimídia */
+enum { MUSIC_TOGGLE, MUSIC_PREV, MUSIC_NEXT };
+bool music_has_queue(void);               /* há faixas na fila do Multimídia */
+void music_command(int cmd);              /* MUSIC_*: Painel da Início */
+/* Apps da Início (tabela em scr_home.c; a ordem só cresce no fim, é a dos bits
+ * de settings()->home_apps) */
+int         home_app_count(void);
+const char *home_app_name(int i);
+const lv_image_dsc_t *home_app_icon(int i);
+uint32_t    home_app_color(int i);
+bool        home_app_is_settings(int i);
+void        home_app_open(int i);
 void scr_files_demo(const char *path);    /* NULL: locais */
 void scr_term_demo_type(const char *s);   /* digita no shell do Terminal */
 void scr_book_demo(const char *path);     /* NULL: biblioteca */

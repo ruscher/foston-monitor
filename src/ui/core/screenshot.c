@@ -130,6 +130,13 @@ int screenshot_run(const char *dir)
     scr_home_show_page(0);
     go(SCR_SETTINGS, 0);            shot("03-ajustes");
     go(SCR_APPEARANCE, 0);          shot("03b-aparencia");
+    s->home_mode = BF_HOME_PANEL;
+    nav_home(); pump(450);          shot("01b-inicio-painel");
+    s->home_mode = BF_HOME_KIOSK;
+    app_rebuild_now(); pump(450);   shot("01c-inicio-quiosque");
+    s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
+    go(SCR_APPEARANCE, 0);
     scroll_content_end();           shot("03c-aparencia-fim");
     scroll_content_end();           shot("04-ajustes-fim");
     go(SCR_SYSINFO, 0);             shot("05-sistema-de-informacao");

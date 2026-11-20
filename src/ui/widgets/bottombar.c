@@ -6,6 +6,7 @@
 #include "../core/nav.h"
 #include "../core/status.h"
 #include "../screens/screens.h"
+#include "../core/settings.h"
 
 enum { B_HOME, B_BACK, B_RECENTS, B_TERM, B_SETTINGS, B_POWER, B__N };
 static lv_obj_t *btn[B__N];
@@ -66,6 +67,45 @@ void bottombar_open_recents(void)
     }
 }
 
+/* ---- modo quiosque: Ajustes só segurando 2 s (ninguém abre sem querer) ---- */
+
+#define KIOSK_HOLD_MS 2000
+static uint32_t press_t;
+static bool hold_fired;
+static lv_obj_t *toast;
+
+static bool kiosk(void) { return settings()->home_mode == BF_HOME_KIOSK; }
+
+static void toast_done(lv_timer_t *t)
+{
+    (void)t;
+    if(toast) { lv_obj_delete(toast); toast = NULL; }
+}
+
+static void show_toast(const char *msg)
+{
+    if(toast) return;
+    toast = bf_pill(lv_layer_top(), msg, pal()->warning);
+    lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(toast, pal()->surface2, 0);
+    lv_obj_set_style_pad_ver(toast, 10, 0);
+    lv_obj_set_style_pad_hor(toast, 18, 0);
+    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -(BF_BOTBAR_H + 12));
+    lv_timer_set_repeat_count(lv_timer_create(toast_done, 2500, NULL), 1);
+}
+
+static void settings_hold(lv_event_t *e)
+{
+    lv_event_code_t c = lv_event_get_code(e);
+    if(c == LV_EVENT_PRESSED) { press_t = lv_tick_get(); hold_fired = false; }
+    else if(c == LV_EVENT_PRESSING && !hold_fired && lv_tick_elaps(press_t) >= KIOSK_HOLD_MS) {
+        hold_fired = true;
+        lv_indev_wait_release(lv_indev_active());
+        nav_go(SCR_SETTINGS, 0);
+    }
+    else if(c == LV_EVENT_CLICKED && !hold_fired) show_toast(tr(S_KIOSK_HOLD));
+}
+
 static void click(lv_event_t *e)
 {
     switch((int)(intptr_t)lv_event_get_user_data(e)) {
@@ -119,8 +159,15 @@ lv_obj_t *bottombar_create(lv_obj_t *parent)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, tr(txt[i]));
         lv_obj_set_style_text_font(l, BF_FONT_S, 0);
-        lv_obj_add_event_cb(b, click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        if(i == B_SETTINGS && kiosk()) {
+            lv_obj_add_event_cb(b, settings_hold, LV_EVENT_PRESSED, NULL);
+            lv_obj_add_event_cb(b, settings_hold, LV_EVENT_PRESSING, NULL);
+            lv_obj_add_event_cb(b, settings_hold, LV_EVENT_CLICKED, NULL);
+        }
+        else lv_obj_add_event_cb(b, click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        if(i == B_TERM && kiosk()) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);   /* quiosque: sem Terminal */
     }
+    toast = NULL;
     return bar;
 }
 

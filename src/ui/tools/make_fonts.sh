@@ -21,6 +21,12 @@ for sz in 14 20 28; do
     -o "$OUT/bf_font_$sz.c"
 done
 
+# Relógio grande do modo Painel: só algarismos, dois-pontos, hífen e espaço
+$CONV --no-compress --no-prefilter --bpp 4 --size 72 \
+  --font "$F/Montserrat-Medium.ttf" -r "0x20,0x2D,0x30-0x3A" \
+  --format lvgl --lv-include lvgl.h --force-fast-kern-format \
+  -o "$OUT/bf_font_clock_72.c"
+
 # Fonte monoespaçada (terminal / sysinfo "retrô")
 $CONV --no-compress --no-prefilter --bpp 4 --size 16 \
   --font "$F/DejaVuSansMono.ttf" -r "0x20-0x7E,0xA0-0xFF,0x2014,0x2022,0x2500-0x257F,0x2580-0x259F" \

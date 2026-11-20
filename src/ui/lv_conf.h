@@ -532,7 +532,7 @@
 /*Optionally declare custom fonts here.
  *You can use these fonts as default font too and they will be available globally.
  *E.g. #define LV_FONT_CUSTOM_DECLARE   LV_FONT_DECLARE(my_font_1) LV_FONT_DECLARE(my_font_2)*/
-#define LV_FONT_CUSTOM_DECLARE LV_FONT_DECLARE(bf_font_14) LV_FONT_DECLARE(bf_font_20) LV_FONT_DECLARE(bf_font_28) LV_FONT_DECLARE(bf_mono_16)
+#define LV_FONT_CUSTOM_DECLARE LV_FONT_DECLARE(bf_font_14) LV_FONT_DECLARE(bf_font_20) LV_FONT_DECLARE(bf_font_28) LV_FONT_DECLARE(bf_mono_16) LV_FONT_DECLARE(bf_font_clock_72)
 
 /*Always set a default font*/
 #define LV_FONT_DEFAULT &bf_font_20

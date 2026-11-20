@@ -112,6 +112,8 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 | Captura | Tela |
 |---|---|
 | ![](images/ui/01-inicio.png) | **Início** — grade 4×2 paginada (deslizar ou setas), indicador de página. |
+| ![](images/ui/01b-inicio-painel.png) | **Início, modo Painel** — relógio grande (fonte só de algarismos, 72 px), data, bateria, "Tocando agora" com anterior/tocar/próximo e até 6 atalhos. |
+| ![](images/ui/01c-inicio-quiosque.png) | **Início, modo Quiosque** — só os apps escolhidos; o Terminal sai da barra e Ajustes abre segurando o botão por 2 s. |
 | ![](images/ui/02-inicio-pagina-2.png) | **Início, página 2** — Big Screen, Monitor, Ajustes. |
 | ![](images/ui/03-ajustes.png) | **Ajustes** — 14 itens em 2 colunas; itens sem driver mostram "indisponível". |
 | ![](images/ui/04-ajustes-fim.png) | **Ajustes (fim da lista)**. |
@@ -167,6 +169,7 @@ Valores de CPU, RAM, kernel, IP etc. nelas são do PC onde foram geradas.
 | Modo | Escuro (padrão), Claro, Automático | Automático: claro das 7h às 19h; com o relógio não acertado (antes de 2024) fica escuro. A troca reconstrói a interface sozinha na virada da hora. |
 | Tema de cores | FOSTON, Clássico, Esmeralda, Pôr do sol, Violeta, Grafite | tabela acima; reconstrói a interface mantendo a tela e a rolagem |
 | Papel de parede | Liso, Degradê, Logotipo (padrão) | `core/wallpaper.c`: degradê radial com pontilhado Bayer 4×4 (sem faixas no RGB565) e o símbolo como marca d'água tingida (A8, 400 px). Calculado uma vez por troca de tema numa imagem RGB565 800×360 (576 KB); redesenhar é cópia. Liso não aloca nada. |
+| Tela inicial | Grade (padrão), Painel, Quiosque | os apps escolhidos (bits de `home_apps`, na ordem da tabela de `scr_home.c`) são os atalhos do Painel e os apps do Quiosque. Painel: 2,2 % de CPU parado no aparelho (timer de 500 ms que só troca o texto que mudou). |
 | Animações | ligado (padrão) / desligado | a tela nova entra deslizando 32 px (170 ms); os ícones da Início sobem em sequência (220 ms, 30 ms entre eles); setas da Início com rolagem animada |
 | Sons de toque | ligado (padrão) / desligado | `core/fx.c`: PCM 16 bits mono 22050 Hz sintetizado na inicialização (seno inteiro, sem FPU): clique 22 ms em botões, dois tons 70 ms em interruptores. Tocado numa thread em `/dev/dsp` aberto sem bloquear; pulado se o Multimídia estiver tocando ou pausado (ele é dono do dispositivo). |
 | Som ao iniciar | desligado (padrão) / ligado | acorde dó-mi-sol-dó, 0,9 s, quando a interface abre |

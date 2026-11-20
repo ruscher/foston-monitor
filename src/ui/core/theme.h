@@ -47,6 +47,7 @@ typedef struct {
 #define BF_FONT_M    (&bf_font_20)
 #define BF_FONT_L    (&bf_font_28)
 #define BF_FONT_MONO (&bf_mono_16)
+#define BF_FONT_CLOCK (&bf_font_clock_72)   /* só algarismos, ":", "-" e espaço */
 
 /* Símbolos extras incluídos nas fontes (Font Awesome 5) */
 #define BF_SYMBOL_TERMINAL  "\xEF\x84\xA0"  /* F120 */

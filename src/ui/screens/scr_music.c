@@ -677,6 +677,17 @@ static void destroy(void)
     dragging = false;
 }
 
+/* Controle a partir de outras telas (Painel da Início) */
+bool music_has_queue(void) { return n_tracks > 0; }
+
+void music_command(int cmd)
+{
+    if(!n_tracks) return;
+    if(cmd == MUSIC_PREV) prev_click(NULL);
+    else if(cmd == MUSIC_NEXT) next_click(NULL);
+    else toggle_click(NULL);
+}
+
 /* Arquivos: toca a pasta de `path` a partir dele e abre o Multimídia */
 void music_play_file(const char *path)
 {

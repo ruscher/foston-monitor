@@ -32,6 +32,8 @@ void settings_defaults(bf_settings_t *s)
     s->dst = false;
     s->auto_time = true;
     snprintf(s->ntp, sizeof s->ntp, "%s", BF_NTP_DEFAULT);
+    s->home_mode = BF_HOME_GRID;
+    s->home_apps = BF_HOME_APPS_DEFAULT;
     s->backlight = 80;
     s->volume = 60;
     s->book_font = 1;
@@ -98,6 +100,8 @@ void settings_load(void)
         else if(!strcmp(k, "timezone"))  snprintf(cur.tz, sizeof cur.tz, "%.*s", (int)sizeof cur.tz - 1, v);
         else if(!strcmp(k, "dst"))       cur.dst = atoi(v) != 0;
         else if(!strcmp(k, "auto_time")) cur.auto_time = atoi(v) != 0;
+        else if(!strcmp(k, "home_mode")) cur.home_mode = clampi(atoi(v), 0, BF_HOME__N - 1);
+        else if(!strcmp(k, "home_apps")) cur.home_apps = (unsigned)strtoul(v, NULL, 0);
         else if(!strcmp(k, "ntp_servers")) snprintf(cur.ntp, sizeof cur.ntp, "%s", v);
         else if(!strcmp(k, "backlight")) cur.backlight = clampi(atoi(v), 5, 100);
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
@@ -131,6 +135,7 @@ bool settings_save(void)
     fprintf(f, "dim_minutes = %d\n", cur.dim_min);
     fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\nntp_servers = %s\n",
             cur.tz, cur.dst, cur.auto_time, cur.ntp);
+    fprintf(f, "home_mode = %d\nhome_apps = 0x%x\n", cur.home_mode, cur.home_apps);
     fprintf(f, "backlight = %d\n", cur.backlight);
     fprintf(f, "volume = %d\n", cur.volume);
     fprintf(f, "music_repeat = %d\n", cur.music_repeat);

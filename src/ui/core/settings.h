@@ -19,6 +19,9 @@ typedef struct {
     bool dst;           /* horário de verão manual (+1 h) nos fusos sem regra */
     bool auto_time;     /* atualizar a hora automaticamente (NTP) */
     char ntp[160];      /* servidores NTP separados por espaço (host ou host:porta) */
+    int  home_mode;     /* BF_HOME_*: grade, painel ou quiosque */
+    unsigned home_apps; /* bits da tabela de apps da Início (scr_home.c, só cresce no fim):
+                           atalhos do Painel e apps visíveis no Quiosque */
     int  backlight;     /* 5..100 % */
     int  volume;        /* 0..100 % */
     bool show_date;     /* data na barra superior */
@@ -32,6 +35,9 @@ typedef struct {
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
+enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME__N };
+/* Multimídia, Livro, GPS, Arquivos, Monitor, Ajustes */
+#define BF_HOME_APPS_DEFAULT ((1u << 0) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10))
 enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL__N };
 #define BF_DIM_CHOICES { 0, 1, 2, 5, 10 }
 /* o PC pela rede USB (se servir NTP), depois o NTP.br e o pool */
