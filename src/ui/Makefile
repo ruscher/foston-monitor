@@ -49,7 +49,8 @@ else ifeq ($(VARIANT),target)
   CROSS_COMPILE ?=
   CC        := $(CROSS_COMPILE)gcc
   STRIP     := $(CROSS_COMPILE)strip
-  ARCH_FLAGS?= -march=armv6 -mfloat-abi=soft -marm
+  # -mno-unaligned-access: defeito do MT3351 (STRH em endereço ímpar após COW perde bytes)
+  ARCH_FLAGS?= -march=armv6 -mfloat-abi=soft -marm -mno-unaligned-access
   SCREENSHOT?= 0
   DEFS      += -DBIGFOSTON_TARGET -DBIGFOSTON_SCREENSHOT=$(SCREENSHOT) -DNDEBUG
   OPT       := -Os $(ARCH_FLAGS) -ffunction-sections -fdata-sections

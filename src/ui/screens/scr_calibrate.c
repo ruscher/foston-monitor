@@ -1,5 +1,5 @@
 /* scr_calibrate.c — assistente de calibração do toque (5 pontos, tela cheia).
- * Grava $BIGFOSTON_DATA/pointercal e chama touch_calibration_apply() (stub). */
+ * Grava $BIGFOSTON_DATA/pointercal e aplica a calibração ao leitor de toque. */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/touch_calib.h"
@@ -28,9 +28,15 @@ static void ov_event(lv_event_t *e)
     if(!in) return;
     if(c == LV_EVENT_PRESSED) { acc_x = acc_y = acc_n = 0; }
     if(c == LV_EVENT_PRESSED || c == LV_EVENT_PRESSING) {
-        lv_point_t pt;
-        lv_indev_get_point(in, &pt);
-        acc_x += pt.x; acc_y += pt.y; acc_n++;
+        /* no aparelho, a leitura bruta do ADC; no simulador, o ponto do mouse */
+        bf_pt_t raw;
+        if(touch_last_raw(&raw)) { acc_x += raw.x; acc_y += raw.y; }
+        else {
+            lv_point_t pt;
+            lv_indev_get_point(in, &pt);
+            acc_x += pt.x; acc_y += pt.y;
+        }
+        acc_n++;
     }
     else if(c == LV_EVENT_RELEASED && acc_n) {
         got[step].x = acc_x / acc_n;

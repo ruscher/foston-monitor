@@ -64,11 +64,16 @@ bool calib_save(const bf_calib_t *c)
     return fclose(f) == 0;
 }
 
+/* Calibração gravada pelo usuário ($BIGFOSTON_DATA/pointercal) ou, se não houver,
+ * a medida na fábrica do BigFoston e embutida no sistema. */
+#define FACTORY_CAL "/etc/bigfoston/touchcal"
+
 bool calib_load(bf_calib_t *c)
 {
     char p[300];
     data_path(p, sizeof p, "pointercal");
     FILE *f = fopen(p, "r");
+    if(!f) f = fopen(FACTORY_CAL, "r");
     if(!f) return false;
     int v[7];
     bool ok = fscanf(f, "%d %d %d %d %d %d %d", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]) == 7;
@@ -78,13 +83,82 @@ bool calib_load(bf_calib_t *c)
     return true;
 }
 
+#ifdef BIGFOSTON_TARGET
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/input.h>
+#include <unistd.h>
+
+/* Leitor evdev próprio: o lv_evdev do LVGL 9.2 só faz escala linear por eixo,
+ * e o painel do FS-707DC precisa da transformação afim de 5 pontos. */
+static struct {
+    int fd;
+    bool have_cal, down;
+    bf_calib_t cal;
+    int32_t rx, ry;         /* bruto, último valor do evdev */
+    lv_point_t pt;          /* calibrado */
+} ts = { .fd = -1 };
+
+static void ts_map(void)
+{
+    int32_t x = ts.rx, y = ts.ry;
+    if(ts.have_cal) {
+        x = (int32_t)(((int64_t)ts.cal.a * ts.rx + (int64_t)ts.cal.b * ts.ry + ts.cal.c) / ts.cal.s);
+        y = (int32_t)(((int64_t)ts.cal.d * ts.rx + (int64_t)ts.cal.e * ts.ry + ts.cal.f) / ts.cal.s);
+    }
+    else {                  /* sem calibração: escala crua 0..1023 -> tela */
+        x = ts.rx * 800 / 1024;
+        y = ts.ry * 480 / 1024;
+    }
+    ts.pt.x = LV_CLAMP(0, x, 799);
+    ts.pt.y = LV_CLAMP(0, y, 479);
+}
+
+static void ts_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    struct input_event ev;
+    while(read(ts.fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+        if(ev.type == EV_ABS && ev.code == ABS_X) ts.rx = ev.value;
+        else if(ev.type == EV_ABS && ev.code == ABS_Y) ts.ry = ev.value;
+        else if(ev.type == EV_KEY && ev.code == BTN_TOUCH) ts.down = ev.value != 0;
+        else if(ev.type == EV_SYN) ts_map();
+    }
+    data->point = ts.pt;
+    data->state = ts.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+lv_indev_t *touch_create(const char *dev)
+{
+    ts.fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if(ts.fd < 0) return NULL;
+    lv_indev_t *in = lv_indev_create();
+    lv_indev_set_type(in, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(in, ts_read);
+    return in;
+}
+
+bool touch_last_raw(bf_pt_t *out)
+{
+    if(ts.fd < 0) return false;
+    out->x = ts.rx;
+    out->y = ts.ry;
+    return true;
+}
+
 bool touch_calibration_apply(const bf_calib_t *c)
 {
-    /* TODO(firmware): quando existir o driver do touchscreen resistivo do
-     * MT3351, aplicar aqui (ex.: envolver o read_cb do lv_evdev com a
-     * transformação, ou gravar /etc/pointercal para o tslib). */
-    fprintf(stderr, "bigfoston: touch_calibration_apply(a=%d b=%d c=%d d=%d e=%d f=%d s=%d): "
-            "STUB — driver de toque ainda não existe\n", (int)c->a, (int)c->b, (int)c->c,
-            (int)c->d, (int)c->e, (int)c->f, (int)c->s);
-    return false;
+    if(!c->s) return false;
+    ts.cal = *c;
+    ts.have_cal = true;
+    return ts.fd >= 0;
 }
+#else
+bool touch_last_raw(bf_pt_t *out) { (void)out; return false; }
+
+bool touch_calibration_apply(const bf_calib_t *c)
+{
+    (void)c;
+    return false;           /* simulador: não há touchscreen */
+}
+#endif

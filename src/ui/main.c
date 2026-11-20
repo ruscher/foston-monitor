@@ -54,6 +54,19 @@ static void usage(const char *argv0)
 }
 
 #ifdef BIGFOSTON_TARGET
+/* O console de texto do kernel (mt3351-bootcon) desenha na mesma memória que
+ * /dev/fb0: pausa enquanto o shell está na tela, retoma ao sair. */
+#define BOOTCON_PAUSED "/sys/module/mt3351_bootcon/parameters/paused"
+static void bootcon_pause(bool on)
+{
+    int fd = open(BOOTCON_PAUSED, O_WRONLY);
+    if(fd < 0) return;
+    if(write(fd, on ? "1" : "0", 1) < 0) perror(BOOTCON_PAUSED);
+    close(fd);
+}
+static void bootcon_resume(void) { bootcon_pause(false); }
+static void on_term(int sig) { (void)sig; bootcon_resume(); _exit(0); }
+
 #define TEST_BIT(b, a) ((a[(b) / (8 * sizeof(long))] >> ((b) % (8 * sizeof(long)))) & 1)
 /* Procura um /dev/input/eventN com ABS_X/ABS_Y e BTN_TOUCH (touchscreen). */
 static const char *find_touch(char *buf, size_t n)
@@ -112,13 +125,17 @@ int main(int argc, char **argv)
     lv_display_t *disp = NULL;
 #if defined(BIGFOSTON_TARGET)
     const char *fbdev = getenv("BIGFOSTON_FBDEV");
+    bootcon_pause(true);
+    atexit(bootcon_resume);
+    signal(SIGTERM, on_term);
+    signal(SIGINT, on_term);
     disp = lv_linux_fbdev_create();
     lv_linux_fbdev_set_file(disp, fbdev && *fbdev ? fbdev : "/dev/fb0");
     char tbuf[300];
     const char *touch = getenv("BIGFOSTON_TOUCH");
     if(!touch || !*touch) touch = find_touch(tbuf, sizeof tbuf);
     if(touch) {
-        lv_indev_t *in = lv_evdev_create(LV_INDEV_TYPE_POINTER, touch);
+        lv_indev_t *in = touch_create(touch);
         if(!in) fprintf(stderr, "bigfoston: não foi possível abrir o toque %s\n", touch);
         else fprintf(stderr, "bigfoston: toque em %s\n", touch);
     }

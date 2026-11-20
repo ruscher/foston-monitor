@@ -15,8 +15,16 @@ bool calib_compute(const bf_pt_t screen[BF_CALIB_POINTS], const bf_pt_t touch[BF
                    bf_calib_t *out, int *err_px);
 bool calib_save(const bf_calib_t *c);   /* $BIGFOSTON_DATA/pointercal */
 bool calib_load(bf_calib_t *c);
-/* Aplica a calibração ao driver de toque.
- * STUB: o driver do touchscreen do FS-707DC ainda não existe. Retorna false
- * ("pendente") e só registra no log. Ponto de integração para o firmware. */
+/* Aplica a calibração ao leitor de toque (só no alvo; no simulador retorna false). */
 bool touch_calibration_apply(const bf_calib_t *c);
+
+/* Última leitura bruta do touchscreen (ADC 0..1023, como o evdev entrega) do toque
+ * atual; false no simulador. A tela de calibração usa isto, não o ponto já calibrado. */
+bool touch_last_raw(bf_pt_t *out);
+
+#ifdef BIGFOSTON_TARGET
+#include "lvgl.h"
+/* Ponteiro LVGL lendo o evdev do toque e aplicando a calibração afim (pointercal). */
+lv_indev_t *touch_create(const char *dev);
+#endif
 #endif

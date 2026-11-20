@@ -16,5 +16,9 @@ tar -xzf "$TMP/lvgl.tar.gz" -C "$TMP"
 mkdir -p "$DEST"
 cd "$TMP/lvgl-9.2.2"
 cp -r src lvgl.h lv_version.h LICENCE.txt README.md lv_conf_template.h lvgl.mk "$DEST/"
-echo "LVGL v9.2.2 from $URL (sha256 $SHA)" > "$DEST/VERSION"
+# BigFoston fixes to LVGL (patches/*.patch, in order)
+for p in "$HERE"/patches/*.patch; do
+    [ -f "$p" ] && patch -d "$DEST" -p1 --forward < "$p"
+done
+echo "LVGL v9.2.2 from $URL (sha256 $SHA) + patches/" > "$DEST/VERSION"
 echo "LVGL v9.2.2 in $DEST"
