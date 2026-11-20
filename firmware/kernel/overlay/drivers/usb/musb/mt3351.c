@@ -82,6 +82,41 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 	return ret;
 }
 
+/*
+ * FIFO access one byte at a time (works on every MUSB bus width) with a
+ * trace of the first ep0 packets: the PC got a STALL on GET_DESCRIPTOR,
+ * so show what the controller actually read from the SETUP packet.
+ */
+static unsigned int mt3351_ep0_logged;
+
+static void mt3351_trace_fifo(const char *dir, struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
+{
+	if (hw_ep->epnum || mt3351_ep0_logged >= 24)
+		return;
+	mt3351_ep0_logged++;
+	pr_info("mt3351-usb: ep0 %s %u: %*ph\n", dir, len, min_t(int, len, 18), buf);
+}
+
+static void mt3351_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
+{
+	void __iomem *fifo = hw_ep->fifo;
+	u16 i;
+
+	for (i = 0; i < len; i++)
+		dst[i] = readb(fifo);
+	mt3351_trace_fifo("rx", hw_ep, len, dst);
+}
+
+static void mt3351_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *src)
+{
+	void __iomem *fifo = hw_ep->fifo;
+	u16 i;
+
+	for (i = 0; i < len; i++)
+		writeb(src[i], fifo);
+	mt3351_trace_fifo("tx", hw_ep, len, src);
+}
+
 /* 4 KB of FIFO RAM (RAMINFO 0x4a: 2^10 words); ep0 uses the first 64 bytes */
 static struct musb_fifo_cfg mt3351_fifo_cfg[] = {
 	{ .hw_ep_num = 1, .style = FIFO_TX, .maxpacket = 512, },
@@ -148,6 +183,8 @@ static const struct musb_platform_ops mt3351_musb_ops = {
 	.quirks		= MUSB_INDEXED_EP,
 	.fifo_mode	= 2,
 	.init		= mt3351_musb_init,
+	.read_fifo	= mt3351_read_fifo,
+	.write_fifo	= mt3351_write_fifo,
 };
 
 static const struct musb_hdrc_platform_data mt3351_musb_pdata = {
