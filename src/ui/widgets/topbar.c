@@ -4,6 +4,7 @@
 #include "../core/status.h"
 #include "../core/settings.h"
 #include "../core/i18n.h"
+#include "../assets/logo/bf_logo.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +44,7 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_size(bar, BF_SCREEN_W, BF_TOPBAR_H);
     lv_obj_set_style_bg_color(bar, p->surface, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    /* detalhe retrô discreto: filete ciano de 2 px na base */
+    /* filete de 2 px na cor de destaque do tema, na base */
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(bar, 2, 0);
     lv_obj_set_style_border_color(bar, p->accent, 0);
@@ -54,16 +55,12 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(bar, 0, 0);
 
-    /* logotipo "BigFoston" + cursor de bloco ciano (aceno ao terminal) */
+    /* símbolo FOSTONOS + nome */
+    lv_obj_t *mark = lv_image_create(bar);
+    lv_image_set_src(mark, &bf_logo_mark);
+    lv_obj_set_style_margin_right(mark, BF_SP_S, 0);
     bf_label(bar, "Big", BF_FONT_M, p->text);
-    bf_label(bar, "Foston", BF_FONT_M, p->primary);
-    lv_obj_t *cur = lv_obj_create(bar);
-    lv_obj_remove_style_all(cur);
-    lv_obj_set_size(cur, 9, 4);
-    lv_obj_set_style_bg_color(cur, p->accent, 0);
-    lv_obj_set_style_bg_opa(cur, LV_OPA_COVER, 0);
-    lv_obj_set_style_translate_y(cur, 7, 0);
-    lv_obj_set_style_margin_left(cur, 3, 0);
+    bf_label(bar, "Foston", BF_FONT_M, p->dark ? lv_color_lighten(p->primary, LV_OPA_30) : p->primary);
 
     sep_lbl = bf_label(bar, LV_SYMBOL_RIGHT, BF_FONT_S, p->text_dim);
     lv_obj_set_style_margin_hor(sep_lbl, BF_SP_M, 0);
@@ -140,11 +137,13 @@ void topbar_update(void)
     time_t now = time(NULL);
     struct tm tmv;
     localtime_r(&now, &tmv);
-    if(cfg->clock_24h) snprintf(buf, sizeof buf, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
+    bool clock_ok = tmv.tm_year + 1900 >= 2024;   /* sem hora no boot: não mostra 1970 */
+    if(!clock_ok) snprintf(buf, sizeof buf, "--:--");
+    else if(cfg->clock_24h) snprintf(buf, sizeof buf, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
     else snprintf(buf, sizeof buf, "%d:%02d %s", (tmv.tm_hour + 11) % 12 + 1, tmv.tm_min,
                       tmv.tm_hour < 12 ? "AM" : "PM");
     set_text_if(clock_lbl, buf);
-    if(cfg->show_date) {
+    if(cfg->show_date && clock_ok) {
         /* com título de página, só dd/mm (economiza espaço); na tela inicial, com dia da semana */
         bf_lang_t l = i18n_get_lang();
         bool wide = lv_obj_has_flag(title_lbl, LV_OBJ_FLAG_HIDDEN);

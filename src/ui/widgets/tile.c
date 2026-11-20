@@ -10,11 +10,13 @@ lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *
     lv_obj_remove_style_all(t);
     lv_obj_set_size(t, 152, 146);
     lv_obj_set_style_radius(t, BF_RADIUS_L, 0);
+    /* vidro: deixa o papel de parede aparecer de leve */
     lv_obj_set_style_bg_color(t, p->surface, 0);
-    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(t, p->dark ? LV_OPA_70 : LV_OPA_80, 0);
     lv_obj_set_style_border_width(t, 1, 0);
-    lv_obj_set_style_border_color(t, p->border, 0);
-    lv_obj_set_style_border_opa(t, p->dark ? LV_OPA_50 : LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(t, p->dark ? lv_color_white() : p->border, 0);
+    lv_obj_set_style_border_opa(t, p->dark ? LV_OPA_10 : LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(t, p->surface2, LV_STATE_PRESSED);
     lv_obj_set_style_border_color(t, lv_color_hex(color), LV_STATE_PRESSED);
     lv_obj_set_style_border_opa(t, LV_OPA_COVER, LV_STATE_PRESSED);

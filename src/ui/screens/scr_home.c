@@ -1,6 +1,7 @@
 /* scr_home.c — grade de ícones grandes, paginada (deslizar ou setas). */
 #include "screens.h"
 #include "../core/theme.h"
+#include "../core/fx.h"
 #include "../widgets/tile.h"
 #include "../assets/icons/bf_icons.h"
 
@@ -42,7 +43,7 @@ static void sync_page(void)
 {
     const bf_palette_t *p = pal();
     for(int i = 0; i < N_PAGES; i++) {
-        lv_obj_set_width(dots[i], i == page ? 22 : 8);
+        lv_obj_set_width(dots[i], i == page ? 24 : 8);
         lv_obj_set_style_bg_color(dots[i], i == page ? p->accent : p->text_dim, 0);
         lv_obj_set_style_bg_opa(dots[i], i == page ? LV_OPA_COVER : LV_OPA_50, 0);
     }
@@ -74,7 +75,7 @@ static void arrow_click(lv_event_t *e)
     int np = page + d;
     if(np < 0 || np >= N_PAGES) return;
     page = np;
-    lv_tileview_set_tile_by_index(tv, (uint32_t)np, 0, LV_ANIM_ON);
+    lv_tileview_set_tile_by_index(tv, (uint32_t)np, 0, fx_anim());
     sync_page();
 }
 
@@ -112,8 +113,12 @@ static void create(lv_obj_t *parent, int arg)
         lv_obj_set_style_pad_row(grid, 16, 0);
         lv_obj_set_style_pad_column(grid, 16, 0);
         lv_obj_add_flag(grid, LV_OBJ_FLAG_EVENT_BUBBLE);
-        for(int i = pg * PER_PAGE; i < N_APPS && i < (pg + 1) * PER_PAGE; i++)
-            tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click, (void *)&apps[i]);
+        for(int i = pg * PER_PAGE; i < N_APPS && i < (pg + 1) * PER_PAGE; i++) {
+            lv_obj_t *t = tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click,
+                                      (void *)&apps[i]);
+            /* entrada: os ícones da página visível sobem em sequência */
+            if(pg == page) fx_slide_in(t, 0, 24, (uint32_t)(i - pg * PER_PAGE) * 30, 220);
+        }
     }
     lv_obj_add_event_cb(tv, tv_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -131,7 +136,7 @@ static void create(lv_obj_t *parent, int arg)
         dots[i] = lv_obj_create(dotrow);
         lv_obj_remove_style_all(dots[i]);
         lv_obj_set_size(dots[i], 8, 8);
-        lv_obj_set_style_radius(dots[i], 2, 0);  /* quadradinhos: detalhe "pixel" retrô */
+        lv_obj_set_style_radius(dots[i], 4, 0);
         lv_obj_set_style_bg_color(dots[i], p->text_dim, 0);
     }
     lv_tileview_set_tile_by_index(tv, (uint32_t)page, 0, LV_ANIM_OFF);

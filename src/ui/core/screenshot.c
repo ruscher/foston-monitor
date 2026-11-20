@@ -84,14 +84,13 @@ static void go(bf_screen_t s, int arg)
 {
     dialog_close_all();
     nav_go(s, arg);
-    pump(80);
+    pump(250);                      /* transição deslizante de 170 ms */
 }
 
 static void scroll_content_end(void)
 {
     /* rola o primeiro filho rolável do conteúdo até o fim */
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_t *content = lv_obj_get_child(scr, 1);
+    lv_obj_t *content = app_content();
     lv_obj_t *pg = content ? lv_obj_get_child(content, 0) : NULL;
     if(pg) { lv_obj_scroll_to_y(pg, LV_COORD_MAX, LV_ANIM_OFF); lv_obj_scroll_to_y(pg, lv_obj_get_scroll_y(pg) + lv_obj_get_scroll_bottom(pg), LV_ANIM_OFF); }
 }
@@ -123,13 +122,15 @@ int screenshot_run(const char *dir)
     bf_settings_t *s = settings();
     settings_defaults(s);
     app_init(disp);
-    pump(100);
+    pump(600);                      /* entrada animada dos ícones */
 
     shot("01-inicio");
     scr_home_show_page(1);
     shot("02-inicio-pagina-2");
     scr_home_show_page(0);
     go(SCR_SETTINGS, 0);            shot("03-ajustes");
+    go(SCR_APPEARANCE, 0);          shot("03b-aparencia");
+    scroll_content_end();           shot("03c-aparencia-fim");
     scroll_content_end();           shot("04-ajustes-fim");
     go(SCR_SYSINFO, 0);             shot("05-sistema-de-informacao");
     go(SCR_MONITOR, 0);  pump(6500); shot("06-monitor");
@@ -197,18 +198,39 @@ int screenshot_run(const char *dir)
     app_rebuild_now(); pump(50);
     go(SCR_POWER, 0);               shot("27-potencia-real");
     go(SCR_BACKLIGHT, 0);           shot("28-luz-posterior-real");
-    nav_home(); pump(50);           shot("29-inicio-status-real");
+    nav_home(); pump(450);          shot("29-inicio-status-real");
     status_select(&bf_status_sim);
 
-    s->dark = false;
+    s->mode = BF_MODE_LIGHT;
     app_rebuild_now(); pump(50);
-    nav_home(); pump(50);           shot("30-tema-claro-inicio");
+    nav_home(); pump(400);          shot("30-tema-claro-inicio");
     go(SCR_SETTINGS, 0);            shot("31-tema-claro-ajustes");
     go(SCR_SYSINFO, 0);             shot("32-tema-claro-sistema");
-    s->dark = true;
+    go(SCR_APPEARANCE, 0);          shot("32b-tema-claro-aparencia");
+    /* temas de cores, escuro e claro */
+    for(int i = 1; i < theme_preset_count(); i++) {
+        char n[48];
+        s->palette = i;
+        s->mode = BF_MODE_DARK;
+        app_rebuild_now(); pump(50);
+        nav_home(); pump(400);
+        snprintf(n, sizeof n, "38-tema-%d-escuro", i);  shot(n);
+        s->mode = BF_MODE_LIGHT;
+        app_rebuild_now(); pump(450);
+        snprintf(n, sizeof n, "38-tema-%d-claro", i);   shot(n);
+    }
+    s->palette = 0;
+    s->wallpaper = BF_WALL_PLAIN;
+    s->mode = BF_MODE_DARK;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(400);          shot("39-papel-liso");
+    s->wallpaper = BF_WALL_GRADIENT;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(400);          shot("39b-papel-degrade");
+    s->wallpaper = BF_WALL_LOGO;
     s->lang = LANG_EN;
     app_rebuild_now(); pump(50);
-    nav_home(); pump(50);           shot("33-en-inicio");
+    nav_home(); pump(450);           shot("33-en-inicio");
     go(SCR_SETTINGS, 0);            shot("34-en-ajustes");
     s->lang = LANG_ES;
     app_rebuild_now(); pump(50);

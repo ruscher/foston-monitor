@@ -40,6 +40,7 @@ X(S_SET_SYSINFO,   "set.sysinfo",   "Sistema de Informação", "System informati
 X(S_SET_USB,       "set.usb",       "USB", "USB", "USB")
 X(S_SET_FM,        "set.fm",        "FM Transmitir", "FM transmitter", "Transmisor FM")
 X(S_SET_SSH,       "set.ssh",       "SSH", "SSH", "SSH")
+X(S_SET_APPEARANCE, "set.appearance", "Aparência", "Appearance", "Apariencia")
 X(S_SET_ADVANCED,  "set.advanced",  "Avançado", "Advanced", "Avanzado")
 
 /* ---- Itens de Ajustes: subtítulo ---- */
@@ -56,7 +57,8 @@ X(S_SUB_SYSINFO,   "sub.sysinfo",   "Hardware e software", "Hardware and softwar
 X(S_SUB_USB,       "sub.usb",       "Modo de conexão USB", "USB connection mode", "Modo de conexión USB")
 X(S_SUB_FM,        "sub.fm",        "Transmissor de rádio", "Radio transmitter", "Transmisor de radio")
 X(S_SUB_SSH,       "sub.ssh",       "Acesso remoto", "Remote access", "Acceso remoto")
-X(S_SUB_ADVANCED,  "sub.advanced",  "Tema e opções", "Theme and options", "Tema y opciones")
+X(S_SUB_APPEARANCE, "sub.appearance", "Temas, modo e efeitos", "Themes, mode and effects", "Temas, modo y efectos")
+X(S_SUB_ADVANCED,  "sub.advanced",  "Dados e integração", "Data and integration", "Datos e integración")
 
 /* ---- Comuns ---- */
 X(S_UNAVAILABLE,       "common.unavailable", "Não disponível neste hardware ainda", "Not available on this hardware yet", "No disponible en este hardware todavía")
@@ -250,9 +252,38 @@ X(S_SSH_STATE,  "ssh.state", "Servidor SSH", "SSH server", "Servidor SSH")
 X(S_SSH_TOGGLE, "ssh.toggle", "Ligar/desligar o servidor pelo shell: em desenvolvimento (exige serviço com privilégios).", "Starting/stopping the server from the shell: in development (needs a privileged service).", "Encender/apagar el servidor desde el shell: en desarrollo (requiere servicio con privilegios).")
 
 /* ---- Avançado ---- */
-X(S_ADV_THEME,   "adv.theme", "Tema escuro", "Dark theme", "Tema oscuro")
 X(S_ADV_DATADIR, "adv.datadir", "Pasta de dados", "Data folder", "Carpeta de datos")
 X(S_ADV_STATUS,  "adv.status", "Fonte de status", "Status source", "Fuente de estado")
 X(S_ADV_APPS,    "adv.apps", "Pastas de apps", "App folders", "Carpetas de apps")
 X(S_ADV_REAL,    "adv.real", "sysfs/proc (real)", "sysfs/proc (real)", "sysfs/proc (real)")
 X(S_ADV_SIM,     "adv.sim", "simulada", "simulated", "simulada")
+
+/* ---- Aparência ---- */
+X(S_AP_MODE,       "ap.mode", "Modo", "Mode", "Modo")
+X(S_AP_DARK,       "ap.dark", "Escuro", "Dark", "Oscuro")
+X(S_AP_LIGHT,      "ap.light", "Claro", "Light", "Claro")
+X(S_AP_AUTO,       "ap.auto", "Automático", "Automatic", "Automático")
+X(S_AP_AUTO_HINT,  "ap.auto_hint", "Automático: claro das 7h às 19h, escuro à noite", "Automatic: light from 7 am to 7 pm, dark at night", "Automático: claro de 7 a 19 h, oscuro de noche")
+X(S_AP_AUTO_NOCLOCK, "ap.auto_noclock", "Relógio não acertado: fica no escuro até acertar a hora", "Clock not set: stays dark until the time is set", "Reloj sin ajustar: queda oscuro hasta ajustar la hora")
+X(S_AP_COLORS,     "ap.colors", "Tema de cores", "Color theme", "Tema de colores")
+X(S_AP_WALL,       "ap.wall", "Papel de parede", "Wallpaper", "Fondo de pantalla")
+X(S_AP_WALL_PLAIN, "ap.wall_plain", "Liso", "Plain", "Liso")
+X(S_AP_WALL_GRAD,  "ap.wall_grad", "Degradê", "Gradient", "Degradado")
+X(S_AP_WALL_LOGO,  "ap.wall_logo", "Logotipo", "Logo", "Logotipo")
+X(S_AP_EFFECTS,    "ap.effects", "Efeitos", "Effects", "Efectos")
+X(S_AP_ANIM,       "ap.anim", "Animações", "Animations", "Animaciones")
+X(S_AP_SOUNDS,     "ap.sounds", "Sons de toque", "Touch sounds", "Sonidos táctiles")
+X(S_AP_BOOT_SOUND, "ap.boot_sound", "Som ao iniciar", "Startup sound", "Sonido al iniciar")
+X(S_AP_NO_AUDIO,   "ap.no_audio", "Sem saída de áudio (/dev/dsp) neste sistema", "No audio output (/dev/dsp) on this system", "Sin salida de audio (/dev/dsp) en este sistema")
+X(S_AP_DIM,        "ap.dim", "Escurecer a tela sem uso", "Dim the screen when idle", "Atenuar la pantalla sin uso")
+X(S_AP_NEVER,      "ap.never", "Nunca", "Never", "Nunca")
+X(S_AP_DIM_HINT,   "ap.dim_hint", "Um toque acende a tela de novo (sem acionar nada)", "A touch lights the screen again (without pressing anything)", "Un toque enciende la pantalla de nuevo (sin pulsar nada)")
+X(S_AP_VOLATILE,   "ap.volatile", "Estes ajustes valem até desligar: a pasta de dados está na memória RAM (a gravação no cartão SD ainda não foi liberada).", "These settings last until power-off: the data folder is in RAM (writing to the SD card is not enabled yet).", "Estos ajustes duran hasta apagar: la carpeta de datos está en la RAM (la escritura en la tarjeta SD aún no está habilitada).")
+
+/* ---- Temas de cores ---- */
+X(S_PAL_FOSTON,    "pal.foston", "FOSTON", "FOSTON", "FOSTON")
+X(S_PAL_CLASSIC,   "pal.classic", "Clássico", "Classic", "Clásico")
+X(S_PAL_EMERALD,   "pal.emerald", "Esmeralda", "Emerald", "Esmeralda")
+X(S_PAL_SUNSET,    "pal.sunset", "Pôr do sol", "Sunset", "Atardecer")
+X(S_PAL_VIOLET,    "pal.violet", "Violeta", "Violet", "Violeta")
+X(S_PAL_GRAPHITE,  "pal.graphite", "Grafite", "Graphite", "Grafito")

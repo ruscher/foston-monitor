@@ -1,39 +1,79 @@
-/* theme.c — paletas escura/clara e estilos compartilhados. */
+/* theme.c — paletas (modo escuro/claro x tema de cores), papel de parede e
+ * estilos compartilhados. */
 #include "theme.h"
+#include "settings.h"
+#include "wallpaper.h"
+#include <time.h>
 
 static bf_palette_t P;
 
 lv_style_t bf_st_screen, bf_st_card, bf_st_btn, bf_st_btn_pr, bf_st_btn_primary,
            bf_st_btn_danger, bf_st_plain;
 static bool styles_inited;
+static lv_image_dsc_t wall;
+static bool wall_ok;
 
+/* O primeiro é o padrão: as cores do logotipo FOSTONOS. */
+static const bf_preset_t presets[] = {
+    { S_PAL_FOSTON,   0x6c5ce7, 0x26dda8, 0x0a226a, 0x1d3a9e, 34 },
+    { S_PAL_CLASSIC,  BF_BLUE,  BF_CYAN,  0x1b2433, 0x23406a, 10 },
+    { S_PAL_EMERALD,  0x1f9d6b, 0x6bed48, 0x0d3b2c, 0x13704f, 26 },
+    { S_PAL_SUNSET,   0xe5484d, 0xff9a2e, 0x3d1424, 0x8a2a3a, 24 },
+    { S_PAL_VIOLET,   0x8b5cf6, 0xe879f9, 0x2a1450, 0x55309a, 28 },
+    { S_PAL_GRAPHITE, 0x5f6b7e, 0xa3adbd, 0x1f2329, 0x3a414d, 6 },
+};
+#define N_PRESETS (int)(sizeof presets / sizeof presets[0])
+
+int theme_preset_count(void) { return N_PRESETS; }
+const bf_preset_t *theme_preset(int i) { return &presets[i >= 0 && i < N_PRESETS ? i : 0]; }
 const bf_palette_t *pal(void) { return &P; }
+const lv_image_dsc_t *theme_wallpaper(void) { return wall_ok ? &wall : NULL; }
 
-static void set_palette(bool dark)
+bool theme_dark_now(void)
+{
+    const bf_settings_t *s = settings();
+    if(s->mode != BF_MODE_AUTO) return s->mode != BF_MODE_LIGHT;
+    time_t n = time(NULL);
+    struct tm tmv;
+    if(!localtime_r(&n, &tmv) || tmv.tm_year + 1900 < 2024) return true;  /* relógio não acertado */
+    return tmv.tm_hour < 7 || tmv.tm_hour >= 19;
+}
+
+static lv_color_t hex_mix(uint32_t a, uint32_t b, int pct)   /* pct% de b sobre a */
+{
+    return lv_color_mix(lv_color_hex(b), lv_color_hex(a), (uint8_t)(pct * 255 / 100));
+}
+
+static void set_palette(bool dark, const bf_preset_t *pr)
 {
     P.dark = dark;
-    P.primary = lv_color_hex(BF_BLUE);
+    P.primary = lv_color_hex(pr->primary);
     P.success = lv_color_hex(BF_GREEN);
-    P.warning = dark ? lv_color_hex(BF_AMBER) : lv_color_hex(0xb3650b); /* âmbar escuro no tema claro */
     P.danger  = lv_color_hex(BF_RED);
     if(dark) {
-        P.bg       = lv_color_hex(0x1b1f27);
-        P.surface  = lv_color_hex(0x232833);
-        P.surface2 = lv_color_hex(0x2d3341);
-        P.border   = lv_color_hex(0x3a4152);
-        P.text     = lv_color_hex(0xe9edf4);
-        P.text_dim = lv_color_hex(0x98a2b3);
-        P.accent   = lv_color_hex(BF_CYAN);
+        int t = pr->tint_pct;
+        P.bg       = hex_mix(0x15181e, pr->tint, t);
+        P.surface  = hex_mix(0x1f232b, pr->tint, t);
+        P.surface2 = hex_mix(0x2a2f39, pr->tint, t);
+        P.border   = hex_mix(0x3a4050, pr->tint, t);
+        P.text     = lv_color_hex(0xeef1f6);
+        P.text_dim = hex_mix(0x98a2b3, pr->accent, 10);
+        P.accent   = lv_color_hex(pr->accent);
+        P.warning  = lv_color_hex(BF_AMBER);
     }
     else {
-        P.bg       = lv_color_hex(0xeef1f6);
+        int t = pr->tint_pct / 4 + 3;
+        P.bg       = hex_mix(0xeef1f6, pr->tint, t);
         P.surface  = lv_color_hex(0xffffff);
-        P.surface2 = lv_color_hex(0xe2e7ef);
-        P.border   = lv_color_hex(0xcfd6e2);
+        P.surface2 = hex_mix(0xe2e7ef, pr->tint, t);
+        P.border   = hex_mix(0xcfd6e2, pr->tint, t);
         P.text     = lv_color_hex(0x1b1f27);
         P.text_dim = lv_color_hex(0x586274);
-        P.accent   = lv_color_hex(0x1597ad); /* ciano escurecido p/ contraste em fundo claro */
+        /* destaque escurecido p/ contraste em fundo claro */
+        P.accent   = lv_color_darken(lv_color_hex(pr->accent), LV_OPA_40);
+        P.primary  = lv_color_darken(lv_color_hex(pr->primary), LV_OPA_10);
         P.success  = lv_color_hex(0x1f9d5f);
+        P.warning  = lv_color_hex(0xb3650b);
     }
 }
 
@@ -43,9 +83,14 @@ static void style_reinit(lv_style_t *s)
     lv_style_init(s);
 }
 
-void theme_init(lv_display_t *disp, bool dark)
+void theme_init(lv_display_t *disp)
 {
-    set_palette(dark);
+    const bf_settings_t *cfg = settings();
+    const bf_preset_t *pr = theme_preset(cfg->palette);
+    bool dark = theme_dark_now();
+    set_palette(dark, pr);
+    wall_ok = cfg->wallpaper != BF_WALL_PLAIN &&
+              wallpaper_build(&wall, &P, lv_color_hex(pr->glow), cfg->wallpaper == BF_WALL_LOGO);
     lv_theme_t *th = lv_theme_default_init(disp, P.primary, P.accent, dark, BF_FONT_M);
     lv_display_set_theme(disp, th);
 

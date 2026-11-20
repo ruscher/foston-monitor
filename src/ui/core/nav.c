@@ -2,6 +2,7 @@
 #include "../screens/screens.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
+#include "fx.h"
 #include <string.h>
 
 #define STACK_MAX   16
@@ -17,7 +18,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_SSH] = &scr_ssh_def,             [SCR_ADVANCED] = &scr_advanced_def,
     [SCR_FEATURE] = &scr_feature_def,     [SCR_MUSIC] = &scr_music_def,
     [SCR_FILES] = &scr_files_def,         [SCR_TERM] = &scr_term_def,
-    [SCR_BOOK] = &scr_book_def,
+    [SCR_BOOK] = &scr_book_def,           [SCR_APPEARANCE] = &scr_appearance_def,
 };
 
 static lv_obj_t *content;
@@ -76,6 +77,10 @@ void nav_show_now(void)
     bf_nav_entry_t e = stack[depth - 1];
     shown = defs[e.scr];
     shown->create(content, e.arg);
+    /* transição: a tela nova entra deslizando (a Início anima os próprios ícones) */
+    lv_anim_delete(content, NULL);
+    lv_obj_set_style_translate_x(content, 0, 0);
+    if(e.scr != SCR_HOME) fx_slide_in(content, returning ? -32 : 32, 0, 0, 170);
     topbar_set_title(e.scr == SCR_HOME ? NULL : nav_title(e.scr, e.arg));
     topbar_update();
     bottombar_set_active(e.scr);

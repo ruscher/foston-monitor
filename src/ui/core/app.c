@@ -6,6 +6,7 @@
 #include "theme.h"
 #include "settings.h"
 #include "status.h"
+#include "fx.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
@@ -19,8 +20,16 @@ static lv_obj_t *content;
 static lv_timer_t *tick;
 
 lv_display_t *app_display(void) { return disp; }
+lv_obj_t *app_content(void) { return content; }
 
-static void tick_cb(lv_timer_t *t) { (void)t; topbar_update(); }
+static void tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    topbar_update();
+    fx_tick();
+    /* modo Automático: troca claro/escuro quando passa das 7h/19h */
+    if(theme_dark_now() != pal()->dark) app_rebuild();
+}
 
 static void build(void)
 {
@@ -29,6 +38,15 @@ static void build(void)
     lv_obj_remove_style_all(scr);
     lv_obj_add_style(scr, &bf_st_screen, 0);
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* papel de parede fixo atrás do conteúdo (as transições deslizam só o conteúdo) */
+    const lv_image_dsc_t *wp = theme_wallpaper();
+    if(wp) {
+        lv_obj_t *wall = lv_image_create(scr);
+        lv_image_set_src(wall, wp);
+        lv_obj_set_pos(wall, 0, BF_TOPBAR_H);
+        lv_obj_remove_flag(wall, LV_OBJ_FLAG_CLICKABLE);
+    }
 
     lv_obj_t *top = topbar_create(scr);
     lv_obj_set_pos(top, 0, 0);
@@ -55,11 +73,13 @@ void app_init(lv_display_t *d)
     char cat[300];
     snprintf(cat, sizeof cat, "%s/lang/%s.txt", data_dir(), i18n_lang_code(settings()->lang));
     i18n_load_catalog(cat);
-    theme_init(disp, settings()->dark);
+    theme_init(disp);
     build();
     nav_init(content);
     nav_show_now();
     tick = lv_timer_create(tick_cb, 1000, NULL);
+    fx_init();
+    fx_sound(FX_STARTUP);
 }
 
 void app_rebuild_now(void)
@@ -70,7 +90,7 @@ void app_rebuild_now(void)
     char cat[300];
     snprintf(cat, sizeof cat, "%s/lang/%s.txt", data_dir(), i18n_lang_code(settings()->lang));
     i18n_load_catalog(cat);
-    theme_init(disp, settings()->dark);
+    theme_init(disp);
     build();
     nav_set_content(content);
     nav_show_now();

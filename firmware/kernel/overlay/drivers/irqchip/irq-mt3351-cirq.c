@@ -138,6 +138,8 @@ static void cirq_select_identity(void)
 }
 
 /* drivers/video/fbdev/mt3351-bootcon.c overrides this when CONFIG_MT3351_BOOTCON=y */
+void __init mt3351_earlyfb_register(void);
+
 void __init __weak mt3351_earlyfb_register(void)
 {
 }

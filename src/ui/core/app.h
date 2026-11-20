@@ -10,4 +10,5 @@ void app_rebuild_now(void);
 void app_apply_hw_settings(void);  /* brilho/volume salvos -> hardware */
 void app_power(bool reboot);
 lv_display_t *app_display(void);
+lv_obj_t    *app_content(void);   /* área de conteúdo (800x360) */
 #endif

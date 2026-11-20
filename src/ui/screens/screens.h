@@ -7,7 +7,8 @@
 extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, scr_run_def,
        scr_monitor_def, scr_calibrate_def, scr_backlight_def, scr_volume_def,
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
-       scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def;
+       scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def,
+       scr_appearance_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {

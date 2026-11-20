@@ -3,6 +3,7 @@
 #define BF_THEME_H
 
 #include "lvgl.h"
+#include "i18n.h"
 #include <stdbool.h>
 
 /* Geometria (px). Alvos de toque nunca menores que BF_TOUCH_MIN. */
@@ -36,8 +37,8 @@ typedef struct {
     lv_color_t border;
     lv_color_t text;
     lv_color_t text_dim;
-    lv_color_t primary;   /* azul BigLinux */
-    lv_color_t accent;    /* ciano */
+    lv_color_t primary;   /* cor principal do tema de cores */
+    lv_color_t accent;    /* cor de destaque */
     lv_color_t success, warning, danger;
 } bf_palette_t;
 
@@ -61,6 +62,10 @@ typedef struct {
 #define BF_SYMBOL_SEARCH    "\xEF\x80\x82"  /* F002 */
 #define BF_SYMBOL_EXPAND    "\xEF\x81\xA5"  /* F065 */
 #define BF_SYMBOL_BOOKMARK  "\xEF\x80\xAE"  /* F02E */
+#define BF_SYMBOL_PALETTE   "\xEF\x94\xBF"  /* F53F */
+#define BF_SYMBOL_ADJUST    "\xEF\x81\x82"  /* F042 */
+#define BF_SYMBOL_IMAGE     "\xEF\x80\xBE"  /* F03E */
+#define BF_SYMBOL_MAGIC     "\xEF\x83\x90"  /* F0D0 */
 #define BF_SYMBOL_TOWER     "\xEF\x94\x99"  /* F519 */
 #define BF_SYMBOL_KEY       "\xEF\x82\x84"  /* F084 */
 #define BF_SYMBOL_LANGUAGE  "\xEF\x86\xAB"  /* F1AB */
@@ -71,8 +76,24 @@ typedef struct {
 #define BF_SYMBOL_STAR      "\xEF\x80\x85"  /* F005 */
 #define BF_SYMBOL_HDD       "\xEF\x82\xA0"  /* F0A0 */
 
-void theme_init(lv_display_t *disp, bool dark);
+/* Temas de cores (Ajustes > Aparência). Os neutros (fundo, cartões, bordas)
+ * levam um toque de "tint"; "glow" é a luz do degradê do papel de parede. */
+typedef struct {
+    bf_str_t name;
+    uint32_t primary, accent, tint, glow;
+    uint8_t  tint_pct;    /* quanto do tint entra nos neutros do modo escuro */
+} bf_preset_t;
+int                theme_preset_count(void);
+const bf_preset_t *theme_preset(int i);
+
+/* Aplica os ajustes atuais (modo, tema de cores, papel de parede). */
+void theme_init(lv_display_t *disp);
 const bf_palette_t *pal(void);
+/* Modo escuro em vigor agora: o ajuste, ou no Automático o relógio
+ * (claro das 7h às 19h; escuro se o relógio não for confiável). */
+bool theme_dark_now(void);
+/* Papel de parede da área de conteúdo (800x360, RGB565) ou NULL se liso. */
+const lv_image_dsc_t *theme_wallpaper(void);
 
 /* Estilos compartilhados (recriados a cada troca de tema) */
 extern lv_style_t bf_st_screen;   /* fundo da tela */

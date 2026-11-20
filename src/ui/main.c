@@ -48,7 +48,7 @@ static void usage(const char *argv0)
            "  --real-status      usa sysfs/proc reais para a barra de status\n"
            "  --sim-status       usa valores simulados (padrão do simulador)\n"
            "  --lang pt|en|es    língua (não salva)\n"
-           "  --theme dark|light tema (não salvo)\n"
+           "  --theme dark|light|auto  modo (não salvo)\n"
            "  --data DIR         pasta de dados (= BIGFOSTON_DATA)\n"
            "  --help\n", argv0);
 }
@@ -114,7 +114,8 @@ int main(int argc, char **argv)
     data_dir_init(data);
     settings_load();
     if(lang) settings()->lang = i18n_lang_from_code(lang);
-    if(theme) settings()->dark = strcmp(theme, "light") != 0;
+    if(theme) settings()->mode = !strcmp(theme, "light") ? BF_MODE_LIGHT :
+                                 !strcmp(theme, "auto") ? BF_MODE_AUTO : BF_MODE_DARK;
     status_select(prov);
 
     lv_init();

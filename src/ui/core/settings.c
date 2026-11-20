@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 
 #ifdef BIGFOSTON_TARGET
 #define DEFAULT_DATA_DIR "/data/bigfoston"
@@ -19,7 +20,13 @@ bf_settings_t *settings(void) { return &cur; }
 void settings_defaults(bf_settings_t *s)
 {
     s->lang = LANG_PT;
-    s->dark = true;
+    s->mode = BF_MODE_DARK;
+    s->palette = 0;
+    s->wallpaper = BF_WALL_LOGO;
+    s->anim = true;
+    s->sounds = true;
+    s->boot_sound = false;
+    s->dim_min = 0;
     s->backlight = 80;
     s->volume = 60;
     s->book_font = 1;
@@ -48,6 +55,14 @@ void data_dir_init(const char *override)
 
 const char *data_dir(void) { return ddir; }
 
+bool data_dir_volatile(void)
+{
+    struct statfs st;
+    if(statfs(ddir, &st)) return false;
+    /* RAMFS_MAGIC (initramfs) e TMPFS_MAGIC */
+    return (unsigned long)st.f_type == 0x858458f6UL || (unsigned long)st.f_type == 0x01021994UL;
+}
+
 void data_path(char *out, size_t n, const char *name)
 {
     snprintf(out, n, "%s/%s", ddir, name);
@@ -67,7 +82,14 @@ void settings_load(void)
         if(line[0] == '#') continue;
         if(sscanf(line, " %63[^= ] = %127[^\n]", k, v) != 2) continue;
         if(!strcmp(k, "language"))       cur.lang = i18n_lang_from_code(v);
-        else if(!strcmp(k, "theme"))     cur.dark = strcmp(v, "light") != 0;
+        else if(!strcmp(k, "theme"))     cur.mode = !strcmp(v, "light") ? BF_MODE_LIGHT :
+                                                !strcmp(v, "auto") ? BF_MODE_AUTO : BF_MODE_DARK;
+        else if(!strcmp(k, "palette"))   cur.palette = clampi(atoi(v), 0, 63);
+        else if(!strcmp(k, "wallpaper")) cur.wallpaper = clampi(atoi(v), 0, BF_WALL__N - 1);
+        else if(!strcmp(k, "animations")) cur.anim = atoi(v) != 0;
+        else if(!strcmp(k, "sounds"))    cur.sounds = atoi(v) != 0;
+        else if(!strcmp(k, "boot_sound")) cur.boot_sound = atoi(v) != 0;
+        else if(!strcmp(k, "dim_minutes")) cur.dim_min = clampi(atoi(v), 0, 60);
         else if(!strcmp(k, "backlight")) cur.backlight = clampi(atoi(v), 5, 100);
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
         else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
@@ -94,7 +116,10 @@ bool settings_save(void)
     }
     fprintf(f, "# BigFoston shell — ajustes (gerado automaticamente)\n");
     fprintf(f, "language = %s\n", i18n_lang_code(cur.lang));
-    fprintf(f, "theme = %s\n", cur.dark ? "dark" : "light");
+    fprintf(f, "theme = %s\n", cur.mode == BF_MODE_LIGHT ? "light" : cur.mode == BF_MODE_AUTO ? "auto" : "dark");
+    fprintf(f, "palette = %d\nwallpaper = %d\n", cur.palette, cur.wallpaper);
+    fprintf(f, "animations = %d\nsounds = %d\nboot_sound = %d\n", cur.anim, cur.sounds, cur.boot_sound);
+    fprintf(f, "dim_minutes = %d\n", cur.dim_min);
     fprintf(f, "backlight = %d\n", cur.backlight);
     fprintf(f, "volume = %d\n", cur.volume);
     fprintf(f, "music_repeat = %d\n", cur.music_repeat);

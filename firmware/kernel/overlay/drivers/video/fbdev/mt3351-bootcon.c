@@ -81,9 +81,10 @@ static void draw_progress(void)
 
 	if (!fb || !splash_on || paused)
 		return;
+	/* degradê do logotipo na parte cheia; as pontas arredondadas mantêm o fundo */
 	for (y = 0; y < SPLASH_BAR_H; y++)
-		for (x = 0; x < SPLASH_BAR_W; x++)
-			writew_relaxed(x < fill ? SPLASH_FG : SPLASH_TRACK,
+		for (x = splash_round[y]; x < SPLASH_BAR_W - splash_round[y]; x++)
+			writew_relaxed(x < fill ? splash_bar[x] : SPLASH_TRACK,
 				       fb + (SPLASH_BAR_Y + y) * fb_stride + SPLASH_BAR_X + x);
 }
 
@@ -207,17 +208,64 @@ static struct notifier_block panic_nb = {
 	.priority = INT_MAX,
 };
 
-static void __init draw_splash(void)
+/* canal 8 bits -> n bits com pontilhado ordenado (limiar 0..15 de 16) */
+static inline unsigned int __init dither(unsigned int c88, unsigned int bits, unsigned int thr)
 {
-	unsigned int i, n = 0;
+	unsigned int max = (1u << bits) - 1;
+	unsigned int v = (c88 * max / 255 + thr * 16) >> 8;
 
-	for (i = 0; i + 1 < ARRAY_SIZE(splash_rle) && n < fb_w * fb_h; i += 2) {
-		unsigned int k;
+	return min(v, max);
+}
 
-		for (k = 0; k < splash_rle[i] && n < fb_w * fb_h; k++, n++)
-			writew_relaxed(splash_rle[i + 1], fb + (n / fb_w) * fb_stride + n % fb_w);
+/* Fundo: degradê radial do ícone (t = d² * K >> 24), em RGB565 com Bayer 4x4 */
+static void __init draw_splash_bg(void)
+{
+	static const u8 bayer[4][4] __initconst = {
+		{ 0, 8, 2, 10 }, { 12, 4, 14, 6 }, { 3, 11, 1, 9 }, { 15, 7, 13, 5 } };
+	unsigned int x, y;
+
+	for (y = 0; y < SPLASH_H; y++) {
+		int dy = (int)y - SPLASH_CY;
+
+		for (x = 0; x < SPLASH_W; x++) {
+			int dx = (int)x - SPLASH_CX;
+			u32 t = min_t(u32, ((u32)(dx * dx + dy * dy) * SPLASH_K) >> 24, 256);
+			unsigned int thr = bayer[y & 3][x & 3];
+			unsigned int r = SPLASH_CR * 256 + (SPLASH_ER - SPLASH_CR) * (int)t;
+			unsigned int g = SPLASH_CG * 256 + (SPLASH_EG - SPLASH_CG) * (int)t;
+			unsigned int b = SPLASH_CB * 256 + (SPLASH_EB - SPLASH_CB) * (int)t;
+
+			writew_relaxed(dither(r, 5, thr) << 11 | dither(g, 6, thr) << 5 | dither(b, 5, thr),
+				       fb + y * fb_stride + x);
+		}
 	}
 }
+
+/* Logotipo e legenda por cima: pula / repete / literais (ver mt3351-splash.h) */
+static void __init draw_splash(void)
+{
+	unsigned int i = 0, n = 0, total = SPLASH_W * SPLASH_H;
+
+	draw_splash_bg();
+	while (i < ARRAY_SIZE(splash_rle) && n < total) {
+		unsigned int w = splash_rle[i++], k, cnt = w & 0x3fff;
+
+		if (!(w & 0xc000)) {
+			n += cnt;
+		} else if (w & 0x8000) {
+			for (k = 0; k < (w & 0x7fff) && i < ARRAY_SIZE(splash_rle) && n < total; k++, n++)
+				writew_relaxed(splash_rle[i++], fb + (n / SPLASH_W) * fb_stride + n % SPLASH_W);
+		} else if (i < ARRAY_SIZE(splash_rle)) {
+			u16 c = splash_rle[i++];
+
+			for (k = 0; k < cnt && n < total; k++, n++)
+				writew_relaxed(c, fb + (n / SPLASH_W) * fb_stride + n % SPLASH_W);
+		}
+	}
+}
+
+/* called by the CIRQ driver (irq-mt3351-cirq.c), which has a weak default */
+void __init mt3351_earlyfb_register(void);
 
 void __init mt3351_earlyfb_register(void)
 {
