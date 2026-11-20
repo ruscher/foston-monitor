@@ -68,4 +68,11 @@ add_before "$T/drivers/mmc/host/Kconfig" 'config MMC_MTK' 'config MMC_MT3351
 	  SD card slot of the MediaTek MT3351 (FOSTON FS-707DC).
 '
 add "$T/drivers/mmc/host/Makefile" 'obj-$(CONFIG_MMC_MT3351)		+= mt3351-msdc.o'
+add_before "$T/drivers/video/backlight/Kconfig" 'config BACKLIGHT_PWM' 'config BACKLIGHT_MT3351
+	tristate "FOSTON FS-707DC (MT3351 PMU) backlight"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	help
+	  LCD backlight level register of the FOSTON FS-707DC.
+'
+add "$T/drivers/video/backlight/Makefile" 'obj-$(CONFIG_BACKLIGHT_MT3351)	+= mt3351_bl.o'
 echo "BigFoston MT3351 support applied to $T"

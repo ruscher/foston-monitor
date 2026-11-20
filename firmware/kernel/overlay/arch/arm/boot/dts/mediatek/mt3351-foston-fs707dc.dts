@@ -120,6 +120,16 @@
 			bus-width = <4>;
 		};
 
+		/*
+		 * Backlight level, one word of the PMU (CE buses.dll BKL: 0..19 at
+		 * 0x80061300 + 0x08). Only this word is mapped: the rest of the PMU
+		 * holds SD power, charger and suspend controls.
+		 */
+		backlight@80061308 {
+			compatible = "foston,fs707dc-backlight";
+			reg = <0x80061308 0x4>;
+		};
+
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";
