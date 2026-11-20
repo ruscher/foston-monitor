@@ -54,7 +54,9 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | GPS | NÃO IMPLEMENTADO | MT3328 *host-based*: a posição é calculada pela biblioteca proprietária MNL do `gps.dll` (UART1, 921600 baud). Caminho viável: carregar o `gps.dll` do próprio aparelho num processo Linux com uma camada de API do CE (estimativa 4–6 semanas); primeiro passo é o driver de UART |
 | Relógio | PARCIAL | sem driver de RTC; a hora do PC vai no DTB (`bigfoston,boot-epoch`) e o `S05clock` acerta no boot |
 | USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
-| UARTs | NÃO IMPLEMENTADO | 16550 MTK em `0x80026000…0x80029000`, IRQ 3–6; clock desconhecido |
+| UARTs | **FUNCIONANDO** (recepção testada) | `8250_mt3351`: ttyS0..3, 16550A a 29,25 MHz; para o DMA que o CE deixa ligado (causa da escrita em 0x7E8000); GPS recebido em ttyS0 — [uart.md](uart.md) |
+| MP3 | **FUNCIONANDO** | `mpg123` (decodificador `arm_nofpu`) pela emulação OSS: MP3 de 128 kbps a ~11 % da CPU |
+| Bateria | LEITURA MANUAL | tensão pelo ADC auxiliar (`0x80034000`, canal `+0x28`, mV = valor × 5600/1023), carregador em `0x80061420` bit 3, carga bit 14; medido 4,0 V (100 %), cheia e sem carregar. **A carga no CE é feita por software a cada 10 s; no Linux a bateria pode não carregar** |
 | Luz de fundo (PWM) | NÃO IMPLEMENTADO | PWM em `0x8002B000` |
 
 ## Problemas encontrados e corrigidos

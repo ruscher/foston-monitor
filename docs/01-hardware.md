@@ -22,7 +22,7 @@ Unidade analisada: ID `Nav-61`, plataforma `APOLLO`, OEM `MTK`.
 | Framebuffer | **PA `0x03E00030`**, stride 1600 B | comparação pixel a pixel tela × RAM (383 929/384 000 iguais) |
 | Toque | resistivo, 1 ponto, driver `touch.dll` | registro `HARDWARE\DEVICEMAP\TOUCH` |
 | TV digital | **Siano SMS1xxx "Nova B0" (ISDB-T) via SPI** | `SianoSPI.dll`, `SianoTunerCe5_r.dll`, firmware `isdbt_nova_12mhz_b0.inp` |
-| Bluetooth | chip **CSR BlueCore** via UART (pilha ANW, A2DP, viva-voz) | `bthcsr.dll`, `mtk_bthuart.dll`, `hciext.dll`, `BtA2dpSnd` |
+| Bluetooth | chip Bluetooth na UART2 (`mtk_bthuart.dll`, MediaTek; antes anotado como CSR BlueCore por causa do `bthcsr.dll`) (pilha ANW, A2DP, viva-voz) | `bthcsr.dll`, `mtk_bthuart.dll`, `hciext.dll`, `BtA2dpSnd` |
 | GPS | GPS MediaTek do MT3351, biblioteca `MNL` (AXN_1.33) | `Platform\GpsVersion`, `gps.dll` em COM1, `BEE.BIN`/`mtkgps.dat` |
 | Transmissor FM | controlado por `FMC.dll` (chip ainda não identificado) | `Drivers\BuiltIn\fmc` (FMC1:) |
 | Áudio | `wavedev_drv.dll` (WAV1:) | `Drivers\Active` |

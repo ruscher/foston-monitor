@@ -4,12 +4,15 @@
 #include "status.h"
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/soundcard.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -133,7 +136,7 @@ static void read_net(bf_status_t *s)
     freeifaddrs(ifa);
 }
 
-/* ---- volume (ALSA via amixer, se existir) ---- */
+/* ---- volume (mixer OSS do kernel; amixer como alternativa) ---- */
 static int vol_cache = 60;
 
 static bool have_soundcard(void)
@@ -143,6 +146,22 @@ static bool have_soundcard(void)
     return strstr(b, "no soundcards") == NULL;
 }
 
+/* OSS mixer (kernel emulation over ALSA): no alsa-lib in the static rootfs.
+ * The Master control maps to SOUND_MIXER_VOLUME, value = left | right << 8, 0..100. */
+static int oss_volume(int set_pct)
+{
+    int fd = open("/dev/mixer", O_RDWR | O_CLOEXEC);
+    if(fd < 0) return -1;
+    int v, ok;
+    if(set_pct >= 0) {
+        v = set_pct | set_pct << 8;
+        ok = ioctl(fd, MIXER_WRITE(SOUND_MIXER_VOLUME), &v) == 0;
+    }
+    else ok = ioctl(fd, MIXER_READ(SOUND_MIXER_VOLUME), &v) == 0;
+    close(fd);
+    return ok ? (v & 0xff) : -1;
+}
+
 static const char *amixer_path(void)
 {
     static const char *c[] = { "/usr/bin/amixer", "/bin/amixer", NULL };
@@ -150,12 +169,18 @@ static const char *amixer_path(void)
     return NULL;
 }
 
-static int lx_vol_get(void) { return have_soundcard() ? vol_cache : -1; }
+static int lx_vol_get(void)
+{
+    if(!have_soundcard()) return -1;
+    int v = oss_volume(-1);
+    return v >= 0 ? v : vol_cache;
+}
 
 static bool lx_vol_set(int pct)
 {
     if(!have_soundcard()) return false;
     vol_cache = pct;
+    if(oss_volume(pct) >= 0) return true;
     const char *am = amixer_path();
     if(!am) return false;
     char arg[8];

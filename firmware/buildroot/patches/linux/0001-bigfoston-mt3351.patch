@@ -16,7 +16,7 @@ diff -Nur a/arch/arm/boot/dts/mediatek/Makefile b/arch/arm/boot/dts/mediatek/Mak
 diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 --- a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 +++ b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
-@@ -0,0 +1,161 @@
+@@ -0,0 +1,197 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * FOSTON FS-707DC (MediaTek MT3351), BigFoston OS.
@@ -165,6 +165,42 @@ diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot
 +			reg = <0x8004b000 0x210>, <0x80061100 0x110>,
 +			      <0x80001300 0x50>, <0x80002000 0x400>;
 +			reg-names = "dma", "analog", "pdn", "gpio";
++		};
++
++		/*
++		 * UART1..4 (CE COM2..COM5, uart.dll): 16550, 4-byte stride, 29.25 MHz
++		 * (468 MHz / 16, same source as the GPT). UART1 = GPS (MT3328),
++		 * UART2 = Bluetooth; CE leaves their receive DMA running (GDMA
++		 * channels 0x10/0x11), stopped by the driver.
++		 */
++		serial@80026000 {
++			compatible = "mediatek,mt3351-uart";
++			reg = <0x80026000 0x100>;
++			interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
++			clock-frequency = <29250000>;
++			mediatek,ce-rx-dma = <0x80024018>;
++		};
++
++		serial@80027000 {
++			compatible = "mediatek,mt3351-uart";
++			reg = <0x80027000 0x100>;
++			interrupts = <4 IRQ_TYPE_LEVEL_HIGH>;
++			clock-frequency = <29250000>;
++			mediatek,ce-rx-dma = <0x80024118>;
++		};
++
++		serial@80028000 {
++			compatible = "mediatek,mt3351-uart";
++			reg = <0x80028000 0x100>;
++			interrupts = <5 IRQ_TYPE_LEVEL_HIGH>;
++			clock-frequency = <29250000>;
++		};
++
++		serial@80029000 {
++			compatible = "mediatek,mt3351-uart";
++			reg = <0x80029000 0x100>;
++			interrupts = <6 IRQ_TYPE_LEVEL_HIGH>;
++			clock-frequency = <29250000>;
 +		};
 +
 +		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
@@ -1584,6 +1620,144 @@ diff -Nur a/drivers/power/reset/mt3351-reboot.c b/drivers/power/reset/mt3351-reb
 +	},
 +};
 +builtin_platform_driver(mt3351_reboot_driver);
+diff -Nur a/drivers/tty/serial/8250/8250_mt3351.c b/drivers/tty/serial/8250/8250_mt3351.c
+--- a/drivers/tty/serial/8250/8250_mt3351.c
++++ b/drivers/tty/serial/8250/8250_mt3351.c
+@@ -0,0 +1,109 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * UARTs of the MediaTek MT3351 (FOSTON FS-707DC) on the generic 8250 core.
++ *
++ * From the Windows CE uart.dll of the device (docs/uart.md): a 16550 with
++ * 4-byte register stride and byte access, clocked at 29.25 MHz, plus
++ * MediaTek extras the 8250 core does not know. CE leaves UART1 (GPS) and
++ * UART2 (Bluetooth) in its "highspeed" mode with receive DMA on, and their
++ * GDMA channels running into its old buffers (0x007e8000, 0x007db000:
++ * that is the memory corruption seen during the bring-up). Before handing
++ * a port to the 8250 core this driver:
++ *   - sets HIGHSPEED (+0x24) and DMA_EN (+0x4c) to 0 (plain 16x divisor),
++ *   - stops the GDMA channel named by "mediatek,ce-rx-dma" (its START
++ *     register, written 0).
++ * Nothing else is written: no clock gates, no pin mux.
++ */
++#include <linux/io.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++#include <linux/serial_8250.h>
++#include <linux/serial_core.h>
++
++#define MT3351_UART_HIGHSPEED	0x24
++#define MT3351_UART_DMA_EN	0x4c
++
++struct mt3351_uart {
++	int line;
++};
++
++static int mt3351_uart_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct uart_8250_port up = { };
++	struct mt3351_uart *data;
++	struct resource *res;
++	void __iomem *base;
++	u32 clk, dma;
++	int irq;
++
++	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
++	if (IS_ERR(base))
++		return PTR_ERR(base);
++	irq = platform_get_irq(pdev, 0);
++	if (irq < 0)
++		return irq;
++	if (of_property_read_u32(dev->of_node, "clock-frequency", &clk))
++		return dev_err_probe(dev, -EINVAL, "clock-frequency missing\n");
++
++	/* stop the receive DMA Windows CE left running into its own buffer */
++	if (!of_property_read_u32(dev->of_node, "mediatek,ce-rx-dma", &dma)) {
++		void __iomem *start = devm_ioremap(dev, dma, 4);
++
++		if (start) {
++			dev_info(dev, "CE receive DMA at %#x was %#x, stopped\n", dma, readl(start));
++			writel(0, start);
++		}
++	}
++	writeb(0, base + MT3351_UART_DMA_EN);
++	writeb(0, base + MT3351_UART_HIGHSPEED);
++
++	spin_lock_init(&up.port.lock);
++	up.port.dev = dev;
++	up.port.mapbase = res->start;
++	up.port.membase = base;
++	up.port.irq = irq;
++	up.port.uartclk = clk;
++	up.port.iotype = UPIO_MEM;
++	up.port.regshift = 2;
++	up.port.type = PORT_16550A;
++	up.port.flags = UPF_FIXED_PORT | UPF_FIXED_TYPE | UPF_SKIP_TEST;
++	up.port.fifosize = 16;
++
++	data->line = serial8250_register_8250_port(&up);
++	if (data->line < 0)
++		return data->line;
++	platform_set_drvdata(pdev, data);
++	return 0;
++}
++
++static void mt3351_uart_remove(struct platform_device *pdev)
++{
++	struct mt3351_uart *data = platform_get_drvdata(pdev);
++
++	serial8250_unregister_port(data->line);
++}
++
++static const struct of_device_id mt3351_uart_of_match[] = {
++	{ .compatible = "mediatek,mt3351-uart" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, mt3351_uart_of_match);
++
++static struct platform_driver mt3351_uart_driver = {
++	.probe = mt3351_uart_probe,
++	.remove = mt3351_uart_remove,
++	.driver = {
++		.name = "mt3351-uart",
++		.of_match_table = mt3351_uart_of_match,
++	},
++};
++module_platform_driver(mt3351_uart_driver);
++
++MODULE_DESCRIPTION("MediaTek MT3351 UART (8250 with CE hand-over fixups)");
++MODULE_LICENSE("GPL");
+diff -Nur a/drivers/tty/serial/8250/Kconfig b/drivers/tty/serial/8250/Kconfig
+--- a/drivers/tty/serial/8250/Kconfig
++++ b/drivers/tty/serial/8250/Kconfig
+@@ -475,6 +475,13 @@
+ 	  If you have a LPC18xx/43xx based board and want to use the
+ 	  serial port, say Y to this option. If unsure, say Y.
+ 
++config SERIAL_8250_MT3351
++	tristate "MediaTek MT3351 UARTs"
++	depends on SERIAL_8250 && (ARCH_MT3351 || COMPILE_TEST)
++	help
++	  UARTs of the MediaTek MT3351 (FOSTON FS-707DC), with the fixups
++	  needed after Windows CE hands the SoC over.
++
+ config SERIAL_8250_MT6577
+ 	tristate "Mediatek serial port support"
+ 	depends on SERIAL_8250
+diff -Nur a/drivers/tty/serial/8250/Makefile b/drivers/tty/serial/8250/Makefile
+--- a/drivers/tty/serial/8250/Makefile
++++ b/drivers/tty/serial/8250/Makefile
+@@ -53,3 +53,4 @@
+ obj-$(CONFIG_SERIAL_8250_TEGRA)		+= 8250_tegra.o
+ 
+ CFLAGS_8250_ingenic.o += -I$(srctree)/scripts/dtc/libfdt
++obj-$(CONFIG_SERIAL_8250_MT3351)	+= 8250_mt3351.o
 diff -Nur a/drivers/usb/musb/Kconfig b/drivers/usb/musb/Kconfig
 --- a/drivers/usb/musb/Kconfig
 +++ b/drivers/usb/musb/Kconfig

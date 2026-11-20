@@ -90,4 +90,12 @@ add_before "$T/sound/arm/Kconfig" 'config SND_PXA2XX_AC97' 'config SND_MT3351
 	  Speaker playback of the FOSTON FS-707DC.
 '
 add "$T/sound/arm/Makefile" 'obj-$(CONFIG_SND_MT3351)	+= mt3351-audio.o'
+add_before "$T/drivers/tty/serial/8250/Kconfig" 'config SERIAL_8250_MT6577' 'config SERIAL_8250_MT3351
+	tristate "MediaTek MT3351 UARTs"
+	depends on SERIAL_8250 && (ARCH_MT3351 || COMPILE_TEST)
+	help
+	  UARTs of the MediaTek MT3351 (FOSTON FS-707DC), with the fixups
+	  needed after Windows CE hands the SoC over.
+'
+add "$T/drivers/tty/serial/8250/Makefile" 'obj-$(CONFIG_SERIAL_8250_MT3351)	+= 8250_mt3351.o'
 echo "BigFoston MT3351 support applied to $T"

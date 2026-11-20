@@ -148,6 +148,42 @@
 			reg-names = "dma", "analog", "pdn", "gpio";
 		};
 
+		/*
+		 * UART1..4 (CE COM2..COM5, uart.dll): 16550, 4-byte stride, 29.25 MHz
+		 * (468 MHz / 16, same source as the GPT). UART1 = GPS (MT3328),
+		 * UART2 = Bluetooth; CE leaves their receive DMA running (GDMA
+		 * channels 0x10/0x11), stopped by the driver.
+		 */
+		serial@80026000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80026000 0x100>;
+			interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+			mediatek,ce-rx-dma = <0x80024018>;
+		};
+
+		serial@80027000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80027000 0x100>;
+			interrupts = <4 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+			mediatek,ce-rx-dma = <0x80024118>;
+		};
+
+		serial@80028000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80028000 0x100>;
+			interrupts = <5 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+		};
+
+		serial@80029000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80029000 0x100>;
+			interrupts = <6 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+		};
+
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";

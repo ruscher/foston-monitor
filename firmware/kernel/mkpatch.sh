@@ -16,7 +16,8 @@ drivers/input/touchscreen/Kconfig drivers/input/touchscreen/Makefile
 drivers/mmc/host/Kconfig drivers/mmc/host/Makefile
 drivers/video/backlight/Kconfig drivers/video/backlight/Makefile
 drivers/power/reset/Kconfig drivers/power/reset/Makefile
-sound/arm/Kconfig sound/arm/Makefile"
+sound/arm/Kconfig sound/arm/Makefile
+drivers/tty/serial/8250/Kconfig drivers/tty/serial/8250/Makefile"
 for f in $GLUE; do
     mkdir -p "$TMP/a/$(dirname "$f")" "$TMP/b/$(dirname "$f")"
     cp "$SRC/$f" "$TMP/a/$f"

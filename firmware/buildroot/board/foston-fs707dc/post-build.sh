@@ -32,3 +32,6 @@ if [ -f "$HOSTKEY" ]; then
     install -m 600 "$HOSTKEY" "$TARGET_DIR/etc/dropbear/dropbear_ed25519_host_key"
     echo "post-build: fixed SSH host key installed"
 fi
+
+# mpg123 extras not used on the device (~680 KB of the initrd)
+rm -f "$TARGET_DIR/usr/bin/mpg123-id3dump" "$TARGET_DIR/usr/bin/mpg123-strip" "$TARGET_DIR/usr/bin/out123"
