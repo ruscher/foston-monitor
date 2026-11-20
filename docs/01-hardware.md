@@ -83,7 +83,7 @@ Fonte: funções da OAL localizadas pelas strings de depuração do BSP e desmon
 | PWM | `0x8002B000` | | `buses.dll` | luz de fundo (`BKL`) usa o PWM |
 | I2C | `0x8002D000` | | `buses.dll` | |
 | SPI | *(não declarado)* | | `buses.dll` | TV Siano usa SPI |
-| USB função | `0x80100000` | 8 | `usbfn.dll` | caminho para rede USB (SSH) |
+| USB função | `0x80100000` | 8 | `usbfn.dll` | **Mentor MUSBHDRC** (EPINFO 0x44, RAMINFO 0x4a), IRQ W1C, FADDR não zera no reset — rede USB + SSH no Linux funcionando |
 | SD (MSDC 1) | *(no código)* | DMA irq 1 | `sdhc_drv.dll` | |
 
 ### CIRQ em `0x80022000` (compatível com MT6516/MT62xx)

@@ -26,6 +26,7 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | `drivers/irqchip/irq-mt3351-cirq.c` | controlador de interrupções CIRQ, 64 linhas, `handle_fasteoi` | OAL desmontada: `OALInterruptInit`, `SetIRQMask`, `ClearIRQMask`, tratador de IRQ |
 | `drivers/clocksource/timer-mt3351-gpt.c` | clocksource, sched_clock e clockevent one-shot no GPT1 | medição: contador a 14,625 MHz, compare em `+0x1C`, IRQ 39 |
 | `drivers/video/fbdev/mt3351-bootcon.c` | console de texto no framebuffer do CE (antes do timer) | framebuffer medido em `0x03E00030` |
+| `drivers/usb/musb/mt3351.c` | cola do controlador USB (Mentor MUSB, traços MediaTek) | registradores lidos no aparelho (abaixo) |
 | `arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts` | device tree | tudo medido |
 
 ## Etapas e estado
@@ -43,7 +44,7 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | `/init` + init do BusyBox + `rcS` | **FUNCIONANDO** | build com `-mno-unaligned-access`, 19/11/2026: `bigfoston: alive 630s`, timer irqs 17254→19708, `memwatch: no change (103 MB)` |
 | Touchscreen | NÃO IMPLEMENTADO | ADC/registradores ainda não identificados |
 | SD (MSDC) | NÃO IMPLEMENTADO | driver CE `sdhc_drv` (família MSDC) |
-| USB device (rede/serial → SSH) | NÃO IMPLEMENTADO | base `0x80100000`, IRQ 8; IP ainda não identificado |
+| USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
 | UARTs | NÃO IMPLEMENTADO | 16550 MTK em `0x80026000…0x80029000`, IRQ 3–6; clock desconhecido |
 | Luz de fundo (PWM) | NÃO IMPLEMENTADO | PWM em `0x8002B000` |
 
@@ -83,6 +84,22 @@ zerando estruturas recém-copiadas após `fork`.
 - **Correção adotada:** kernel e todo o userland compilados com
   `-mno-unaligned-access` (`apply-overlay.sh` e `BR2_TARGET_OPTIMIZATION`), para
   que o compilador nunca emita escritas desalinhadas.
+
+### USB: Mentor MUSB com traços MediaTek
+
+Identificado lendo, pelo `bfagent` (só leitura), os registradores de configuração em
+`0x80100000`: `EPINFO 0x44` (4 TX + 4 RX), `RAMINFO 0x4a` (FIFO 4 KB, 4 canais DMA),
+`LINKINFO 0x5c` e `VPLEN 0x3c` (valores de reset do MUSBHDRC). O que foi preciso:
+
+| Sintoma no PC | Causa | Correção na cola |
+|---|---|---|
+| `device descriptor read/64, error -71` em High-Speed | PHY não ajustado para HS após o CE | `maximum_speed = USB_SPEED_FULL` |
+| `error -32` (STALL) em Full-Speed; só IRQs de reset/SOF; `FADDR` preso em `0x04` | reset do barramento **não zera `FADDR`**; status de IRQ é **W1C** (como `mediatek.c`) | zera `FADDR` no reset; `clearb/clearw` W1C |
+
+Limitações atuais: só **com o cabo conectado durante o boot** (ao desconectar, o PHY
+não volta sozinho: VBUS deixa de ser visto, `DEVCTL 0x89`; o CE usa um EINT para isso),
+Full-Speed, PIO byte a byte. Uso: `ssh root@192.168.7.2` (só chave), serial em
+`/dev/ttyACM0`; no PC, `192.168.7.1/24` na interface `cdc_ether`.
 
 O estado de cada linha é atualizado conforme os testes no aparelho
 ([15-testes.md](15-testes.md)).
