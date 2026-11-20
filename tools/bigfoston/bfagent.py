@@ -535,12 +535,32 @@ def close_ce_menu(link):
 FLASH_LINUX = "\\ResidentFlash\\BigFoston\\linux"
 
 
+def sync_ce_clock(link, quiet=False):
+    """Acerta o relógio do Windows CE com o do PC (agente >= 0.5.1). O CE guarda a
+    hora no RTC, e o boot automático sem PC leva essa hora ao Linux."""
+    now = int(time.time())
+    try:
+        old = struct.unpack_from("<I", link.request(bfp.SETTIME, struct.pack("<I", now)).payload)[0]
+    except AgentError as error:
+        if not quiet:
+            print(f"relógio do CE não acertado: {error}", file=sys.stderr)
+        return False
+    if not quiet or abs(old - now) > 60:
+        print(f"relógio do CE: {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(old))} UTC -> "
+              f"{time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(now))} UTC")
+    return True
+
+
 def install_linux(link, local_dir, dest):
     """Copy zImage/initrd.img to the device unless the copy there is the same (SHA256SUMS),
     read each one back and compare its SHA-256 before recording it."""
-    names = ["zImage", "initrd.img"]
+    names = ["zImage", "initrd.img", "fs707dc.dtb"]
     local = {}
     for n in names:
+        if n == "fs707dc.dtb":
+            # campo da hora presente (zerado): o agente grava o relógio do CE no boot automático
+            local[n] = dtb_with_epoch(os.path.join(local_dir, n), 0)
+            continue
         with open(os.path.join(local_dir, n), "rb") as f:
             local[n] = f.read()
     want = "".join(f"{hashlib.sha256(local[n]).hexdigest()}  {n}\n" for n in names)
@@ -613,6 +633,7 @@ def main(argv=None):
     p.add_argument("action", choices=["on", "off"])
     p.add_argument("--exe", default="\\SDMMC\\BigFoston\\bfagent.exe")
     sub.add_parser("reboot", help="restart the device from Windows CE (agent >= 0.4.0)")
+    sub.add_parser("settime", help="set the Windows CE clock from this PC (agent >= 0.5.1)")
     p = sub.add_parser("usb-default", help="USB client the device boots with (agent >= 0.4.1)")
     p.add_argument("client", choices=["mass", "serial"])
     p = sub.add_parser("ps")
@@ -668,6 +689,11 @@ def main(argv=None):
     p.add_argument("--dtb", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../firmware/build/out/images/bigfoston/fs707dc.dtb"))
     p.add_argument("--dest", default=FLASH_LINUX)
     p.add_argument("--delay", type=int, default=5)
+    p = sub.add_parser("autoboot", help="boot the internal-flash Linux by itself at power-on (agent >= 0.5.0)")
+    p.add_argument("action", choices=["on", "off"])
+    p.add_argument("--delay", type=int, default=5, help="countdown seconds (1..30)")
+    p = sub.add_parser("install-agent", help="copy the agent to the internal flash (SHA-256 checked)")
+    p.add_argument("--exe", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../src/wince/agent/build/bfagent.exe"))
     p = sub.add_parser("ramoops", help="kernel log left by the last Linux boot")
     p.add_argument("-o", "--out")
     p = sub.add_parser("quit")
@@ -721,6 +747,9 @@ def main(argv=None):
             name = "Mass_Storage_Class" if args.client == "mass" else "Serial_Class"
             link.request(bfp.REGSET, b"\x01DefaultClientDriver\0" + name.encode() + b"\0")
             print(link.reg("HKLM", "Drivers\\USB\\FunctionDrivers")[0].splitlines()[1])
+        elif args.cmd == "settime":
+            if not sync_ce_clock(link):
+                return 1
         elif args.cmd == "reboot":
             link.request(bfp.REBOOT)
             print("reboot pedido")
@@ -776,6 +805,7 @@ def main(argv=None):
             if not ok:
                 return 1
         elif args.cmd == "boot-mem":
+            sync_ce_clock(link, quiet=True)
             close_ce_menu(link)
             files = {}
             # the DTB goes last, stamped with the PC's clock (there is no RTC driver):
@@ -799,8 +829,31 @@ def main(argv=None):
             if not args.dry_run:
                 print(link.boot("mem:0", "mem:1", "mem:2", delay=args.delay))
         elif args.cmd == "install-linux":
+            sync_ce_clock(link, quiet=True)
             install_linux(link, args.dir, args.dest)
+        elif args.cmd == "autoboot":
+            conf = "\\ResidentFlash\\BigFoston\\autoboot.conf"
+            if args.action == "on":
+                sync_ce_clock(link, quiet=True)
+                link.write_file(conf, f"delay={max(1, min(30, args.delay))}\n".encode())
+                print(link.read_file(conf).decode().strip(), "-> boot automático ligado")
+            else:
+                try:
+                    link.request(bfp.DELETE, conf.encode() + b"\0")
+                except AgentError:
+                    pass
+                print("boot automático desligado")
+        elif args.cmd == "install-agent":
+            with open(args.exe, "rb") as f:
+                exe = f.read()
+            dest = "\\ResidentFlash\\BigFoston\\bfagent.exe"
+            close_ce_menu(link)
+            link.write_file(dest, exe, progress=progress_bar("bfagent.exe"))
+            if hashlib.sha256(link.read_file(dest)).digest() != hashlib.sha256(exe).digest():
+                raise AgentError("bfagent.exe: SHA-256 da cópia gravada não confere")
+            print(f"bfagent.exe gravado e conferido ({len(exe)} bytes)")
         elif args.cmd == "boot-flash":
+            sync_ce_clock(link, quiet=True)
             # the DTB goes over USB so it carries the PC's clock (no RTC driver)
             link.stage(1, dtb_with_epoch(args.dtb, int(time.time()) + args.delay + 4),
                        progress=progress_bar("fs707dc.dtb"))

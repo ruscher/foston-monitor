@@ -30,8 +30,8 @@
 #include "bfp.h"
 #include "boot.h"
 
-#define AGENT_VERSION "bfagent 0.4.1"
-#define AGENT_VERSION_W L"bfagent 0.4.1"
+#define AGENT_VERSION "bfagent 0.5.1"
+#define AGENT_VERSION_W L"bfagent 0.5.1"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -52,6 +52,9 @@ static WCHAR g_last[200] = L"";
 static DWORD g_requests;
 static RECT g_exit_button;
 static FILE *g_log;
+/* boot automático do Linux da memória interna (autoboot.conf) */
+static volatile LONG g_autoboot;           /* 0 nada, 1 contando, 2 cancelado, 3 agora */
+static RECT g_btn_stay, g_btn_now;
 
 static void log_line(const char *fmt, ...)
 {
@@ -550,6 +553,82 @@ static DWORD WINAPI reboot_thread(LPVOID unused)
         p_KernelIoControl(0x0101003C /* IOCTL_HAL_REBOOT */, NULL, 0, NULL, 0, NULL);
     log_line("reboot did not happen");
     return 0;
+}
+
+/* --------------------------------------------------------------- clock */
+
+#define EPOCH_2024 1704067200u      /* relógio antes disso = não acertado */
+
+/* SYSTEMTIME (UTC) <-> segundos desde 1970 (algoritmos de H. Hinnant) */
+static uint32_t systime_epoch(const SYSTEMTIME *st)
+{
+    long y = st->wYear, m = st->wMonth, d = st->wDay, era, yoe, doy, doe, days;
+    y -= m <= 2;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = y - era * 400;
+    doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    days = era * 146097 + doe - 719468;
+    return (uint32_t)(days * 86400 + st->wHour * 3600 + st->wMinute * 60 + st->wSecond);
+}
+
+static void epoch_systime(uint32_t t, SYSTEMTIME *st)
+{
+    long z = (long)(t / 86400) + 719468, era, doe, yoe, y, doy, mp, d, m;
+    uint32_t s = t % 86400;
+    era = z / 146097;
+    doe = z - era * 146097;
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = mp < 10 ? mp + 3 : mp - 9;
+    memset(st, 0, sizeof(*st));
+    st->wYear = (WORD)(y + (m <= 2));
+    st->wMonth = (WORD)m;
+    st->wDay = (WORD)d;
+    st->wDayOfWeek = (WORD)((t / 86400 + 4) % 7);     /* 1/1/1970 foi quinta */
+    st->wHour = (WORD)(s / 3600);
+    st->wMinute = (WORD)(s / 60 % 60);
+    st->wSecond = (WORD)(s % 60);
+}
+
+/* relógio do Windows CE (UTC) em segundos desde 1970; 0 se não está acertado */
+static uint32_t ce_epoch(void)
+{
+    SYSTEMTIME st;
+    uint32_t t;
+    GetSystemTime(&st);
+    t = systime_epoch(&st);
+    return t >= EPOCH_2024 ? t : 0;
+}
+
+/* O PC acerta o relógio do CE (que o mantém no RTC): o boot automático sem
+ * PC passa a levar a hora certa ao Linux. */
+static void cmd_settime(const bfp_msg *req)
+{
+    SYSTEMTIME st, old;
+    uint8_t reply[4];
+    uint32_t t;
+    if (req->len < 4) {
+        respond_error(req, BFP_E_ARGS, 0, "u32 epoch expected");
+        return;
+    }
+    t = bfp_get32(req->payload);
+    if (t < EPOCH_2024) {
+        respond_error(req, BFP_E_ARGS, 0, "epoch before 2024");
+        return;
+    }
+    GetSystemTime(&old);
+    epoch_systime(t, &st);
+    if (!SetSystemTime(&st)) {
+        respond_error(req, BFP_E_SYSTEM, GetLastError(), "SetSystemTime failed");
+        return;
+    }
+    log_line("relogio: %u -> %u", (unsigned)systime_epoch(&old), (unsigned)t);
+    bfp_put32(reply, systime_epoch(&old));
+    respond(req, BFP_OK, reply, 4);
 }
 
 static void cmd_reboot(const bfp_msg *req)
@@ -1123,6 +1202,7 @@ static const char *command_name(uint8_t type)
     case BFP_REG: return "reg";
     case BFP_REGSET: return "regset";
     case BFP_REBOOT: return "reboot";
+    case BFP_SETTIME: return "settime";
     case BFP_EXEC: return "exec";
     case BFP_PS: return "ps";
     case BFP_KILL: return "kill";
@@ -1145,6 +1225,12 @@ static void handle(const bfp_msg *m)
     LAST(L"#%lu %hs (%lu bytes)", g_requests, command_name(m->type), m->len);
     if (p_idle_reset)
         p_idle_reset();
+    /* o PC falou com o agente durante a contagem: ele assume o controle */
+    if (g_autoboot == 1) {
+        InterlockedExchange(&g_autoboot, 2);
+        STATUS(L"PC conectado: boot automatico cancelado.");
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+    }
     if (!m->crc_ok) {
         respond_error(m, BFP_E_CRC, 0, "payload CRC mismatch");
         return;
@@ -1160,6 +1246,7 @@ static void handle(const bfp_msg *m)
     case BFP_REG: cmd_reg(m); break;
     case BFP_REGSET: cmd_regset(m); break;
     case BFP_REBOOT: cmd_reboot(m); break;
+    case BFP_SETTIME: cmd_settime(m); break;
     case BFP_EXEC: cmd_exec(m); break;
     case BFP_PS: cmd_ps(m); break;
     case BFP_KILL: cmd_kill(m); break;
@@ -1461,6 +1548,155 @@ static DWORD WINAPI comm_thread(LPVOID unused)
 
 /* ------------------------------------------------------------------ window */
 
+/* ------------------------------------------------------- autoboot */
+
+#define AUTOBOOT_DIR L"\\ResidentFlash\\BigFoston"
+#define LINUX_DIR    AUTOBOOT_DIR L"\\linux"
+
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+/* grava um u32 numa propriedade existente do DTB (in-place, sem mudar o tamanho) */
+static int fdt_set_u32(uint8_t *fdt, DWORD n, const char *prop, uint32_t v)
+{
+    uint32_t off_struct, off_strings, i;
+    if (n < 40 || be32(fdt) != 0xd00dfeed)
+        return 0;
+    off_struct = be32(fdt + 8);
+    off_strings = be32(fdt + 12);
+    for (i = off_struct; i + 4 <= n;) {
+        uint32_t tok = be32(fdt + i);
+        i += 4;
+        if (tok == 1) {                                  /* BEGIN_NODE: nome + alinhamento */
+            while (i < n && fdt[i]) i++;
+            i = (i + 4) & ~3u;
+        } else if (tok == 3) {                           /* PROP: len, nameoff, valor */
+            uint32_t len = be32(fdt + i), nameoff = be32(fdt + i + 4);
+            const char *name = (const char *)fdt + off_strings + nameoff;
+            if (off_strings + nameoff < n && !strcmp(name, prop) && len == 4) {
+                uint8_t *val = fdt + i + 8;
+                val[0] = (uint8_t)(v >> 24); val[1] = (uint8_t)(v >> 16); val[2] = (uint8_t)(v >> 8); val[3] = (uint8_t)v;
+                return 1;
+            }
+            i += 8 + ((len + 3) & ~3u);
+        } else if (tok == 2 || tok == 4) {
+            continue;
+        } else
+            break;                                       /* END ou inválido */
+    }
+    return 0;
+}
+
+static int file_exists(const WCHAR *p)
+{
+    return GetFileAttributesW(p) != 0xFFFFFFFF;
+}
+
+static void do_autoboot(void)
+{
+    static bf_boot_args args;
+    char err[240];
+    HANDLE f;
+    DWORD n = 0, got = 0;
+    uint8_t *dtb;
+    memset(&args, 0, sizeof(args));
+    _snwprintf(args.kernel, MAX_PATH - 1, L"%ls", LINUX_DIR L"\\zImage");
+    _snwprintf(args.initrd, MAX_PATH - 1, L"%ls", LINUX_DIR L"\\initrd.img");
+    wcscpy(args.dtb, L"mem:1");
+    args.kernel_pa = 0x00800000;
+    args.dtb_pa = 0x01F00000;
+    args.initrd_pa = 0x01000000;
+    args.machine = 0xFFFFFFFF;
+    args.kernel_max = 8u << 20;
+    args.dtb_max = 64u << 10;
+    args.initrd_max = 12u << 20;
+    /* o DTB vai para a memória e recebe a hora do relógio do CE (não há driver de RTC no Linux) */
+    f = CreateFileW(LINUX_DIR L"\\fs707dc.dtb", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f != INVALID_HANDLE_VALUE) {
+        n = GetFileSize(f, NULL);
+        if (n > 0 && n <= args.dtb_max && (dtb = (uint8_t *)malloc(n)) != NULL) {
+            if (ReadFile(f, dtb, n, &got, NULL) && got == n) {
+                uint32_t now = ce_epoch();
+                if (!now)
+                    log_line("autoboot: relogio do CE nao acertado; o Linux fica sem hora (use bfagent.py settime)");
+                else if (!fdt_set_u32(dtb, n, "bigfoston,boot-epoch", now + 3))
+                    log_line("autoboot: DTB sem bigfoston,boot-epoch");
+                free(bf_stage_data[1]);
+                bf_stage_data[1] = dtb;
+                bf_stage_len[1] = n;
+            } else
+                free(dtb);
+        }
+        CloseHandle(f);
+    }
+    if (!bf_stage_data[1]) {
+        STATUS(L"Boot automatico: fs707dc.dtb ausente ou ilegivel.");
+        InterlockedExchange(&g_autoboot, 2);
+        return;
+    }
+    STATUS(L"Iniciando o BigFoston (Linux)...  (reset volta ao Windows CE)");
+    PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+    Sleep(300);
+    log_line("autoboot: %ls", args.kernel);
+    if (g_log) {
+        fclose(g_log);
+        g_log = NULL;
+    }
+    if (!bf_boot(&args, err, sizeof(err))) {
+        WCHAR w[240];
+        MultiByteToWideChar(CP_UTF8, 0, err, -1, w, 239);
+        w[239] = 0;
+        STATUS(L"Boot automatico falhou: %ls", w);
+        InterlockedExchange(&g_autoboot, 2);
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+    }
+}
+
+static DWORD WINAPI autoboot_thread(LPVOID arg)
+{
+    int left = (int)(intptr_t)arg;
+    for (; left > 0 && g_autoboot == 1; left--) {
+        STATUS(L"Iniciando o BigFoston (Linux) em %d s.  Toque em \"Ficar no Windows CE\" para cancelar.", left);
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        Sleep(1000);
+    }
+    if (g_autoboot == 2) {
+        STATUS(L"Boot automatico cancelado: ficando no Windows CE. Use Sair para voltar ao menu.");
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        return 0;
+    }
+    do_autoboot();
+    return 0;
+}
+
+/* Só no início do aparelho (agente aberto pelo Launch90 a partir da memória
+ * interna), com autoboot.conf ("delay=N") e o Linux instalado. */
+static void autoboot_start(void)
+{
+    FILE *f;
+    int delay = 5;
+    HANDLE t;
+    if (_wcsnicmp(g_origin_dir, AUTOBOOT_DIR, wcslen(AUTOBOOT_DIR)) || GetTickCount() > 180000)
+        return;
+    if (!file_exists(LINUX_DIR L"\\zImage") || !file_exists(LINUX_DIR L"\\initrd.img") ||
+        !file_exists(LINUX_DIR L"\\fs707dc.dtb"))
+        return;
+    f = _wfopen(AUTOBOOT_DIR L"\\autoboot.conf", L"r");
+    if (!f)
+        return;
+    if (fscanf(f, "delay=%d", &delay) != 1)
+        delay = 5;
+    fclose(f);
+    if (delay < 1) delay = 1;
+    if (delay > 30) delay = 30;
+    log_line("autoboot em %d s", delay);
+    InterlockedExchange(&g_autoboot, 1);
+    t = CreateThread(NULL, 0, autoboot_thread, (LPVOID)(intptr_t)delay, 0, NULL);
+    if (t)
+        CloseHandle(t);
+    else
+        InterlockedExchange(&g_autoboot, 0);
+}
+
 static void paint(HDC dc)
 {
     RECT r;
@@ -1496,10 +1732,21 @@ static void paint(HDC dc)
     SetTextColor(dc, RGB(0x8f, 0xf0, 0xa4));
     SetRect(&r, 32, 290, g_width - 32, 330);
     DrawTextW(dc, g_last, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    SetTextColor(dc, RGB(0x9a, 0x99, 0x96));
-    SetRect(&r, 32, 360, g_width - 240, g_height - 20);
-    DrawTextW(dc, L"Somente leitura de memoria, registro e NAND. Nada e gravado na flash.", -1, &r,
-              DT_LEFT | DT_TOP | DT_WORDBREAK);
+    if (g_autoboot == 1) {
+        HBRUSH stay = CreateSolidBrush(RGB(0x3a, 0x3f, 0x4b)), now = CreateSolidBrush(RGB(0x35, 0x84, 0xe4));
+        FillRect(dc, &g_btn_stay, stay);
+        FillRect(dc, &g_btn_now, now);
+        SetTextColor(dc, RGB(0xff, 0xff, 0xff));
+        DrawTextW(dc, L"Ficar no Windows CE", -1, &g_btn_stay, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(dc, L"Iniciar agora", -1, &g_btn_now, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DeleteObject(stay);
+        DeleteObject(now);
+    } else {
+        SetTextColor(dc, RGB(0x9a, 0x99, 0x96));
+        SetRect(&r, 32, 360, g_width - 240, g_height - 20);
+        DrawTextW(dc, L"Leitura do aparelho; gravacao so na pasta BigFoston e no autostart.", -1, &r,
+                  DT_LEFT | DT_TOP | DT_WORDBREAK);
+    }
     FillRect(dc, &g_exit_button, button);
     SetTextColor(dc, RGB(0xff, 0xff, 0xff));
     SelectObject(dc, font_big);
@@ -1529,6 +1776,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         POINT pt;
         pt.x = (short)LOWORD(lp);
         pt.y = (short)HIWORD(lp);
+        if (g_autoboot == 1 && PtInRect(&g_btn_stay, pt)) {
+            InterlockedExchange(&g_autoboot, 2);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        if (g_autoboot == 1 && PtInRect(&g_btn_now, pt)) {
+            InterlockedExchange(&g_autoboot, 3);
+            return 0;
+        }
         if (PtInRect(&g_exit_button, pt))
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
         return 0;
@@ -1618,6 +1874,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     g_width = GetSystemMetrics(SM_CXSCREEN);
     g_height = GetSystemMetrics(SM_CYSCREEN);
     SetRect(&g_exit_button, g_width - 200, g_height - 100, g_width - 24, g_height - 24);
+    SetRect(&g_btn_stay, 32, 290, g_width / 2 - 10, 370);
+    SetRect(&g_btn_now, g_width / 2 + 10, 290, g_width - 32, 370);
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wnd_proc;
@@ -1635,6 +1893,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     SetTimer(g_hwnd, 1, 5000, NULL);
 
     thread = CreateThread(NULL, 0, comm_thread, NULL, 0, NULL);
+    autoboot_start();
     while (GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);

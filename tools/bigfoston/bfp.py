@@ -20,7 +20,7 @@ STAGE = 0x39
 PHYS, CPU, KIOCTL = 0x40, 0x41, 0x42
 DISKINFO, DISKREAD = 0x50, 0x51
 SHOT = 0x60
-QUIT, REBOOT = 0x70, 0x71
+QUIT, REBOOT, SETTIME = 0x70, 0x71, 0x72
 
 OK, E_UNKNOWN, E_ARGS, E_SYSTEM, E_DENIED, E_TOOBIG, E_CRC = range(7)
 STATUS_NAMES = {OK: "ok", E_UNKNOWN: "unknown request", E_ARGS: "bad arguments", E_SYSTEM: "system error",

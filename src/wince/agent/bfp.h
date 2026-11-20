@@ -60,6 +60,7 @@
                                 kernel path NUL, dtb path NUL, initrd path NUL -> text; then jumps */
 #define BFP_STAGE     0x39   /* u8 index, u32 total, u32 offset, bytes -> u32 bytes held; boot path "mem:N" */
 #define BFP_QUIT      0x70   /* agent exits and restores the previous USB client */
+#define BFP_SETTIME   0x72   /* u32 UTC epoch -> u32 previous CE epoch (sets the CE clock/RTC) */
 #define BFP_REBOOT    0x71   /* restart the device (SetSystemPowerState reset, then IOCTL_HAL_REBOOT) */
 #define BFP_REGSET    0x21   /* u8 op (1 REG_SZ, 2 REG_MULTI_SZ, 3 REG_BINARY, 4 delete), name NUL, data;
                                 only HKLM\\init Launch90/Depend90 (agent autostart) and the USB boot

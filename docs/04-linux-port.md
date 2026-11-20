@@ -52,7 +52,7 @@ O patch do Buildroot é gerado por `firmware/kernel/mkpatch.sh`.
 | Áudio (alto-falante) | **FUNCIONANDO** | `mt3351-audio` (ALSA): DMA de áudio `0x8004B000`, DAC interno, amplificador no GPIO 5; `aplay` de WAV com som limpo — [audio.md](audio.md) |
 | Reinício (`reboot`) | PARCIAL | `mt3351-reboot` dispara o watchdog como o CE (`0x80003000`); o aparelho **desliga** em vez de reiniciar (o CE faz igual) e volta no botão liga |
 | GPS | NÃO IMPLEMENTADO | MT3328 *host-based*: a posição é calculada pela biblioteca proprietária MNL do `gps.dll` (UART1, 921600 baud). Caminho viável: carregar o `gps.dll` do próprio aparelho num processo Linux com uma camada de API do CE (estimativa 4–6 semanas); primeiro passo é o driver de UART |
-| Relógio | PARCIAL | sem driver de RTC; a hora do PC vai no DTB (`bigfoston,boot-epoch`) e o `S05clock` acerta no boot |
+| Relógio | PARCIAL | sem driver de RTC no Linux; a hora vai no DTB (`bigfoston,boot-epoch`): a do PC (`boot-mem`/`boot-flash`) ou, no boot automático, a do relógio do CE, que o PC acerta com `bfagent.py settime` (agente ≥ 0.5.1; também automático em `install-linux`/`autoboot on`/`boot-*`). Hora antes de 2024 é ignorada e a barra mostra `--:--` |
 | USB device: rede CDC-ECM + serial CDC-ACM + SSH | **FUNCIONANDO** (Full-Speed) | 20/11/2026: PC vê `0525:a4aa` "CDC Composite Gadget", `ping` 0,6–1,2 ms, `ssh root@192.168.7.2`; 2 MB com md5 igual: 189 KB/s PC→FOSTON, 241 KB/s FOSTON→PC |
 | UARTs | **FUNCIONANDO** (recepção testada) | `8250_mt3351`: ttyS0..3, 16550A a 29,25 MHz; para o DMA que o CE deixa ligado (causa da escrita em 0x7E8000); GPS recebido em ttyS0 — [uart.md](uart.md) |
 | MP3 | **FUNCIONANDO** | `mpg123` (decodificador `arm_nofpu`) pela emulação OSS: MP3 de 128 kbps a ~11 % da CPU |
