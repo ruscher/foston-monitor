@@ -17,6 +17,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_SSH] = &scr_ssh_def,             [SCR_ADVANCED] = &scr_advanced_def,
     [SCR_FEATURE] = &scr_feature_def,     [SCR_MUSIC] = &scr_music_def,
     [SCR_FILES] = &scr_files_def,         [SCR_TERM] = &scr_term_def,
+    [SCR_BOOK] = &scr_book_def,
 };
 
 static lv_obj_t *content;

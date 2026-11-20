@@ -68,8 +68,10 @@ else
   $(error VARIANT desconhecida: $(VARIANT))
 endif
 
-ifeq ($(SCREENSHOT),1)
-  EXTRA_SRCS := third_party/lodepng/lodepng.c
+# lodepng: inflate dos EPUB (Livros) sempre; codificador PNG só para --screenshot
+EXTRA_SRCS := third_party/lodepng/lodepng.c
+ifneq ($(SCREENSHOT),1)
+  DEFS += -DLODEPNG_NO_COMPILE_ENCODER -DLODEPNG_NO_COMPILE_DISK
 endif
 
 # MP3 (Multimídia): libmpg123. No alvo vem do Buildroot (estática, arm_nofpu);

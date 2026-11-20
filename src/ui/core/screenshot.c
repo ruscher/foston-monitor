@@ -159,7 +159,13 @@ int screenshot_run(const char *dir)
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
-    go(SCR_FEATURE, FEAT_BOOK);     shot("24-livro");
+    go(SCR_BOOK, 0);                shot("24-livro");
+    {
+        char f[600];
+        snprintf(f, sizeof f, "%s/books/conto.epub", data_dir());
+        scr_book_demo(f);            shot("24f-livro-pagina");
+        scr_book_demo(NULL);
+    }
     go(SCR_FILES, 0);               shot("24b-arquivos-locais");
     scr_files_demo(data_dir());      shot("24c-arquivos-pasta");
     {
