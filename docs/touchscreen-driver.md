@@ -73,3 +73,31 @@ Parâmetros ajustáveis em `/sys/module/mt3351_ts/parameters/`:
 
 Os cantos não chegam a 0/1023 porque o painel resistivo é maior que a área útil. Por isso
 é necessária a calibração de 5 pontos em espaço de usuário, que leva aos pixels 800×480.
+
+## Framebuffer e calibração (bftouch)
+
+`/dev/fb0` vem do driver `simplefb` sobre a memória de vídeo que o CE deixa ligada:
+800×480, r5g6b5, linha de 1600 bytes, em `0x03e00030`. Esse endereço **não é alinhado à
+página**: o `mmap` de `/dev/fb0` começa em `0x03e00000`, e o programa precisa somar
+`smem_start & 0xfff` (0x30) ao ponteiro. O LVGL precisa do mesmo ajuste.
+
+O console de boot desenha na mesma memória. Um programa gráfico escreve `1` em
+`/sys/module/mt3351_bootcon/parameters/paused` para pausá-lo; com `0`, o texto volta.
+
+`bftouch cal [arquivo]` faz a calibração de 5 pontos: cruzes a 50 px das bordas e uma
+no centro. Usa a mediana da segunda metade de cada toque, porque o início ainda está
+assentando, e um ajuste afim por mínimos quadrados. Repete se algum ponto errar mais
+de 12 px. O arquivo segue o formato `pointercal` do tslib:
+`a0 a1 a2 a3 a4 a5 a6 W H`, com x = (a2 + a0·X + a1·Y)/a6 e y = (a5 + a3·X + a4·Y)/a6.
+
+`bftouch test [arquivo] [segundos]` desenha o traço do dedo com a calibração.
+
+Calibração medida em 2026-11-20 (erro de 10 a 12 px nos cantos, 3,6 px no centro):
+`65723 -166 -6280614 -1397 49469 -10605857 65536 800 480`.
+O painel tem uma leve distorção trapezoidal: Y bruto 272/320 na borda de cima e
+801/792 na de baixo. Por isso sobra cerca de 11 px nos cantos com o modelo afim; um
+modelo bilinear reduziria isso.
+
+**Persistência:** o rootfs é initramfs (RAM). A calibração medida vai embutida em
+`rootfs-overlay/etc/bigfoston/touchcal`; uma recalibração no aparelho só dura até o
+próximo boot. A persistência de verdade depende do cartão SD no Linux (pendente).

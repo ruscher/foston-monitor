@@ -20,6 +20,7 @@
 #include <linux/string.h>
 #include <linux/crc32.h>
 #include <linux/mm.h>
+#include <linux/moduleparam.h>
 
 #define COLS_MAX	128
 #define ROWS_MAX	64
@@ -35,6 +36,33 @@ static unsigned int cols, rows, cx, cy;
 static const struct font_desc *font;
 static char text[ROWS_MAX][COLS_MAX];
 
+/*
+ * The same memory is /dev/fb0 (simplefb). A graphical program writes 1 to
+ * /sys/module/mt3351_bootcon/parameters/paused so kernel messages stop
+ * drawing over it; the text is still kept and comes back on 0.
+ */
+static bool paused;
+static void redraw(void);
+
+static int paused_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_bool(val, kp);
+
+	if (!ret && !paused && fb) {
+		console_lock();
+		redraw();
+		console_unlock();
+	}
+	return ret;
+}
+
+static const struct kernel_param_ops paused_ops = {
+	.set = paused_set,
+	.get = param_get_bool,
+};
+module_param_cb(paused, &paused_ops, &paused, 0644);
+MODULE_PARM_DESC(paused, "stop drawing kernel messages (the screen belongs to /dev/fb0)");
+
 static void draw_char(unsigned int col, unsigned int row, unsigned char c)
 {
 	const u8 *glyph = (const u8 *)font->data + c * font->height;
@@ -49,6 +77,9 @@ static void draw_char(unsigned int col, unsigned int row, unsigned char c)
 static void redraw(void)
 {
 	unsigned int r, c;
+
+	if (paused)
+		return;
 
 	for (r = 0; r < rows; r++)
 		for (c = 0; c < cols; c++)
@@ -84,7 +115,9 @@ static void bootcon_write(struct console *con, const char *s, unsigned int n)
 		if (cx >= cols)
 			newline();
 		text[cy][cx] = c;
-		draw_char(cx++, cy, c);
+		if (!paused)
+			draw_char(cx, cy, c);
+		cx++;
 	}
 }
 
