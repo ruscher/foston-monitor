@@ -29,9 +29,10 @@
 
 #include "bfp.h"
 #include "boot.h"
+#include "sha256.h"
 
-#define AGENT_VERSION "bfagent 0.5.1"
-#define AGENT_VERSION_W L"bfagent 0.5.1"
+#define AGENT_VERSION "bfagent 0.6.0"
+#define AGENT_VERSION_W L"bfagent 0.6.0"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -1591,6 +1592,253 @@ static int file_exists(const WCHAR *p)
     return GetFileAttributesW(p) != 0xFFFFFFFF;
 }
 
+/* ------------------------------------------- update staged on the SD card
+ *
+ * The running Linux (fast USB) leaves a new version in \SDMMC\BigFoston\update
+ * (zImage, initrd.img, fs707dc.dtb and SHA256SUMS; the directory is renamed to
+ * "update" only after every file was checked there).  At power-on, before the
+ * autoboot countdown, the agent checks each file on the card, copies it to
+ * linux\<name>.new, checks the copy, keeps the current one as <name>.old and
+ * only then swaps them.  The flash is written by Windows CE's own file system;
+ * a bad update is renamed to update.bad and the installed Linux boots as before.
+ * Result lines go to \SDMMC\BigFoston\update.log. */
+#define SD_DIR     L"\\SDMMC\\BigFoston"
+#define UPDATE_DIR SD_DIR L"\\update"
+#define UPD_FILES  3
+static const WCHAR *const upd_names[UPD_FILES] = {L"zImage", L"initrd.img", L"fs707dc.dtb"};
+static const DWORD upd_max[UPD_FILES] = {8u << 20, 12u << 20, 64u << 10};
+
+static void upd_log(const char *fmt, ...)
+{
+    char line[300];
+    va_list ap;
+    SYSTEMTIME st;
+    FILE *f;
+    va_start(ap, fmt);
+    _vsnprintf(line, sizeof(line) - 1, fmt, ap);
+    va_end(ap);
+    line[sizeof(line) - 1] = 0;
+    log_line("update: %s", line);
+    f = _wfopen(SD_DIR L"\\update.log", L"a");
+    if (!f)
+        return;
+    GetLocalTime(&st);
+    fprintf(f, "%04u-%02u-%02u %02u:%02u:%02u (horario do CE) %s\n", st.wYear, st.wMonth, st.wDay, st.wHour,
+            st.wMinute, st.wSecond, line);
+    fclose(f);
+}
+
+/* SHA-256 of a file; 0 when it cannot be read whole or is larger than max */
+static int file_sha256(const WCHAR *path, DWORD max, char hex[65], DWORD *size)
+{
+    static uint8_t chunk[32768];
+    sha256_ctx c;
+    uint8_t d[32];
+    DWORD n, got, total = 0;
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE)
+        return 0;
+    n = GetFileSize(f, NULL);
+    if (n == 0xFFFFFFFF || n == 0 || n > max) {
+        CloseHandle(f);
+        return 0;
+    }
+    sha256_init(&c);
+    while (ReadFile(f, chunk, sizeof(chunk), &got, NULL) && got) {
+        sha256_update(&c, chunk, got);
+        total += got;
+    }
+    CloseHandle(f);
+    if (total != n)
+        return 0;
+    sha256_final(&c, d);
+    sha256_hex(d, hex);
+    if (size)
+        *size = n;
+    return 1;
+}
+
+/* the DTB must be a flattened tree with the bigfoston,boot-epoch slot the autoboot fills */
+static int dtb_has_epoch(const WCHAR *path)
+{
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    DWORD n, got = 0;
+    uint8_t *b;
+    int ok = 0;
+    if (f == INVALID_HANDLE_VALUE)
+        return 0;
+    n = GetFileSize(f, NULL);
+    if (n >= 40 && n <= (64u << 10) && (b = (uint8_t *)malloc(n)) != NULL) {
+        if (ReadFile(f, b, n, &got, NULL) && got == n)
+            ok = fdt_set_u32(b, n, "bigfoston,boot-epoch", 0);
+        free(b);
+    }
+    CloseHandle(f);
+    return ok;
+}
+
+static void remove_tree(const WCHAR *dir)
+{
+    WIN32_FIND_DATAW fd;
+    WCHAR pat[MAX_PATH], p[MAX_PATH];
+    HANDLE h;
+    _snwprintf(pat, MAX_PATH - 1, L"%ls\\*", dir);
+    pat[MAX_PATH - 1] = 0;
+    h = FindFirstFileW(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            _snwprintf(p, MAX_PATH - 1, L"%ls\\%ls", dir, fd.cFileName);
+            p[MAX_PATH - 1] = 0;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                remove_tree(p);
+            else
+                DeleteFileW(p);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir);
+}
+
+/* move update -> update.ok / update.bad (replacing an older one) */
+static void update_retire(const WCHAR *to)
+{
+    remove_tree(to);
+    if (!MoveFileW(UPDATE_DIR, to))
+        remove_tree(UPDATE_DIR);           /* never apply the same update twice */
+}
+
+static void update_reject(const char *why)
+{
+    upd_log("RECUSADA: %s; o Linux instalado continua", why);
+    update_retire(UPDATE_DIR L".bad");
+    STATUS(L"Atualizacao do SD recusada (ver BigFoston\\update.log no cartao).");
+    PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+    Sleep(3000);
+}
+
+/* expected hash of name from SHA256SUMS ("<64 hex>  <name>" lines) */
+static int sums_lookup(const char *sums, const WCHAR *name, char hex[65])
+{
+    char nm[32];
+    const char *line = sums;
+    WideCharToMultiByte(CP_ACP, 0, name, -1, nm, sizeof(nm), NULL, NULL);
+    while (line && *line) {
+        const char *end = strchr(line, '\n');
+        size_t len = end ? (size_t)(end - line) : strlen(line);
+        size_t nl = strlen(nm);
+        if (len >= 66 + nl && line[64] == ' ' && line[65] == ' ' && !strncmp(line + 66, nm, nl) &&
+            (len == 66 + nl || line[66 + nl] == '\r')) {
+            int i;
+            for (i = 0; i < 64; i++) {
+                char ch = line[i];
+                if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')))
+                    return 0;
+                hex[i] = ch;
+            }
+            hex[64] = 0;
+            return 1;
+        }
+        line = end ? end + 1 : NULL;
+    }
+    return 0;
+}
+
+static void apply_sd_update(void)
+{
+    static char sums[1024];
+    char want[UPD_FILES][65], have[65], why[160];
+    WCHAR src[MAX_PATH], dst[MAX_PATH], old[MAX_PATH];
+    DWORD size[UPD_FILES], got = 0;
+    FILE *f;
+    int i, wait;
+
+    for (wait = 0; wait < 6 && !file_exists(SD_DIR); wait++)
+        Sleep(500);                        /* the card may still be mounting at power-on */
+    if (!file_exists(UPDATE_DIR L"\\SHA256SUMS"))
+        return;
+    STATUS(L"Atualizacao do BigFoston encontrada no cartao SD: conferindo...");
+    PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+
+    f = _wfopen(UPDATE_DIR L"\\SHA256SUMS", L"rb");
+    if (f) {
+        got = (DWORD)fread(sums, 1, sizeof(sums) - 1, f);
+        fclose(f);
+    }
+    sums[got] = 0;
+    for (i = 0; i < UPD_FILES; i++) {
+        if (!sums_lookup(sums, upd_names[i], want[i])) {
+            _snprintf(why, sizeof(why) - 1, "SHA256SUMS sem %ls", upd_names[i]);
+            why[sizeof(why) - 1] = 0;
+            update_reject(why);
+            return;
+        }
+        _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls", UPDATE_DIR, upd_names[i]);
+        src[MAX_PATH - 1] = 0;
+        if (!file_sha256(src, upd_max[i], have, &size[i]) || strcmp(have, want[i])) {
+            _snprintf(why, sizeof(why) - 1, "%ls ausente, grande demais ou com SHA-256 diferente no cartao",
+                      upd_names[i]);
+            why[sizeof(why) - 1] = 0;
+            update_reject(why);
+            return;
+        }
+    }
+    if (!dtb_has_epoch(UPDATE_DIR L"\\fs707dc.dtb")) {
+        update_reject("fs707dc.dtb sem /chosen/bigfoston,boot-epoch");
+        return;
+    }
+
+    /* copy to <name>.new and check every copy before touching the installed files */
+    CreateDirectoryW(AUTOBOOT_DIR, NULL);
+    CreateDirectoryW(LINUX_DIR, NULL);
+    for (i = 0; i < UPD_FILES; i++) {
+        STATUS(L"Atualizacao do BigFoston: gravando %ls na memoria interna...", upd_names[i]);
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls", UPDATE_DIR, upd_names[i]);
+        _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
+        src[MAX_PATH - 1] = dst[MAX_PATH - 1] = 0;
+        if (!CopyFileW(src, dst, FALSE) || !file_sha256(dst, upd_max[i], have, NULL) || strcmp(have, want[i])) {
+            int j;
+            for (j = 0; j <= i; j++) {
+                _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[j]);
+                DeleteFileW(dst);
+            }
+            _snprintf(why, sizeof(why) - 1, "a copia de %ls na memoria interna nao confere (erro %lu)",
+                      upd_names[i], (unsigned long)GetLastError());
+            why[sizeof(why) - 1] = 0;
+            update_reject(why);
+            return;
+        }
+    }
+    /* swap: <name> -> <name>.old, <name>.new -> <name> */
+    for (i = 0; i < UPD_FILES; i++) {
+        _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls", LINUX_DIR, upd_names[i]);
+        _snwprintf(old, MAX_PATH - 1, L"%ls\\%ls.old", LINUX_DIR, upd_names[i]);
+        _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
+        dst[MAX_PATH - 1] = old[MAX_PATH - 1] = src[MAX_PATH - 1] = 0;
+        DeleteFileW(old);
+        if (file_exists(dst) && !MoveFileW(dst, old))
+            DeleteFileW(dst);
+        if (!MoveFileW(src, dst)) {
+            upd_log("ERRO ao instalar %ls (erro %lu): o boot automatico fica desligado ate reinstalar pelo PC",
+                    upd_names[i], (unsigned long)GetLastError());
+            update_retire(UPDATE_DIR L".bad");
+            return;
+        }
+    }
+    f = _wfopen(LINUX_DIR L"\\SHA256SUMS", L"wb");
+    if (f) {
+        for (i = 0; i < UPD_FILES; i++)
+            fprintf(f, "%s  %ls\n", want[i], upd_names[i]);
+        fclose(f);
+    }
+    upd_log("APLICADA: zImage %lu, initrd.img %lu, fs707dc.dtb %lu bytes; zImage %.16s",
+            (unsigned long)size[0], (unsigned long)size[1], (unsigned long)size[2], want[0]);
+    update_retire(UPDATE_DIR L".ok");
+    STATUS(L"Atualizacao do BigFoston instalada e conferida.");
+    PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+    Sleep(1500);
+}
+
 static void do_autoboot(void)
 {
     static bf_boot_args args;
@@ -1654,6 +1902,14 @@ static void do_autoboot(void)
 static DWORD WINAPI autoboot_thread(LPVOID arg)
 {
     int left = (int)(intptr_t)arg;
+    apply_sd_update();
+    if (!file_exists(LINUX_DIR L"\\zImage") || !file_exists(LINUX_DIR L"\\initrd.img") ||
+        !file_exists(LINUX_DIR L"\\fs707dc.dtb")) {
+        InterlockedExchange(&g_autoboot, 2);
+        STATUS(L"Linux da memoria interna incompleto: ficando no Windows CE.");
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        return 0;
+    }
     for (; left > 0 && g_autoboot == 1; left--) {
         STATUS(L"Iniciando o BigFoston (Linux) em %d s.  Toque em \"Ficar no Windows CE\" para cancelar.", left);
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);

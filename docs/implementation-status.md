@@ -74,6 +74,7 @@ carregador de tomada) e reiniciar (o aparelho fica desligado).
 | Ferramenta | Uso |
 |---|---|
 | `tools/bigfoston/bfagent.py` | fala com o agente: `install-linux`, `boot-flash`, `boot-mem`, `autoboot`, `install-agent`, `settime`, `ramoops`, arquivos, registro |
+| `tools/bigfoston/linux-update.py` | atualiza o Linux da memória interna a partir do Linux em execução (cartão SD + agente ≥ 0.6.0) |
 | `tools/bigfoston/sntp_server.py` | servidor de hora para o FOSTON pela rede USB |
 | `tools/bigfoston/sd-write-test.sh` | teste de gravação do SD (roda no aparelho) |
 | `tools/bigfoston/make_splash.py`, `src/ui/tools/make_logo.py` | imagens do logotipo |

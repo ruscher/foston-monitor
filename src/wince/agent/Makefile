@@ -14,9 +14,9 @@ LIBS = -lcoredll
 
 all: build/bfagent.exe
 
-build/bfagent.exe: bfagent.c bfp.c bfp.h boot.c boot.h
+build/bfagent.exe: bfagent.c bfp.c bfp.h boot.c boot.h sha256.c sha256.h
 	mkdir -p build
-	$(CC) $(CFLAGS) $(ARCH_FLAGS) $(DEFS) -o $@ bfagent.c bfp.c boot.c $(LIBS)
+	$(CC) $(CFLAGS) $(ARCH_FLAGS) $(DEFS) -o $@ bfagent.c bfp.c boot.c sha256.c $(LIBS)
 	$(STRIP) $@
 	cd build && sha256sum bfagent.exe > bfagent.exe.sha256
 

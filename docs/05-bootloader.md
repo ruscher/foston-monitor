@@ -98,6 +98,32 @@ só o DTB (3 KB) vai pela USB, carimbado com a hora do PC.
 | `boot-flash` | o comando volta em 1 s; o Linux começa ~9 s depois; a interface sobe 4,7 s após o início do kernel |
 | `boot-flash` com a correção do `ipaq` no PC | rede USB do Linux respondendo **15 s** após o comando (contagem de 5 s incluída); SSH já disponível (o `dropbear` sobe aos 4,7 s; o `crng` fica pronto no instante 0 graças ao `rng-seed` do DTB) |
 
+### Atualizar pelo Linux (agente ≥ 0.6.0)
+
+Com o Linux rodando, a versão nova vai pela rede USB High-Speed para o cartão SD, e o
+**Windows CE grava a memória interna** no boot seguinte. O Linux nunca escreve a NAND.
+
+```sh
+tools/bigfoston/linux-update.py stage          # ou: stage --poweroff
+# desligue e ligue o aparelho
+tools/bigfoston/linux-update.py status         # update.log e o kernel em execução
+```
+
+1. `stage` envia `zImage`, `initrd.img` e `fs707dc.dtb` (com o campo `bigfoston,boot-epoch`)
+   para `BigFoston/update.tmp` no cartão, confere o SHA-256 **lido do cartão** (depois de
+   `drop_caches`) e só então renomeia a pasta para `BigFoston/update`. Exige o cartão
+   montado com gravação (`bigfoston-sd status` = `rw`).
+2. No boot, antes da contagem do autoboot, o agente confere cada arquivo pelo
+   `SHA256SUMS`, copia para `linux\<nome>.new`, confere a cópia, guarda a versão atual
+   como `<nome>.old` e só então troca. Resultado em `BigFoston/update.log` no cartão; a
+   pasta vira `update.ok` ou, se algo não conferir, `update.bad` (o Linux instalado
+   continua igual).
+3. Se faltar algum arquivo depois da troca (energia cortada no meio), o agente não faz o
+   boot automático e fica no Windows CE; `install-linux` pelo PC refaz a instalação.
+
+O cartão traz `BigFoston/bfagent-0.5.1.exe`, a versão anterior do agente, como rota de
+recuperação (abre pelo menu do CE, em "caminho da navegação").
+
 ### PC: driver `ipaq` e o atraso de ~100 s na rede USB
 
 Depois do salto, o PC às vezes leva ~100 s para enxergar o gadget do Linux. O FOSTON fica
