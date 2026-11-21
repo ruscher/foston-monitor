@@ -7,25 +7,52 @@
 #include "../core/status.h"
 #include "../screens/screens.h"
 #include "../core/settings.h"
+#include "../core/powerkey.h"
 
 enum { B_HOME, B_BACK, B_RECENTS, B_TERM, B_SETTINGS, B_POWER, B__N };
 static lv_obj_t *btn[B__N];
 
+static lv_obj_t *power_dlg;          /* fundo do diálogo de energia aberto */
+static lv_obj_t *power_cancel;       /* seu botão Cancelar */
+
 static void power_cb(int b, void *ud)
 {
     (void)ud;
-    if(b == 1) app_power(true);          /* botões: 0 Cancelar, 1 Reiniciar, 2 Desligar */
-    else if(b == 2) app_power(false);
+    power_dlg = power_cancel = NULL;     /* o diálogo já está sendo apagado */
+    /* botões: 0 Cancelar, 1 Hibernar, 2 Reiniciar, 3 Desligar */
+    if(b == 1) powerkey_hibernate();
+    else if(b == 2) app_power(true);
+    else if(b == 3) app_power(false);
+}
+
+static void power_dlg_deleted(lv_event_t *e)
+{
+    if(lv_event_get_target(e) == power_dlg) power_dlg = power_cancel = NULL;
+}
+
+bool bottombar_power_is_open(void) { return power_dlg != NULL; }
+
+void bottombar_close_power(void)
+{
+    /* como tocar em Cancelar: o próprio diálogo se apaga (uma vez só) */
+    if(power_cancel) lv_obj_send_event(power_cancel, LV_EVENT_CLICKED, NULL);
 }
 
 void bottombar_open_power(void)
 {
-    static const char *btns[3];
+    if(power_dlg) return;                /* já aberto (toque na barra + botão físico) */
+    static const char *btns[4];
     btns[0] = tr(S_CANCEL);
-    btns[1] = tr(S_REBOOT);
-    btns[2] = tr(S_POWER_OFF);
+    btns[1] = tr(S_HIBERNATE);
+    btns[2] = tr(S_REBOOT);
+    btns[3] = tr(S_POWER_OFF);
     lv_obj_t *card = dialog_open(LV_SYMBOL_POWER, pal()->danger, tr(S_POWER_TITLE), tr(S_POWER_BODY),
-                                 btns, 3, -1, 2, power_cb, NULL);
+                                 btns, 4, -1, 3, power_cb, NULL);
+    lv_obj_set_width(card, 700);         /* quatro botões grandes numa linha */
+    power_dlg = lv_obj_get_parent(card);
+    lv_obj_t *row = lv_obj_get_child(card, -1);          /* a linha de botões é o último filho */
+    power_cancel = lv_obj_get_child(row, 0);
+    lv_obj_add_event_cb(power_dlg, power_dlg_deleted, LV_EVENT_DELETE, NULL);
     if(status_provider()->simulated) {
         lv_obj_t *n = bf_label(card, tr(S_POWER_SIM), BF_FONT_S, pal()->warning);
         lv_obj_set_width(n, LV_PCT(100));

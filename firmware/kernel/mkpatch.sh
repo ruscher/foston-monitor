@@ -13,6 +13,7 @@ GLUE="arch/arm/Kconfig arch/arm/Makefile drivers/irqchip/Kconfig drivers/irqchip
 drivers/clocksource/Kconfig drivers/clocksource/Makefile drivers/video/fbdev/Makefile
 arch/arm/boot/dts/mediatek/Makefile drivers/usb/musb/Kconfig drivers/usb/musb/Makefile
 drivers/input/touchscreen/Kconfig drivers/input/touchscreen/Makefile
+drivers/input/misc/Kconfig drivers/input/misc/Makefile
 drivers/mmc/host/Kconfig drivers/mmc/host/Makefile
 drivers/video/backlight/Kconfig drivers/video/backlight/Makefile
 drivers/power/reset/Kconfig drivers/power/reset/Makefile

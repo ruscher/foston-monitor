@@ -16,7 +16,7 @@ diff -Nur a/arch/arm/boot/dts/mediatek/Makefile b/arch/arm/boot/dts/mediatek/Mak
 diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 --- a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 +++ b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,224 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * FOSTON FS-707DC (MediaTek MT3351), BigFoston OS.
@@ -154,6 +154,18 @@ diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot
 +		backlight@80061308 {
 +			compatible = "foston,fs707dc-backlight";
 +			reg = <0x80061308 0x4>;
++		};
++
++		/*
++		 * Power button: GPIO 106, read like CE keypad_Us.dll does through the
++		 * buses.dll GPIO driver (input word 0x80002400 + 0x10 * (106 / 32),
++		 * bit 106 % 32), active low. Only this word is read.
++		 */
++		power-button@80002430 {
++			compatible = "foston,fs707dc-pwrkey";
++			reg = <0x80002430 0x4>;
++			mediatek,bit = <10>;
++			mediatek,active-low;
 +		};
 +
 +		/* watchdog: used only to restart, as the CE OAL does (nk.exe OALIoCtlHalReboot) */
@@ -685,6 +697,184 @@ diff -Nur a/drivers/clocksource/timer-mt3351-gpt.c b/drivers/clocksource/timer-m
 +	return 0;
 +}
 +fs_initcall_sync(align_trap_init);
+diff -Nur a/drivers/input/misc/Kconfig b/drivers/input/misc/Kconfig
+--- a/drivers/input/misc/Kconfig
++++ b/drivers/input/misc/Kconfig
+@@ -230,6 +230,13 @@
+ 	tristate "M68k Beeper support"
+ 	depends on M68K
+ 
++config INPUT_MT3351_PWRKEY
++	tristate "FOSTON FS-707DC (MT3351) power button"
++	depends on ARCH_MT3351 || COMPILE_TEST
++	help
++	  Power button of the FOSTON FS-707DC, a polled GPIO input, reported
++	  as KEY_POWER.
++
+ config INPUT_MAX77650_ONKEY
+ 	tristate "Maxim MAX77650 ONKEY support"
+ 	depends on MFD_MAX77650
+diff -Nur a/drivers/input/misc/Makefile b/drivers/input/misc/Makefile
+--- a/drivers/input/misc/Makefile
++++ b/drivers/input/misc/Makefile
+@@ -92,3 +92,4 @@
+ obj-$(CONFIG_INPUT_XEN_KBDDEV_FRONTEND)	+= xen-kbdfront.o
+ obj-$(CONFIG_INPUT_YEALINK)		+= yealink.o
+ obj-$(CONFIG_INPUT_IDEAPAD_SLIDEBAR)	+= ideapad_slidebar.o
++obj-$(CONFIG_INPUT_MT3351_PWRKEY)	+= mt3351-pwrkey.o
+diff -Nur a/drivers/input/misc/mt3351-pwrkey.c b/drivers/input/misc/mt3351-pwrkey.c
+--- a/drivers/input/misc/mt3351-pwrkey.c
++++ b/drivers/input/misc/mt3351-pwrkey.c
+@@ -0,0 +1,149 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Power button of the FOSTON FS-707DC (MediaTek MT3351), as KEY_POWER.
++ *
++ * The button is a GPIO input. The Windows CE keypad driver of the device
++ * (keypad_Us.dll) reads it through the GPIO driver of buses.dll every 50 ms
++ * (pin 106, "GIO1:" IOCTL 0x220c00), and buses.dll reads pin n at
++ * 0x80002400 + 0x10 * (n / 32), bit n % 32. The line is active low: the
++ * bit reads 1 while the button is up (checked with devmem on Linux).
++ *
++ * No GPIO interrupt is known, so the word is polled while the input device
++ * is open, and a change is reported only after it stays the same for
++ * "debounce" polls in a row. The driver only reads that one word: it never
++ * writes GPIO direction, pull or pin muxing, which Windows CE leaves set up.
++ *
++ * Holding the button for about 10 s still cuts the power in hardware (timer
++ * at 0x80035200 armed by Windows CE spc.dll); this driver does not touch it.
++ */
++#include <linux/bitops.h>
++#include <linux/input.h>
++#include <linux/io.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/property.h>
++
++static unsigned int poll_ms = 20;
++module_param(poll_ms, uint, 0444);
++MODULE_PARM_DESC(poll_ms, "polling interval in ms while the device is open");
++
++static unsigned int debounce = 2;
++module_param(debounce, uint, 0644);
++MODULE_PARM_DESC(debounce, "polls in a row with the same level before a change is reported");
++
++struct mt3351_pwrkey {
++	void __iomem *reg;
++	u32 mask;
++	bool active_low;
++	bool down;		/* reported state */
++	unsigned int same;	/* polls in a row that disagree with "down" */
++};
++
++static bool mt3351_pwrkey_read(struct mt3351_pwrkey *k)
++{
++	bool level = readl_relaxed(k->reg) & k->mask;
++
++	return level != k->active_low;
++}
++
++static void mt3351_pwrkey_poll(struct input_dev *input)
++{
++	struct mt3351_pwrkey *k = input_get_drvdata(input);
++	bool now = mt3351_pwrkey_read(k);
++
++	if (now == k->down) {
++		k->same = 0;
++		return;
++	}
++	if (++k->same < max(debounce, 1u))
++		return;
++	k->same = 0;
++	k->down = now;
++	input_report_key(input, KEY_POWER, now);
++	input_sync(input);
++}
++
++static int mt3351_pwrkey_open(struct input_dev *input)
++{
++	struct mt3351_pwrkey *k = input_get_drvdata(input);
++
++	/* a button already held when the device opens is not a new press */
++	k->down = mt3351_pwrkey_read(k);
++	k->same = 0;
++	return 0;
++}
++
++static int mt3351_pwrkey_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct mt3351_pwrkey *k;
++	struct input_dev *input;
++	struct resource *res;
++	u32 bit;
++	int ret;
++
++	k = devm_kzalloc(dev, sizeof(*k), GFP_KERNEL);
++	if (!k)
++		return -ENOMEM;
++
++	/*
++	 * The GPIO block is shared with other users of the same words (USB
++	 * VBUS is bit 7 of this block's first input word), so map without
++	 * claiming the region.
++	 */
++	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++	if (!res || resource_size(res) < 4)
++		return -EINVAL;
++	k->reg = devm_ioremap(dev, res->start, 4);
++	if (!k->reg)
++		return -ENOMEM;
++
++	ret = device_property_read_u32(dev, "mediatek,bit", &bit);
++	if (ret || bit > 31)
++		return dev_err_probe(dev, -EINVAL, "missing or bad mediatek,bit\n");
++	k->mask = BIT(bit);
++	k->active_low = device_property_read_bool(dev, "mediatek,active-low");
++
++	input = devm_input_allocate_device(dev);
++	if (!input)
++		return -ENOMEM;
++	input->name = "MT3351 power button";
++	input->phys = "mt3351-pwrkey/input0";
++	input->id.bustype = BUS_HOST;
++	input->open = mt3351_pwrkey_open;
++	input_set_capability(input, EV_KEY, KEY_POWER);
++	input_set_drvdata(input, k);
++
++	ret = input_setup_polling(input, mt3351_pwrkey_poll);
++	if (ret)
++		return ret;
++	input_set_poll_interval(input, clamp(poll_ms, 5u, 200u));
++
++	ret = input_register_device(input);
++	if (ret)
++		return ret;
++
++	dev_info(dev, "power button at %pa bit %u (%s), %u ms polling\n",
++		 &res->start, bit, k->active_low ? "active low" : "active high",
++		 clamp(poll_ms, 5u, 200u));
++	return 0;
++}
++
++static const struct of_device_id mt3351_pwrkey_of_match[] = {
++	{ .compatible = "foston,fs707dc-pwrkey" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, mt3351_pwrkey_of_match);
++
++static struct platform_driver mt3351_pwrkey_driver = {
++	.probe = mt3351_pwrkey_probe,
++	.driver = {
++		.name = "mt3351-pwrkey",
++		.of_match_table = mt3351_pwrkey_of_match,
++	},
++};
++module_platform_driver(mt3351_pwrkey_driver);
++
++MODULE_DESCRIPTION("FOSTON FS-707DC (MT3351) power button");
++MODULE_LICENSE("GPL");
 diff -Nur a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
 --- a/drivers/input/touchscreen/Kconfig
 +++ b/drivers/input/touchscreen/Kconfig

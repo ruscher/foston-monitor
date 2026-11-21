@@ -137,6 +137,18 @@
 			reg = <0x80061308 0x4>;
 		};
 
+		/*
+		 * Power button: GPIO 106, read like CE keypad_Us.dll does through the
+		 * buses.dll GPIO driver (input word 0x80002400 + 0x10 * (106 / 32),
+		 * bit 106 % 32), active low. Only this word is read.
+		 */
+		power-button@80002430 {
+			compatible = "foston,fs707dc-pwrkey";
+			reg = <0x80002430 0x4>;
+			mediatek,bit = <10>;
+			mediatek,active-low;
+		};
+
 		/* watchdog: used only to restart, as the CE OAL does (nk.exe OALIoCtlHalReboot) */
 		watchdog@80003000 {
 			compatible = "mediatek,mt3351-wdt-reboot";

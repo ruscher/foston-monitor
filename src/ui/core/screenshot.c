@@ -15,6 +15,7 @@ int screenshot_run(const char *dir)
 #else
 #include "app.h"
 #include "devwatch.h"
+#include "powerkey.h"
 #include "nav.h"
 #include "settings.h"
 #include "../widgets/imgview.h"
@@ -265,7 +266,27 @@ int screenshot_run(const char *dir)
         scr_files_demo("+fechar");
     }
     nav_home(); pump(50);
-    bottombar_open_power();         shot("25-dialogo-desligar");
+    powerkey_press();               shot("25-dialogo-desligar");   /* botão físico abre */
+    bottombar_open_power();         /* tocar em Desligar com ele aberto não duplica */
+    powerkey_press(); pump(30);     /* segundo toque no botão fecha */
+    if(bottombar_power_is_open())
+        fprintf(stderr, "screenshot: ERRO: o diálogo de energia não fechou (%u na camada)\n",
+                (unsigned)lv_obj_get_child_count(lv_layer_top()));
+    powerkey_press(); pump(30);     /* abre de novo e toca em Hibernar */
+    {
+        lv_obj_t *bd = lv_obj_get_child(lv_layer_top(), -1);   /* o diálogo é o mais novo */
+        lv_obj_t *card = bd ? lv_obj_get_child(bd, 0) : NULL;
+        lv_obj_t *row = card ? lv_obj_get_child(card, -1) : NULL;
+        lv_obj_t *hib = row ? lv_obj_get_child(row, 1) : NULL;
+        if(hib) lv_obj_send_event(hib, LV_EVENT_CLICKED, NULL);
+        pump(30);
+    }
+    if(!powerkey_sleeping() || bottombar_power_is_open())
+        fprintf(stderr, "screenshot: ERRO: hibernar (dormindo %d, aberto %d)\n",
+                powerkey_sleeping(), bottombar_power_is_open());
+    powerkey_press(); pump(30);     /* o botão acorda, sem abrir o diálogo */
+    if(powerkey_sleeping() || bottombar_power_is_open())
+        fprintf(stderr, "screenshot: ERRO: acordar\n");
     dialog_close_all(); pump(30);
     bottombar_open_recents();       shot("26-recentes");
     dialog_close_all(); pump(30);

@@ -9,6 +9,7 @@
 #include "fx.h"
 #include "clock.h"
 #include "devwatch.h"
+#include "powerkey.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
@@ -85,6 +86,7 @@ void app_init(lv_display_t *d)
     tick = lv_timer_create(tick_cb, 1000, NULL);
     fx_init();
     devwatch_init();
+    powerkey_init();
     fx_sound(FX_STARTUP);
 }
 

@@ -104,7 +104,8 @@ X(S_OPEN_RUN_TERMINAL, "common.open_run_terminal", "Abrir Run em modo terminal",
 
 /* ---- Desligar / Recentes ---- */
 X(S_POWER_TITLE,  "power.title", "Desligar o BigFoston?", "Power off BigFoston?", "¿Apagar BigFoston?")
-X(S_POWER_BODY,   "power.body", "Salve seu trabalho. O aparelho será desligado.", "Save your work. The device will power off.", "Guarde su trabajo. El equipo se apagará.")
+X(S_POWER_BODY,   "power.body", "Salve seu trabalho antes de desligar ou reiniciar. Hibernar apaga a tela; toque nela ou aperte o botão de energia para voltar.", "Save your work before powering off or restarting. Sleep turns the screen off; touch it or press the power button to come back.", "Guarde su trabajo antes de apagar o reiniciar. Hibernar apaga la pantalla; tóquela o pulse el botón de encendido para volver.")
+X(S_HIBERNATE,    "power.hibernate", "Hibernar", "Sleep", "Hibernar")
 X(S_POWER_OFF,    "power.off", "Desligar", "Power off", "Apagar")
 X(S_REBOOT,       "power.reboot", "Reiniciar", "Restart", "Reiniciar")
 X(S_BYE_OFF,      "power.bye_off", "Desligando…", "Powering off…", "Apagando…")

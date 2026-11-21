@@ -99,6 +99,14 @@ add_before "$T/drivers/tty/serial/8250/Kconfig" 'config SERIAL_8250_MT6577' 'con
 	  needed after Windows CE hands the SoC over.
 '
 add "$T/drivers/tty/serial/8250/Makefile" 'obj-$(CONFIG_SERIAL_8250_MT3351)	+= 8250_mt3351.o'
+add_before "$T/drivers/input/misc/Kconfig" 'config INPUT_MAX77650_ONKEY' 'config INPUT_MT3351_PWRKEY
+	tristate "FOSTON FS-707DC (MT3351) power button"
+	depends on ARCH_MT3351 || COMPILE_TEST
+	help
+	  Power button of the FOSTON FS-707DC, a polled GPIO input, reported
+	  as KEY_POWER.
+'
+add "$T/drivers/input/misc/Makefile" 'obj-$(CONFIG_INPUT_MT3351_PWRKEY)	+= mt3351-pwrkey.o'
 # the boot console draws with the VGA 8x8 font but has no fbcon: let it satisfy
 # FONT_8x8's dependency (otherwise "unmet direct dependencies" at every build)
 grep -q 'STI_CONSOLE || DRM_PANIC || MT3351_BOOTCON' "$T/lib/fonts/Kconfig" ||
