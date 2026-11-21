@@ -13,7 +13,7 @@ Data: 2026-11-21. Aparelho: FOSTON FS-707DC com BigFoston OS (Linux 6.12).
 | 5. Navegação | feita (simulada) | manobras, acompanhamento, recálculo, chegada; demo no aparelho — [08](08-navegacao.md) |
 | 6. Voz pt-BR | feita | eSpeak NG no sistema; avisos no momento certo; ~10× mais rápido que o tempo real — [09](09-voz.md) |
 | 7. Busca | feita | ruas, lugares, locais, endereços, categorias, favoritos, recentes — [10](10-busca.md) |
-| 8. Brasil inteiro | mapa e busca feitos; rotas de carro nacionais geradas no PC (3,94 GB, ainda não testadas no aparelho); bicicleta e a pé nacionais pendentes | mapa nacional de 1,68 GB funcionando no aparelho com GPS real; busca de 3,8 milhões de entradas — [13](13-dados-brasil.md) |
+| 8. Brasil inteiro | mapa e busca feitos; rotas nacionais geradas no PC — carro 3,94 GB, bicicleta 2,94 GB, a pé 2,71 GB — ainda não testadas no aparelho | mapa nacional de 1,68 GB funcionando no aparelho com GPS real; busca de 3,8 milhões de entradas — [13](13-dados-brasil.md) |
 | 9. UX | feita | tela cheia, nomes de vias ao longo da via, dia/noite, favoritos, recentes — [11](11-interface.md) |
 | 10. Desempenho | medido | [14](14-desempenho.md) |
 | 11. Testes de estresse | feitos (sem teste dirigindo) | 120 arquivos corrompidos e a interface inteira sob ASan/UBSan: 0 falhas; navegação longa no aparelho — [15](15-testes.md) |
