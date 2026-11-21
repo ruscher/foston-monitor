@@ -124,9 +124,9 @@ O CE (engenharia reversa do `usbfn.dll`, região XIP 1) liga o PHY com `0x600` b
 `POWER.HSMODE` e não usa o DMA Inventra; o VBUS vem do **GPIO7 / EINT1**
 (`0x80002400` bit 7), não do comparador do MUSB.
 
-Limitações atuais: só **com o cabo conectado durante o boot** (ao desconectar, o PHY
-não volta sozinho: VBUS deixa de ser visto, `DEVCTL 0x89`; o CE usa o EINT1/GPIO7),
-PIO. Uso: `ssh root@192.168.7.2` (só chave), serial em
+Limitações atuais: PIO (sem o DMA Inventra); tirar e recolocar o cabo funciona
+(6 de 6 em High-Speed, 21/11/2026), mas **ligar o aparelho sem o cabo e conectar
+depois não foi testado** (o CE detecta o VBUS pelo EINT1/GPIO7). Uso: `ssh root@192.168.7.2` (só chave), serial em
 `/dev/ttyACM0`; no PC, `192.168.7.1/24` na interface `cdc_ether`.
 
 O estado de cada linha é atualizado conforme os testes no aparelho
