@@ -85,6 +85,16 @@ enviado.
 | alimentação (PMU `0x8006136C`) | igual; o `gps.dll` desliga e religa no mesmo milissegundo (sem efeito real) |
 | GPIO 30/33 saída no CE, entrada no Linux; bloco `0x800027x0` | diferença real, mas o `gps.dll` não usa esses pinos; continuam assim no CE com o GPS parado — provavelmente outro driver |
 
-**Próximo teste:** provar se a transmissão do Linux chega ao chip — com o GPS ligado pelo
+**Avanço (mesmo dia):** a causa era a **perda de bytes na recepção** (FIFO com gatilho de
+8 bytes: 202 *overruns* em ~500 bytes a 921 600). Com gatilho de 1 byte o boot do DSP
+funciona no Linux: `mtk_gps_init success in 1 time`, versão `$PMTK705,AXN_1.33,0914,
+MNL_VER_10061801335101`, 33 KB enviados (firmware do DSP), medidas recebidas sem perda e o
+motor escreve `$PMTK010,001*2E` no VCOM. **Falta o NMEA de 1 Hz**: depois da partida o motor
+não emite mais nada (CPU ~5 %, quase só `Sleep` e mutexes), mesmo com o registro igual ao do
+CE (`NMEALog`, `FileLogSerial`, `WriteFileLogAsCOMOpen` = 1) e o `mtkgps.dat` original.
+Corrigidos na camada pelo caminho: `PulseEvent` (o pulso não liberava quem esperava) e logs
+do driver sem buffer.
+
+**Teste anterior (já feito):** provar se a transmissão do Linux chega ao chip — com o GPS ligado pelo
 CE (`gpsopen`), iniciar o Linux, ouvir a 921600 (o DSP carregado transmite medidas) e
 enviar um dos pacotes do `gps.dll` ao DSP em execução, sem reset.

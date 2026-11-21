@@ -91,6 +91,7 @@ typedef struct {
     pthread_mutex_t m;
     pthread_cond_t c;
     int manual, state;
+    unsigned pulses;      /* EVENT_PULSE: libera quem esperava naquele instante */
     char name[96];
     int refs;
 } event_t;
@@ -302,6 +303,7 @@ static uint64_t h_GetTickCount(u32 *a)
 
 static uint64_t h_Sleep(u32 *a)
 {
+    if(verbose > 1) logf_("SLEEP %u", a[0]);
     usleep(a[0] ? a[0] * 1000u : 0);
     if(!a[0]) sched_yield();
     return 0;
@@ -464,8 +466,8 @@ static uint64_t h_EventModify(u32 *a)
     event_t *e = h->obj;
     pthread_mutex_lock(&e->m);
     switch(a[1]) {
-    case 1:   /* EVENT_PULSE */
-        e->state = 1;
+    case 1:   /* EVENT_PULSE: acorda quem espera agora e deixa o evento desligado */
+        e->pulses++;
         pthread_cond_broadcast(&e->c);
         e->state = 0;
         break;
@@ -484,7 +486,17 @@ static void abstime(struct timespec *ts, u32 ms)
     if(ts->tv_nsec >= 1000000000L) { ts->tv_sec++; ts->tv_nsec -= 1000000000L; }
 }
 
+static uint64_t wait_impl(u32 *a);
 static uint64_t h_WaitForSingleObject(u32 *a)
+{
+    uint64_t r = wait_impl(a);
+    if(verbose > 1) {
+        handle_t *h = h_get(a[0]);
+        logf_("WAIT %s(%d) %d ms -> %u", h ? h->name : "?", h ? h->type : -1, (int)a[1], (u32)r);
+    }
+    return r;
+}
+static uint64_t wait_impl(u32 *a)
 {
     handle_t *h = h_get(a[0]);
     u32 ms = a[1];
@@ -495,10 +507,11 @@ static uint64_t h_WaitForSingleObject(u32 *a)
         event_t *e = h->obj;
         int r = 0;
         pthread_mutex_lock(&e->m);
-        while(!e->state && r != ETIMEDOUT)
+        unsigned p0 = e->pulses;
+        while(!e->state && e->pulses == p0 && r != ETIMEDOUT)
             r = ms == INFINITE_ ? pthread_cond_wait(&e->c, &e->m) : pthread_cond_timedwait(&e->c, &e->m, &ts);
-        int got = e->state;
-        if(got && !e->manual) e->state = 0;
+        int got = e->state || e->pulses != p0;
+        if(e->state && !e->manual) e->state = 0;
         pthread_mutex_unlock(&e->m);
         return R(got ? WAIT_OBJECT_0 : WAIT_TIMEOUT);
     }
@@ -671,7 +684,12 @@ static uint64_t h_ReadMsgQueue(u32 *a)
     pthread_mutex_lock(&q->m);
     while(!q->count && r != ETIMEDOUT)
         r = ms == INFINITE_ ? pthread_cond_wait(&q->c, &q->m) : pthread_cond_timedwait(&q->c, &q->m, &ts);
-    if(!q->count) { pthread_mutex_unlock(&q->m); last_error = 1460; return 0; }  /* ERROR_TIMEOUT */
+    if(!q->count) {
+        pthread_mutex_unlock(&q->m);
+        last_error = 1460;   /* ERROR_TIMEOUT */
+        if(verbose > 1) logf_("MSGQ leitura %#x vazia (%d ms)", a[0], (int)ms);
+        return 0;
+    }
     uint8_t *slot = q->buf + q->head * (4 + q->max_size);
     u32 n;
     memcpy(&n, slot, 4);
@@ -1060,6 +1078,8 @@ static uint64_t h_fopen(u32 *a)
     ce_path(path, sizeof path, A(a[0]));
     if(strchr(A(a[1]), 'w') || strchr(A(a[1]), 'a')) mkparents(path);
     FILE *f = fopen(path, A(a[1]));
+    /* logs do driver: sem buffer, para nada se perder se o processo terminar */
+    if(f && (strchr(A(a[1]), 'w') || strchr(A(a[1]), 'a'))) setvbuf(f, NULL, _IONBF, 0);
     LOGV("fopen(%s -> %s, %s) = %p", A(a[0]), path, A(a[1]), (void *)f);
     return R((uintptr_t)f);
 }
@@ -1276,17 +1296,39 @@ static uint64_t h_BusIoControl(u32 *a)
 
 static u32 vcom_lib[2];
 
-static uint64_t v_Init(u32 *a) { (void)a; return R(0x7c0001); }
+/* VCOM_Driver do CE: o gps.dll escreve o NMEA (COM_Write) e os aplicativos
+ * leem (COM_Read). Aqui a escrita vai para a saída padrão e também para um
+ * buffer que o COM_Read devolve. */
+static char vbuf[16384];
+static u32 vlen;
+static pthread_mutex_t vlock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t v_Init(u32 *a) { LOGV("VCOM COM_Init(%#x)", a[0]); return R(0x7c0001); }
 static uint64_t v_Deinit(u32 *a) { (void)a; return R(TRUE_); }
-static uint64_t v_Open(u32 *a) { (void)a; return R(0x7c0002); }
+static uint64_t v_Open(u32 *a) { LOGV("VCOM COM_Open(%#x, %#x)", a[0], a[1]); return R(0x7c0002); }
 static uint64_t v_Close(u32 *a) { (void)a; return R(TRUE_); }
 static uint64_t v_Write(u32 *a)
 {
+    LOGV("VCOM COM_Write(%#x, %u bytes)", a[0], a[2]);
     fwrite(P(a[1]), 1, a[2], stdout);
     fflush(stdout);
+    pthread_mutex_lock(&vlock);
+    u32 n = a[2] < sizeof vbuf - vlen ? a[2] : (u32)(sizeof vbuf - vlen);
+    memcpy(vbuf + vlen, P(a[1]), n);
+    vlen += n;
+    pthread_mutex_unlock(&vlock);
     return R(a[2]);
 }
-static uint64_t v_Read(u32 *a) { (void)a; usleep(100000); return 0; }
+static uint64_t v_Read(u32 *a)
+{
+    pthread_mutex_lock(&vlock);
+    u32 n = a[2] < vlen ? a[2] : vlen;
+    memcpy(P(a[1]), vbuf, n);
+    memmove(vbuf, vbuf + n, vlen - n);
+    vlen -= n;
+    pthread_mutex_unlock(&vlock);
+    if(!n) usleep(100000);
+    return R(n);
+}
 static uint64_t v_Seek(u32 *a) { (void)a; return R(0xFFFFFFFFu); }
 static uint64_t v_IOControl(u32 *a) { LOGV("VCOM IOControl(%#x)", a[1]); return R(TRUE_); }
 static uint64_t v_Power(u32 *a) { (void)a; return 0; }
@@ -1565,7 +1607,23 @@ int main(int argc, char **argv)
     if(!init) return 1;
     u32 open_h = ce_call6(exp_va("COM_Open", exps, nexp), init, 0xC0000000u, 0, 0, 0, 0);
     logf_("COM_Open = %#x", open_h);
-    for(int s = 0; s < seconds; s++) sleep(1);
+    /* como um aplicativo: lê COM1: (COM_Read do gps.dll) e mostra o NMEA */
+    u32 rd = exp_va("COM_Read", exps, nexp);
+    static char app[1024];
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
+    long total = 0;
+    for(;;) {
+        clock_gettime(CLOCK_MONOTONIC, &ts1);
+        if(ts1.tv_sec - ts0.tv_sec >= seconds) break;
+        u32 n = ce_call6(rd, open_h, (u32)(uintptr_t)app, sizeof app, 0, 0, 0);
+        if(n && n != 0xFFFFFFFFu && n <= sizeof app) {
+            total += n;
+            LOGV("COM_Read: %u bytes", n);
+        }
+        else usleep(50000);
+    }
+    logf_("COM_Read: %ld bytes de NMEA em %d s", total, seconds);
     logf_("fim (%d s)", seconds);
     return 0;
 }
