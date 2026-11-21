@@ -50,7 +50,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | USB ao ligar sem cabo | **FUNCIONANDO** | sem cabo no boot o CE deixa o bloco USB desligado; o glue o liga como o CE (conferido 21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
-| GPS (MT3328) | **NÃO IMPLEMENTADO** | protocolo binário *host-based*; a posição sai da biblioteca proprietária do CE | [uart.md](uart.md) |
+| GPS (MT3328) | **EM ANDAMENTO** | sem modo autônomo: o `gps.dll` do CE carrega o DSP e calcula a posição; caminho: carregar o `gps.dll` do próprio aparelho no Linux com uma camada CE (marcos M0–M5) | [gps.md](gps.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
@@ -95,5 +95,5 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
+| 1 | GPS: carregar o `gps.dll` no Linux (marcos M0–M5 em [gps.md](gps.md)) | navegação | alto: 5–7 semanas |
 | 2 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |
