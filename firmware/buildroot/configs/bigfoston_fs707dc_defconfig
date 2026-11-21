@@ -44,6 +44,7 @@ BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
 BR2_PACKAGE_DOSFSTOOLS=y
 BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
 BR2_PACKAGE_BIGFOSTON_SHELL=y
+BR2_PACKAGE_BIGFOSTON_GPS=y
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/users.table"
 # audio without alsa-lib (static build: every user would carry its own ~600 KB copy;
 # tinyalsa needs shared libs): mpg123 plays through the kernel OSS emulation and the

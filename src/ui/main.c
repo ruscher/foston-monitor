@@ -51,7 +51,7 @@ static void usage(const char *argv0)
            "  --lang pt|en|es    língua (não salva)\n"
            "  --theme dark|light|auto  modo (não salvo)\n"
            "  --data DIR         pasta de dados (= BIGFOSTON_DATA)\n"
-           "  --open TELA        abre direto: bigscreen, gallery, music, files, settings\n"
+           "  --open TELA        abre direto: bigscreen, gallery, music, files, settings, gps\n"
            "  --help\n", argv0);
 }
 
@@ -165,7 +165,7 @@ int main(int argc, char **argv)
     if(open_app) {
         static const struct { const char *name; bf_screen_t scr; } apps[] = {
             { "bigscreen", SCR_BIGSCREEN }, { "gallery", SCR_GALLERY }, { "music", SCR_MUSIC },
-            { "files", SCR_FILES }, { "settings", SCR_SETTINGS },
+            { "files", SCR_FILES }, { "settings", SCR_SETTINGS }, { "gps", SCR_GPS },
         };
         size_t k = 0;
         while(k < sizeof apps / sizeof apps[0] && strcmp(apps[k].name, open_app)) k++;

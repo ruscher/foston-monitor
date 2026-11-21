@@ -34,12 +34,21 @@
 #include <unistd.h>
 
 #include "cefmt.h"
+#include "nmea.h"
+#include <signal.h>
 
 typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint64_t (*hfn_t)(u32 *a);
 
 static int verbose, hw, strace_;
+/* serviço: estado para a interface e NMEA cru num pseudo-terminal */
+static const char *status_path, *pty_link;
+static int pty_fd = -1, quiet_stdout;
+static nmea_state_t gps_st;
+static char nmea_line[256];
+static size_t nmea_len;
+static volatile sig_atomic_t stop_req;
 static const char *data_dir = "/mnt/sd/BigFoston/gps";
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1345,13 +1354,32 @@ static uint64_t v_Open(u32 *a)
     return R(h);
 }
 static uint64_t v_Close(u32 *a) { (void)a; return R(TRUE_); }
+/* cada linha NMEA do driver: interpretador (arquivo de estado a cada segundo) */
+static void nmea_sink(const char *d, u32 n)
+{
+    for(u32 i = 0; i < n; i++) {
+        char c = d[i];
+        if(c == '\n') {
+            nmea_line[nmea_len] = 0;
+            if(nmea_feed(&gps_st, nmea_line) && status_path)
+                nmea_write_status(&gps_st, status_path, (long)time(NULL));
+            nmea_len = 0;
+        }
+        else if(nmea_len < sizeof nmea_line - 1) nmea_line[nmea_len++] = c;
+    }
+    if(pty_fd >= 0 && write(pty_fd, d, n) < 0) { /* ninguém lendo: descarta */ }
+}
+
 static uint64_t v_Write(u32 *a)
 {
     pthread_mutex_lock(&vlock);
     if(a[0] == 1) {                    /* gps.dll -> aplicativos: NMEA */
-        fwrite(P(a[1]), 1, a[2], stdout);
-        fflush(stdout);
+        if(!quiet_stdout) {
+            fwrite(P(a[1]), 1, a[2], stdout);
+            fflush(stdout);
+        }
         vput(&v_nmea, P(a[1]), a[2]);
+        nmea_sink(P(a[1]), a[2]);
     }
     else vput(&v_cmd, P(a[1]), a[2]); /* aplicativo -> gps.dll: comandos */
     pthread_mutex_unlock(&vlock);
@@ -1478,6 +1506,8 @@ static const handler_t handlers[] = {
 
 /* ------------------------------------------------------------- carregador */
 
+static void on_signal(int sig) { (void)sig; stop_req = 1; }
+
 typedef struct { u32 va, vsize, filesize, prot; } seg_t;
 static u32 exp_va(const char *name, const uint8_t *exps, u32 nexp)
 {
@@ -1551,8 +1581,27 @@ int main(int argc, char **argv)
         else if(!strcmp(argv[i], "--hw")) hw = 1;
         else if(!strcmp(argv[i], "-v")) verbose++;
         else if(!strcmp(argv[i], "-s")) strace_ = 1;
-        else { fprintf(stderr, "uso: %s [-b gps.bfx] [-r registro] [-d dados] [-t s] [--hw] [-v] [-s]\n", argv[0]); return 2; }
+        else if(!strcmp(argv[i], "--status") && i + 1 < argc) status_path = argv[++i];
+        else if(!strcmp(argv[i], "--pty") && i + 1 < argc) pty_link = argv[++i];
+        else if(!strcmp(argv[i], "-q")) quiet_stdout = 1;
+        else { fprintf(stderr, "uso: %s [-b gps.bfx] [-r registro] [-d dados] [-t s, 0 = sempre] [--hw] [-v] [-s]\n"
+                        "          [--status ARQ] [--pty LINK] [-q]\n", argv[0]); return 2; }
     }
+    nmea_init(&gps_st);
+    if(pty_link) {                       /* NMEA cru para outros leitores (gpsd, testes) */
+        pty_fd = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if(pty_fd >= 0 && !grantpt(pty_fd) && !unlockpt(pty_fd)) {
+            struct termios pt;
+            if(!tcgetattr(pty_fd, &pt)) { cfmakeraw(&pt); tcsetattr(pty_fd, TCSANOW, &pt); }
+            unlink(pty_link);
+            if(symlink(ptsname(pty_fd), pty_link)) logf_("%s: %s", pty_link, strerror(errno));
+            else logf_("NMEA em %s -> %s", pty_link, ptsname(pty_fd));
+        }
+        else { logf_("pseudo-terminal: %s", strerror(errno)); pty_fd = -1; }
+    }
+    signal(SIGTERM, on_signal);
+    signal(SIGINT, on_signal);
+    signal(SIGPIPE, SIG_IGN);
     char defbfx[512];
     if(!bfx) { snprintf(defbfx, sizeof defbfx, "%s/gps.bfx", data_dir); bfx = defbfx; }
 
@@ -1672,7 +1721,7 @@ int main(int argc, char **argv)
     long total = 0;
     for(;;) {
         clock_gettime(CLOCK_MONOTONIC, &ts1);
-        if(ts1.tv_sec - ts0.tv_sec >= seconds) break;
+        if((seconds && ts1.tv_sec - ts0.tv_sec >= seconds) || stop_req) break;
         u32 n = ce_call6(rd, open_h, (u32)(uintptr_t)app, sizeof app, 0, 0, 0);
         if(n && n != 0xFFFFFFFFu && n <= sizeof app) {      /* 0xFFFFFFFF = erro */
             total += n;
@@ -1680,7 +1729,9 @@ int main(int argc, char **argv)
         }
         else usleep(50000);
     }
-    logf_("COM_Read: %ld bytes de NMEA em %d s", total, seconds);
-    logf_("fim (%d s)", seconds);
+    logf_("COM_Read: %ld bytes de NMEA em %ld s", total, (long)(ts1.tv_sec - ts0.tv_sec));
+    if(status_path) unlink(status_path);
+    if(pty_link) unlink(pty_link);
+    logf_("fim");
     return 0;
 }

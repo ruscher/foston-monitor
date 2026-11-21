@@ -193,6 +193,28 @@ int screenshot_run(const char *dir)
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
+    {   /* GPS com um estado de demonstração (posição 3D e procurando) */
+        char gp[300];
+        data_path(gp, sizeof gp, "gps-demo-status");
+        FILE *gf = fopen(gp, "w");
+        if(gf) {
+            fprintf(gf, "updated=0\nepochs=120\ntime=145230.000\ndate=211126\nvalid=1\nmode=3\nquality=1\n"
+                        "lat=-23.550520\nlon=-46.633308\nalt=760.0\nspeed_kmh=42.5\ncourse=87.0\nhdop=0.9\n"
+                        "used=8\nview=11\nsats=2:62:40:44,5:35:310:38,7:18:120:31,9:71:200:46,12:25:80:27,"
+                        "13:48:150:41,15:9:20:-1,17:55:260:40,19:30:350:35,24:12:220:18,28:5:100:-1\n");
+            fclose(gf);
+            setenv("BIGFOSTON_GPS_STATUS", gp, 1);
+            go(SCR_GPS, 0); pump(200);  shot("38-gps-posicao");
+            gf = fopen(gp, "w");
+            if(gf) {
+                fprintf(gf, "updated=0\nepochs=12\ntime=145002.000\ndate=211126\nvalid=0\nmode=1\n"
+                            "hdop=99.99\nused=0\nview=3\nsats=5:40:120:22,9:15:300:-1,17:60:30:19\n");
+                fclose(gf);
+            }
+            go(SCR_GPS, 0); pump(1300); shot("38b-gps-procurando");
+            unsetenv("BIGFOSTON_GPS_STATUS");
+        }
+    }
     go(SCR_GALLERY, 0);             scr_gallery_demo(0); pump(200); shot("37-galeria");
     scr_gallery_demo(1); pump(300); shot("37b-galeria-foto");
     scr_gallery_demo(2); pump(50);

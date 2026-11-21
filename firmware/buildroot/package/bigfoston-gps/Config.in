@@ -1,0 +1,8 @@
+config BR2_PACKAGE_BIGFOSTON_GPS
+	bool "bigfoston-gps"
+	help
+	  GPS of the FOSTON FS-707DC: bfgps runs the device's own Windows CE
+	  gps.dll (MediaTek MT3328 MNL) in a Linux process and publishes NMEA
+	  and a status file (docs/gps.md). The DLL image is extracted from the
+	  device's NAND by tools/bigfoston/gps-extract.py and kept on its SD
+	  card; it is not part of BigFoston.

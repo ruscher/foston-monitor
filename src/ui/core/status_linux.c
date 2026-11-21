@@ -2,6 +2,7 @@
  * Nada é inventado: o que não existe no sistema vira BF_UNKNOWN / -1. */
 #define _DEFAULT_SOURCE
 #include "status.h"
+#include "gpsstat.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -256,8 +257,11 @@ static void lx_read(bf_status_t *s)
     read_net(s);
     s->volume_pct = lx_vol_get();
     s->muted = s->volume_pct < 0 ? BF_UNKNOWN : (s->volume_pct == 0 ? BF_YES : BF_NO);
-    s->gps_fix = BF_UNKNOWN;   /* sem driver de GPS ainda */
-    s->gps_sats = -1;
+    /* GPS: estado publicado pelo bfgps (desconhecido sem o serviço) */
+    gps_info_t g;
+    gps_read(&g);
+    if(!g.running) { s->gps_fix = BF_UNKNOWN; s->gps_sats = -1; }
+    else { s->gps_fix = g.state >= GPS_FIX2D ? BF_YES : BF_NO; s->gps_sats = g.used; }
 }
 
 const bf_status_provider_t bf_status_linux = {

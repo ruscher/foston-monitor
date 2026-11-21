@@ -13,8 +13,8 @@ CFLAGS  += -marm -std=gnu11 -Wall -Wextra -Wshadow -Wno-unused-parameter
 LDFLAGS += -static -Wl,-Ttext-segment=0x10000000
 LDLIBS  := -lpthread -lm
 
-SRCS := gpsce.c cefmt.c thunks.S
-build/bfgps: $(SRCS) cefmt.h Makefile
+SRCS := gpsce.c cefmt.c nmea.c thunks.S
+build/bfgps: $(SRCS) cefmt.h nmea.h Makefile
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRCS) $(LDLIBS)
 	$(STRIP) -o $@.stripped $@

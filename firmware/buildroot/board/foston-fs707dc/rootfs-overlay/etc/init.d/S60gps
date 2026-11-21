@@ -1,0 +1,38 @@
+#!/bin/sh
+# GPS: bfgps roda o gps.dll do próprio aparelho (docs/gps.md) e publica o
+# estado em /run/bigfoston-gps e o NMEA em /run/gps-nmea. Só começa se a
+# imagem do DLL (extraída da NAND do aparelho) estiver no cartão e se o GPS
+# não foi desligado na interface (/data/bigfoston/gps-off). Reinicia se cair.
+DIR=/mnt/sd/BigFoston/gps
+PIDFILE=/run/bigfoston-gps.pid
+LOG=/var/log/bfgps.log
+case "$1" in
+start)
+    [ -f "$DIR/gps.bfx" ] || { echo "gps: sem $DIR/gps.bfx (tools/bigfoston/gps-extract.py)"; exit 0; }
+    [ -f /data/bigfoston/gps-off ] && { echo "gps: desligado pela interface"; exit 0; }
+    [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null && exit 0
+    rm -f /run/bigfoston-gps.stop
+    (
+        n=0
+        while :; do
+            /usr/bin/bfgps --hw -q -t 0 -d "$DIR" -r /etc/bigfoston/gps-registry.txt \
+                --status /run/bigfoston-gps --pty /run/gps-nmea > /dev/null 2>> "$LOG"
+            rc=$?
+            [ -f /run/bigfoston-gps.stop ] && break
+            n=$((n + 1))
+            echo "bfgps: saiu ($rc), reinício $n" > /dev/kmsg
+            sleep 5
+        done
+    ) > /dev/null 2>&1 < /dev/null &
+    echo $! > "$PIDFILE"
+    ;;
+stop)
+    touch /run/bigfoston-gps.stop
+    killall bfgps 2>/dev/null
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE" /run/bigfoston-gps /run/gps-nmea
+    ;;
+restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+esac
