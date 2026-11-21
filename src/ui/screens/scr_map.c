@@ -43,9 +43,113 @@ typedef struct {
 
 typedef struct {               /* rótulo já posicionado (sem sobreposição) */
     lv_area_t a;
-    const lv_font_t *font;
+    const lv_font_t *font;     /* NULL = área reservada */
     char text[56];
+    int angle;                 /* != 0: nome de via girado, desenhado como imagem */
 } placed_t;
+
+/* nomes de vias girados: texto com contorno num bitmap ARGB8888, girado pelo LVGL */
+#define MAXROT 14
+static struct {
+    lv_obj_t *img;
+    lv_image_dsc_t dsc;
+    uint32_t *px;
+    int cx, cy;                /* centro na tela (sem o deslocamento do arraste) */
+} rot[MAXROT];
+static int nrot;
+static lv_draw_buf_t *glyph_buf;
+
+static uint32_t utf8_next(const char *s, int *i)
+{
+    const unsigned char *u = (const unsigned char *)s + *i;
+    uint32_t c = u[0];
+    int n = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3 : (c & 0xF8) == 0xF0 ? 4 : 1;
+    if(n == 1) { (*i)++; return c; }
+    c &= 0xFF >> (n + 1);
+    for(int k = 1; k < n; k++) {
+        if((u[k] & 0xC0) != 0x80) { (*i)++; return '?'; }
+        c = c << 6 | (u[k] & 0x3F);
+    }
+    *i += n;
+    return c;
+}
+
+/* texto -> ARGB8888 com contorno de 2 px; *w, *h = tamanho */
+static uint32_t *text_bitmap(const char *text, const lv_font_t *f, uint32_t fg, uint32_t halo, int *w, int *h)
+{
+    const int pad = 2;
+    int width = 0;
+    for(int i = 0; text[i];) {
+        uint32_t c = utf8_next(text, &i);
+        int j = i;
+        uint32_t nx = text[j] ? utf8_next(text, &j) : 0;
+        lv_font_glyph_dsc_t g;
+        if(lv_font_get_glyph_dsc(f, &g, c, nx)) width += g.adv_w;
+    }
+    int W = width + 2 * pad, H = lv_font_get_line_height(f) + 2 * pad;
+    if(W <= 2 * pad || W > 1200) return NULL;
+    uint8_t *cov = calloc((size_t)W * H, 1);
+    uint32_t *px = malloc((size_t)W * H * 4);
+    if(!cov || !px) { free(cov); free(px); return NULL; }
+    if(!glyph_buf) glyph_buf = lv_draw_buf_create(64, 64, LV_COLOR_FORMAT_A8, LV_STRIDE_AUTO);
+    int pen = pad, base = H - pad - f->base_line;
+    for(int i = 0; text[i] && glyph_buf;) {
+        uint32_t c = utf8_next(text, &i);
+        int j = i;
+        uint32_t nx = text[j] ? utf8_next(text, &j) : 0;
+        lv_font_glyph_dsc_t g;
+        if(!lv_font_get_glyph_dsc(f, &g, c, nx)) continue;
+        if(g.box_w && g.box_h && g.box_w <= 64 && g.box_h <= 64 && g.format == LV_FONT_GLYPH_FORMAT_A4) {
+            /* LVGL 9.2 returns the draw buffer itself; the A8 pixels are in ->data */
+            const uint8_t *bm = lv_font_get_glyph_bitmap(&g, glyph_buf) ? glyph_buf->data : NULL;
+            uint32_t stride = lv_draw_buf_width_to_stride(g.box_w, LV_COLOR_FORMAT_A8);   /* como o LVGL grava o glifo */
+            int x0 = pen + g.ofs_x, y0 = base - g.ofs_y - g.box_h;
+            for(int y = 0; bm && y < g.box_h; y++)
+                for(int x = 0; x < g.box_w; x++) {
+                    int X = x0 + x, Y = y0 + y;
+                    if(X < 0 || Y < 0 || X >= W || Y >= H) continue;
+                    uint8_t a = bm[y * stride + x];
+                    if(a > cov[Y * W + X]) cov[Y * W + X] = a;
+                }
+            lv_font_glyph_release_draw_data(&g);
+        }
+        pen += g.adv_w;
+    }
+    for(int y = 0; y < H; y++)
+        for(int x = 0; x < W; x++) {
+            int a = cov[y * W + x], hl = 0;                 /* contorno: máximo na vizinhança de 2 px */
+            for(int dy = -2; dy <= 2 && hl < 255; dy++)
+                for(int dx = -2; dx <= 2; dx++) {
+                    int X = x + dx, Y = y + dy;
+                    if(X >= 0 && Y >= 0 && X < W && Y < H && cov[Y * W + X] > hl) hl = cov[Y * W + X];
+                }
+            hl = hl * 3 / 2 > 255 ? 255 : hl * 3 / 2;
+            uint32_t col;
+            if(a) {                                          /* texto sobre o contorno */
+                uint32_t r = (((fg >> 16 & 255) * a + (halo >> 16 & 255) * (255 - a)) / 255);
+                uint32_t g2 = (((fg >> 8 & 255) * a + (halo >> 8 & 255) * (255 - a)) / 255);
+                uint32_t b = (((fg & 255) * a + (halo & 255) * (255 - a)) / 255);
+                col = 0xFFu << 24 | r << 16 | g2 << 8 | b;
+                if(hl < 255) col = (uint32_t)(a > hl ? a : hl) << 24 | (col & 0xFFFFFF);
+            } else col = (uint32_t)hl << 24 | (halo & 0xFFFFFF);
+            px[y * W + x] = col;
+        }
+    free(cov);
+    *w = W;
+    *h = H;
+    return px;
+}
+
+static void rot_clear(void)
+{
+    for(int i = 0; i < nrot; i++) {
+        if(rot[i].img) lv_obj_delete(rot[i].img);
+        free(rot[i].px);
+        rot[i].img = NULL;
+        rot[i].px = NULL;
+    }
+    nrot = 0;
+}
 
 /* ------------------------------------------------ thread de renderização */
 static struct {
@@ -184,6 +288,8 @@ static void update_offset(void)
     }
     lv_obj_set_pos(img, off_x, off_y);
     lv_obj_invalidate(layer);
+    for(int i = 0; i < nrot; i++)
+        if(rot[i].img) lv_obj_set_pos(rot[i].img, rot[i].cx - (int)rot[i].dsc.header.w / 2 + off_x, rot[i].cy - (int)rot[i].dsc.header.h / 2 + off_y);
     update_marker();
 }
 
@@ -204,11 +310,13 @@ static void layout_labels(const lbl_t *l, int n)
         { 0, 0, 12 + 2 * BTN + 24, 80 }, { MAP_W - 84, 0, MAP_W, 12 + 6 * (BTN + 10) },
         { 0, MAP_H - 52, 300, MAP_H }, { MAP_W - 170, MAP_H - 76, MAP_W, MAP_H },
     };
+    rot_clear();
     nplaced = 0;
     for(unsigned i = 0; i < sizeof reserved / sizeof reserved[0]; i++) {
         placed[nplaced].a = reserved[i];
         placed[nplaced].font = NULL;
         placed[nplaced].text[0] = 0;
+        placed[nplaced].angle = 0;
         nplaced++;
     }
     if(have_pos) {                                   /* nem sobre o marcador da posição */
@@ -220,12 +328,14 @@ static void layout_labels(const lbl_t *l, int n)
         placed[nplaced].a = (lv_area_t){ sx - 26, sy - 26, sx + 26, sy + 26 };
         placed[nplaced].font = NULL;
         placed[nplaced].text[0] = 0;
+        placed[nplaced].angle = 0;
         nplaced++;
     }
     for(int i = 0; i < n && nplaced < MAXLBL; i++) {
         bool place = l[i].kind >= BGK_P_CITY;
         if(!l[i].text[0]) continue;
-        if(!place && (l[i].angle > 25 || l[i].angle < -25)) continue;   /* texto girado: a fazer */
+        int ang = place ? 0 : l[i].angle;
+        if(ang >= -8 && ang <= 8) ang = 0;                   /* quase horizontal: texto comum */
         bool dup = false;
         for(int k = 0; k < nplaced && !dup; k++)
             dup = placed[k].font && !strcmp(placed[k].text, l[i].text);
@@ -234,11 +344,43 @@ static void layout_labels(const lbl_t *l, int n)
         lv_point_t sz;
         lv_text_get_size(&sz, l[i].text, f, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         lv_area_t a = { l[i].x - sz.x / 2, l[i].y - sz.y / 2, l[i].x + sz.x / 2, l[i].y + sz.y / 2 };
+        if(ang) {                                            /* caixa do retângulo girado */
+            double r = ang * M_PI / 180, c = fabs(cos(r)), sn = fabs(sin(r));
+            int hw = (int)(sz.x * c + sz.y * sn) / 2 + 1, hh = (int)(sz.x * sn + sz.y * c) / 2 + 1;
+            a = (lv_area_t){ l[i].x - hw, l[i].y - hh, l[i].x + hw, l[i].y + hh };
+            if(nrot >= MAXROT) continue;
+        }
         if(a.x1 < 2 || a.y1 < 2 || a.x2 > MAP_W - 2 || a.y2 > MAP_H - 2 || overlaps(&a)) continue;
         placed[nplaced].a = a;
         placed[nplaced].font = f;
+        placed[nplaced].angle = ang;
         snprintf(placed[nplaced].text, sizeof placed[nplaced].text, "%s", l[i].text);
         nplaced++;
+        if(ang) {
+            bool night = shown.night;
+            int w, h;
+            uint32_t *px = text_bitmap(l[i].text, f, night ? 0xE8E8E8 : 0x202020, night ? 0x101318 : 0xFFFFFF, &w, &h);
+            if(!px) { nplaced--; continue; }
+            int k = nrot++;
+            rot[k].px = px;
+            memset(&rot[k].dsc, 0, sizeof rot[k].dsc);
+            rot[k].dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+            rot[k].dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+            rot[k].dsc.header.w = (uint32_t)w;
+            rot[k].dsc.header.h = (uint32_t)h;
+            rot[k].dsc.header.stride = (uint32_t)w * 4;
+            rot[k].dsc.data = (const uint8_t *)px;
+            rot[k].dsc.data_size = (uint32_t)(w * h * 4);
+            rot[k].img = lv_image_create(ov);
+            lv_obj_remove_flag(rot[k].img, LV_OBJ_FLAG_CLICKABLE);
+            lv_image_set_src(rot[k].img, &rot[k].dsc);
+            lv_image_set_pivot(rot[k].img, w / 2, h / 2);
+            lv_image_set_rotation(rot[k].img, ang * 10);
+            rot[k].cx = l[i].x;
+            rot[k].cy = l[i].y;
+            lv_obj_set_pos(rot[k].img, l[i].x - w / 2 + off_x, l[i].y - h / 2 + off_y);
+            lv_obj_move_to_index(rot[k].img, lv_obj_get_index(layer) + 1);   /* sob os marcadores e botões */
+        }
     }
 }
 
@@ -408,7 +550,7 @@ static void layer_draw(lv_event_t *e)
     lv_color_t fg = night ? lv_color_hex(0xE8E8E8) : lv_color_hex(0x202020);
     lv_color_t halo = night ? lv_color_hex(0x101318) : lv_color_white();
     for(int i = 0; i < nplaced; i++)
-        if(placed[i].font) draw_text_halo(ly, &placed[i], off_x, off_y, fg, halo);
+        if(placed[i].font && !placed[i].angle) draw_text_halo(ly, &placed[i], off_x, off_y, fg, halo);
 }
 
 /* ------------------------------------------------------------ barra/escala */
@@ -1597,6 +1739,8 @@ static void destroy(void)
     R.route = NULL;
     R.route_n = 0;
     last_save();
+    rot_clear();
+    if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
