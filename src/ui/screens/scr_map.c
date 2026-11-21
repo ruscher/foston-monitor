@@ -1006,10 +1006,22 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         if(follow && z != cur.zoom256) { cur.zoom256 = z; update_scale(); }
     }
     if(follow) {
-        cur.cx = cx;
-        cur.cy = cy;
-        cur.rot = heading_up ? -(int)lround(pos_course) : 0;
-        request();
+        /* parado (posição oscilando alguns metros): só redesenha se o centro andar 2 px ou
+         * o mapa girar 2 graus — poupa CPU com o GPS ligado e o aparelho quieto */
+        int rot = heading_up ? -(int)lround(pos_course) : 0;
+        rast_surface_t sf = { NULL, MAP_W, MAP_H, MAP_W };
+        int sx, sy;
+        bgr_view_t v = cur;
+        anchor(&v.ox, &v.oy);
+        bgr_world_to_screen(&v, &sf, cx, cy, &sx, &sy);
+        int dr = abs(rot - cur.rot) % 360;
+        if(dr > 180) dr = 360 - dr;
+        if(abs(sx - v.ox) >= 2 || abs(sy - v.oy) >= 2 || dr >= 2 || !have_shown) {
+            cur.cx = cx;
+            cur.cy = cy;
+            cur.rot = rot;
+            request();
+        }
     }
     update_marker();
 }
