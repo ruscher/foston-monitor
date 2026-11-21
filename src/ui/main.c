@@ -20,6 +20,7 @@
 #include "core/status.h"
 #include "core/screenshot.h"
 #include "core/touch_calib.h"
+#include "core/nav.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,7 @@ static void usage(const char *argv0)
            "  --lang pt|en|es    língua (não salva)\n"
            "  --theme dark|light|auto  modo (não salvo)\n"
            "  --data DIR         pasta de dados (= BIGFOSTON_DATA)\n"
+           "  --open bigscreen   abre direto no app Big Screen\n"
            "  --help\n", argv0);
 }
 
@@ -96,7 +98,7 @@ static const char *find_touch(char *buf, size_t n)
 
 int main(int argc, char **argv)
 {
-    const char *shot_dir = NULL, *data = NULL, *lang = NULL, *theme = NULL;
+    const char *shot_dir = NULL, *data = NULL, *lang = NULL, *theme = NULL, *open_app = NULL;
 #ifdef BIGFOSTON_TARGET
     const bf_status_provider_t *prov = &bf_status_linux;
 #else
@@ -109,6 +111,7 @@ int main(int argc, char **argv)
         else if(!strcmp(argv[i], "--lang") && i + 1 < argc) lang = argv[++i];
         else if(!strcmp(argv[i], "--theme") && i + 1 < argc) theme = argv[++i];
         else if(!strcmp(argv[i], "--data") && i + 1 < argc) data = argv[++i];
+        else if(!strcmp(argv[i], "--open") && i + 1 < argc && !strcmp(argv[i + 1], "bigscreen")) open_app = argv[++i];
         else { usage(argv[0]); return strcmp(argv[i], "--help") ? 2 : 0; }
     }
 
@@ -159,6 +162,7 @@ int main(int argc, char **argv)
     if(!disp) { fprintf(stderr, "bigfoston: falha ao abrir o display\n"); return 1; }
 
     app_init(disp);
+    if(open_app) nav_go(SCR_BIGSCREEN, 0);
     app_apply_hw_settings();
 
     for(;;) {

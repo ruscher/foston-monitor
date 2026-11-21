@@ -5,7 +5,9 @@
 set -eu
 OUT="$BINARIES_DIR/bigfoston"
 TOP="$BR2_EXTERNAL_BIGFOSTON_PATH/../.."
-BOOTARGS=${BIGFOSTON_BOOTARGS:-"loglevel=7 rdinit=/init user_debug=31 print_fatal_signals=1 splash"}
+# g_cdc.iSerialNumber: names the USB gadget so the PC's Big Screen Monitor
+# recognises the FOSTON with BigFoston OS (profile foston_bigfoston); IDs unchanged.
+BOOTARGS=${BIGFOSTON_BOOTARGS:-"loglevel=7 rdinit=/init user_debug=31 print_fatal_signals=1 splash g_cdc.iSerialNumber=BIGFOSTON-FS707DC"}
 mkdir -p "$OUT"
 rm -f "$OUT/initrd.gz" "$OUT/normal.dtb"
 cp "$BINARIES_DIR/zImage" "$OUT/zImage"

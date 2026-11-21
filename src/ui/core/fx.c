@@ -147,6 +147,7 @@ void fx_tick(void)
 static bool is_interactive(lv_obj_t *o)
 {
     if(!o || !lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE)) return false;
+    if(lv_obj_has_flag(o, LV_OBJ_FLAG_USER_1)) return false;   /* ex.: painel do Big Screen */
     if(lv_obj_check_type(o, &lv_button_class) || lv_obj_check_type(o, &lv_switch_class) ||
        lv_obj_check_type(o, &lv_buttonmatrix_class) || lv_obj_check_type(o, &lv_keyboard_class))
         return true;

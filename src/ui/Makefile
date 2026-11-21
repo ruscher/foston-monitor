@@ -70,7 +70,7 @@ else
 endif
 
 # lodepng: inflate dos EPUB (Livros) sempre; codificador PNG só para --screenshot
-EXTRA_SRCS := third_party/lodepng/lodepng.c
+EXTRA_SRCS := third_party/lodepng/lodepng.c third_party/fsp/fsp.c
 ifneq ($(SCREENSHOT),1)
   DEFS += -DLODEPNG_NO_COMPILE_ENCODER -DLODEPNG_NO_COMPILE_DISK
 endif
@@ -126,6 +126,10 @@ $(BUILD)/$(LVGL_DIR)/%.o: $(LVGL_DIR)/%.c lv_conf.h
 $(BUILD)/assets/%.o: assets/%.c lv_conf.h
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS_BASE) $(LVGL_WARN) -c $< -o $@
+# núcleo do protocolo do Big Screen (cópia do bsmd): com os avisos do nosso código
+$(BUILD)/third_party/fsp/%.o: third_party/fsp/%.c third_party/fsp/fsp.h
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS_BASE) $(WARN) -c $< -o $@
 $(BUILD)/third_party/lodepng/%.o: third_party/lodepng/%.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS_BASE) -w -c $< -o $@
