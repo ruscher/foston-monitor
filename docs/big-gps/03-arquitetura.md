@@ -24,7 +24,8 @@ Geofabrik .osm.pbf ──► osm-clip.py (região)    bfgps ──► /run/bigfo
 | Construtor de rotas (CH) | `tools/big-gps/builder/bgroute-build.cpp` | C++ (RoutingKit) | feito |
 | Consulta de rotas | `src/ui/biggps/bgroute.c` | C | feito |
 | Navegação (manobras, acompanhamento, recálculo) | `src/ui/biggps/bgnav.c`, `bgrouter.c` | C | feito |
-| Voz, busca | `src/ui/biggps/`, `src/ui/` | C | a fazer |
+| Voz | `src/ui/core/voice.c` + eSpeak NG | C | feito |
+| Busca (índice no PC, consulta no aparelho) | `tools/big-gps/builder/bgsearch-build.cpp`, `src/ui/biggps/bgsearch.c` | C++ / C | feito |
 | Tela no shell | `src/ui/screens/scr_map.c` | C (LVGL 9) | mapa, destino, rota e navegação |
 
 O código do aparelho (`src/ui/biggps/`) não depende do LVGL: devolve um buffer RGB565 e uma
@@ -36,8 +37,8 @@ lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no 
 /mnt/sd/BigFoston/big-gps/
   mapas/      pacotes .bgm (um por região ou o Brasil inteiro)
   rotas/      grafos de roteamento por perfil: <região>-carro.bgr, -moto, -bicicleta, -ape
-  busca/      índices de nomes e endereços (a fazer)
-  voz/        frases e/ou vozes (a fazer)
+  busca/      índice de busca: <região>.bgs
+  voz/        espeak-ng-data (português) para a voz das instruções
   dados/      favoritos, histórico, configurações do usuário
 ```
 

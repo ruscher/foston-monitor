@@ -222,6 +222,9 @@ int screenshot_run(const char *dir)
                     fclose(gf);
                 }
                 go(SCR_MAP, 0); pump(3000); shot("42-biggps-mapa");
+                scr_map_demo(3); pump(300); shot("42e-biggps-busca");
+                scr_map_demo(4); pump(300); shot("42f-biggps-busca-hospital");
+                scr_map_demo(5); pump(100);
                 scr_map_demo(0); pump(4000); shot("42b-biggps-rota");
                 scr_map_demo(1); pump(2500); shot("42c-biggps-navegacao");
                 scr_map_demo(2); pump(2500); shot("42d-biggps-navegacao-adiante");

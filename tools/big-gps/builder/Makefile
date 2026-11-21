@@ -7,8 +7,10 @@ LDLIBS = -lz -lpthread
 
 RK = $(DEPS)/src-routingkit
 
-all: bgmap-build bgroute-build
+all: bgmap-build bgroute-build bgsearch-build
 bgmap-build: bgmap-build.cpp ../../../src/ui/biggps/bgmap_format.h ../../../src/ui/biggps/bgkinds.h
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
+bgsearch-build: bgsearch-build.cpp ../../../src/ui/biggps/bgsearch_format.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
 # RoutingKit (BSD-2-Clause): make -C $(RK) lib/libroutingkit.a
 bgroute-build: bgroute-build.cpp ../../../src/ui/biggps/bgroute_format.h $(RK)/lib/libroutingkit.a
@@ -16,5 +18,5 @@ bgroute-build: bgroute-build.cpp ../../../src/ui/biggps/bgroute_format.h $(RK)/l
 $(RK)/lib/libroutingkit.a:
 	$(MAKE) -C $(RK) lib/libroutingkit.a
 clean:
-	rm -f bgmap-build bgroute-build
+	rm -f bgmap-build bgroute-build bgsearch-build
 .PHONY: all clean

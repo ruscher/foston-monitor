@@ -18,6 +18,7 @@
 #include "../biggps/bgrender.h"
 #include "../biggps/bgrouter.h"
 #include "../biggps/bgicons.h"
+#include "../biggps/bgsearch.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -143,7 +144,8 @@ static struct {
     bool prev_heading_up;
     char dest_name[64];
 } N;
-static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark;
+static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
+static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
 static uint16_t icon_px[80 * 80];
 static int icon_type = -1, icon_exit = -1;
@@ -199,7 +201,7 @@ static void layout_labels(const lbl_t *l, int n)
 {
     /* áreas dos controles (voltar, coluna da direita, faixas de baixo) não recebem rótulos */
     static const lv_area_t reserved[] = {
-        { 0, 0, 80, 80 }, { MAP_W - 84, 0, MAP_W, 12 + 6 * (BTN + 10) },
+        { 0, 0, 12 + 2 * BTN + 24, 80 }, { MAP_W - 84, 0, MAP_W, 12 + 6 * (BTN + 10) },
         { 0, MAP_H - 52, 300, MAP_H }, { MAP_W - 170, MAP_H - 76, MAP_W, MAP_H },
     };
     nplaced = 0;
@@ -264,6 +266,9 @@ static void draw_text_halo(lv_layer_t *ly, const placed_t *p, int dx, int dy, lv
 #define MK 48
 static uint32_t mk_arrow[MK * MK], mk_dot[MK * MK], mk_stale[MK * MK], mk_pin[MK * MK];
 static lv_image_dsc_t mk_dsc[4];
+#define MG 32
+static uint32_t mg_px[MG * MG];                /* lupa branca (tingida pela cor do tema) */
+static lv_image_dsc_t mg_dsc;
 static lv_obj_t *mark;
 
 static bool in_poly(const float *p, int n, float x, float y)
@@ -318,6 +323,29 @@ static void mk_build(void)
             mk_stale[y * MK + x] = MIX(wd, bd, grey);
             #undef MIX
         }
+    for(int y = 0; y < MG; y++)
+        for(int x = 0; x < MG; x++) {
+            int cov = 0;
+            for(int sy = 0; sy < 4; sy++)
+                for(int sx = 0; sx < 4; sx++) {
+                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 13, dy = fy - 13;
+                    float r2 = dx * dx + dy * dy;
+                    bool ring = r2 < 9.5f * 9.5f && r2 > 6.5f * 6.5f;
+                    /* cabo: faixa de 3,2 px na diagonal de (20, 20) a (28, 28) */
+                    float t = ((fx - 20) + (fy - 20)) / 2, px = fx - 20 - t, py = fy - 20 - t;
+                    bool handle = t > -1 && t < 8.5f && px * px + py * py < 2.4f * 2.4f;
+                    if(ring || handle) cov++;
+                }
+            mg_px[y * MG + x] = cov ? (uint32_t)(cov * 255 / 16) << 24 | 0xFFFFFF : 0;
+        }
+    memset(&mg_dsc, 0, sizeof mg_dsc);
+    mg_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    mg_dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
+    mg_dsc.header.w = MG;
+    mg_dsc.header.h = MG;
+    mg_dsc.header.stride = MG * 4;
+    mg_dsc.data = (const uint8_t *)mg_px;
+    mg_dsc.data_size = sizeof mg_px;
     uint32_t *bufs[4] = { mk_arrow, mk_dot, mk_stale, mk_pin };
     for(int i = 0; i < 4; i++) {
         memset(&mk_dsc[i], 0, sizeof mk_dsc[i]);
@@ -611,6 +639,7 @@ static void end_navigation(void)
     if(botbar) lv_obj_add_flag(botbar, LV_OBJ_FLAG_HIDDEN);
     if(sim_chip) lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
     if(info_chip) lv_obj_remove_flag(info_chip, LV_OBJ_FLAG_HIDDEN);
+    if(search_btn) lv_obj_remove_flag(search_btn, LV_OBJ_FLAG_HIDDEN);
     heading_up = N.prev_heading_up;
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
     cur.rot = 0;
@@ -637,6 +666,7 @@ static void start_navigation(bool simulate)
     lv_obj_remove_flag(banner, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(botbar, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(info_chip, LV_OBJ_FLAG_HIDDEN);             /* a barra de baixo ocupa o lugar */
+    lv_obj_add_flag(search_btn, LV_OBJ_FLAG_HIDDEN);            /* a faixa da manobra ocupa o lugar */
     if(simulate) lv_obj_remove_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
     cur.zoom256 = N.profile >= BGR_BIKE ? 17 * 256 : 16 * 256 + 128;
@@ -717,9 +747,26 @@ static void profile_cb(lv_event_t *e)
     route_request(profile, false);
 }
 
-static void open_dest_sheet(uint32_t x, uint32_t y)
+static char dest_title[96];
+static void fav_add(const char *name, uint32_t x, uint32_t y);
+
+static void fav_save_cb(lv_event_t *e)
+{
+    fav_add(dest_title[0] ? dest_title : tr(S_MAP_POINT), N.dx, N.dy);
+    lv_obj_t *b = lv_event_get_target(e);
+    lv_obj_add_state(b, LV_STATE_DISABLED);
+    lv_obj_t *l = lv_obj_get_child(b, lv_obj_get_child_count(b) - 1);
+    if(l) lv_label_set_text(l, tr(S_MAP_SAVED));
+}
+
+static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name);
+
+static void open_dest_sheet(uint32_t x, uint32_t y) { open_dest_sheet_named(x, y, NULL); }
+
+static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
 {
     if(N.navigating) return;
+    snprintf(dest_title, sizeof dest_title, "%s", name ? name : "");
     bgn_free(&N.route);
     set_route_overlay(NULL, 0);
     N.active = 0;
@@ -728,7 +775,14 @@ static void open_dest_sheet(uint32_t x, uint32_t y)
     N.dy = y;
     update_marker();
     lv_obj_t *sh = sheet_new();
-    bf_label(sh, tr(S_MAP_DEST), BF_FONT_M, pal()->text);
+    lv_obj_t *head = sheet_row(sh);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = bf_label(head, dest_title[0] ? dest_title : tr(S_MAP_DEST), BF_FONT_M, pal()->text);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(t, 1);
+    lv_obj_t *fb = bf_button(head, LV_SYMBOL_SAVE, tr(S_MAP_SAVE_FAV), 0);
+    lv_obj_set_height(fb, 40);
+    lv_obj_add_event_cb(fb, fav_save_cb, LV_EVENT_CLICKED, NULL);
     bf_label(sh, tr(S_MAP_DEST_HINT), BF_FONT_S, pal()->text_dim);
     lv_obj_t *row = sheet_row(sh);
     static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
@@ -835,6 +889,234 @@ static void sim_step(void)
     double hd = atan2((double)(int32_t)(b[0] - a[0]), -(double)(int32_t)(b[1] - a[1])) * 180 / M_PI;
     double kmh = span > 0 ? ((double)r->cum_dm[k + 1] - r->cum_dm[k]) / span * 3.6 : 0;
     on_fix(x, y, kmh, hd < 0 ? hd + 360 : hd, true);
+}
+
+/* ----------------------------------------------------------------- busca */
+#define MAXRES 20
+#define MAXFAV 40
+static bgs_index_t *six;
+static lv_obj_t *sv, *sv_ta, *sv_list, *sv_kb;
+static lv_timer_t *sv_timer;
+static bgs_result_t sv_res[MAXRES];
+static int sv_nres;
+static struct { char name[96]; uint32_t x, y; } favs[MAXFAV];
+static int nfav;
+
+static void fav_load(void)
+{
+    char path[512], line[200];
+    data_path(path, sizeof path, "biggps-favoritos.txt");
+    nfav = 0;
+    FILE *f = fopen(path, "r");
+    if(!f) return;
+    while(nfav < MAXFAV && fgets(line, sizeof line, f)) {
+        double lat, lon;
+        int off = 0;
+        if(sscanf(line, "%lf %lf %n", &lat, &lon, &off) < 2 || !off || fabs(lat) > 85 || fabs(lon) > 180) continue;
+        char *nm = line + off;
+        nm[strcspn(nm, "\r\n")] = 0;
+        if(!*nm) continue;
+        snprintf(favs[nfav].name, sizeof favs[nfav].name, "%s", nm);
+        bgr_lonlat_to_world(lon, lat, &favs[nfav].x, &favs[nfav].y);
+        nfav++;
+    }
+    fclose(f);
+}
+
+static void fav_add(const char *name, uint32_t x, uint32_t y)
+{
+    fav_load();
+    if(nfav >= MAXFAV) return;
+    char path[512];
+    data_path(path, sizeof path, "biggps-favoritos.txt");
+    FILE *f = fopen(path, "a");
+    if(!f) return;
+    double lon, lat;
+    bgr_world_to_lonlat(x, y, &lon, &lat);
+    char clean[96];
+    snprintf(clean, sizeof clean, "%s", name);
+    clean[strcspn(clean, "\r\n")] = 0;                          /* uma linha por favorito */
+    fprintf(f, "%.7f %.7f %s\n", lat, lon, clean);
+    fclose(f);
+}
+
+static void search_close(void)
+{
+    if(sv_timer) { lv_timer_delete(sv_timer); sv_timer = NULL; }
+    if(sv_kb) { lv_obj_delete(sv_kb); sv_kb = NULL; }
+    if(sv) { lv_obj_delete(sv); sv = NULL; }
+    sv_ta = sv_list = NULL;
+}
+
+static void go_to(uint32_t x, uint32_t y, const char *name)
+{
+    search_close();
+    set_follow(false);
+    cur.cx = x;
+    cur.cy = y;
+    cur.rot = 0;
+    if(cur.zoom256 < 15 * 256) cur.zoom256 = 16 * 256;
+    update_scale();
+    request();
+    open_dest_sheet_named(x, y, name);
+}
+
+static void res_cb(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if(i >= 1000) {                                             /* favorito */
+        i -= 1000;
+        if(i < nfav) go_to(favs[i].x, favs[i].y, favs[i].name);
+    } else if(i < sv_nres) {
+        go_to(sv_res[i].x, sv_res[i].y, sv_res[i].name);
+    }
+}
+
+static void list_row(const char *sym, const char *name, const char *sub, uint32_t dist_m, intptr_t ud)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *r = lv_button_create(sv_list);
+    lv_obj_remove_style_all(r);
+    lv_obj_set_size(r, LV_PCT(100), 52);
+    lv_obj_set_style_bg_color(r, p->surface2, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(r, 8, 0);
+    lv_obj_add_event_cb(r, res_cb, LV_EVENT_CLICKED, (void *)ud);
+    lv_obj_t *ic = bf_label(r, sym, BF_FONT_M, p->primary);
+    lv_obj_align(ic, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_t *nl = bf_label(r, name, BF_FONT_M, p->text);
+    lv_obj_set_pos(nl, 44, 4);
+    lv_label_set_long_mode(nl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(nl, 600);
+    if(sub && *sub) {
+        lv_obj_t *sl = bf_label(r, sub, BF_FONT_S, p->text_dim);
+        lv_obj_set_pos(sl, 44, 30);
+        lv_label_set_long_mode(sl, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(sl, 600);
+    }
+    if(dist_m != UINT32_MAX) {
+        char d[24];
+        bgn_dist_text(dist_m * 10, d, sizeof d);
+        lv_obj_t *dl = bf_label(r, d, BF_FONT_S, p->text_dim);
+        lv_obj_align(dl, LV_ALIGN_RIGHT_MID, -8, 0);
+    }
+}
+
+static void ref_point(uint32_t *x, uint32_t *y)
+{
+    if(have_pos) bgr_lonlat_to_world(pos_lon, pos_lat, x, y);
+    else { *x = cur.cx; *y = cur.cy; }
+}
+
+static void show_results(void)
+{
+    lv_obj_clean(sv_list);
+    static const char *sym[] = { LV_SYMBOL_HOME, LV_SYMBOL_RIGHT, LV_SYMBOL_GPS, LV_SYMBOL_HOME };
+    for(int i = 0; i < sv_nres; i++)
+        list_row(sym[sv_res[i].type & 3], sv_res[i].name, sv_res[i].context, sv_res[i].dist_m, i);
+    if(!sv_nres) bf_label(sv_list, tr(S_MAP_NORESULT), BF_FONT_M, pal()->text_dim);
+}
+
+static void cat_cb(lv_event_t *e)
+{
+    int cat = (int)(intptr_t)lv_event_get_user_data(e);
+    uint32_t x, y;
+    ref_point(&x, &y);
+    sv_nres = six ? bgs_nearby(six, cat, x, y, 30000, sv_res, MAXRES) : 0;
+    show_results();
+}
+
+static void show_home(void)
+{
+    lv_obj_clean(sv_list);
+    if(!six) {
+        lv_obj_t *l = bf_label(sv_list, tr(S_MAP_NOSEARCH), BF_FONT_M, pal()->text_dim);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, LV_PCT(100));
+    } else {
+        lv_obj_t *row = bf_plain(sv_list);
+        lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+        lv_obj_set_style_pad_column(row, BF_SP_S, 0);
+        lv_obj_set_style_pad_row(row, BF_SP_S, 0);
+        static const struct { bf_str_t s; int cat; } cats[] = {
+            { S_MAP_C_FUEL, BGS_C_FUEL }, { S_MAP_C_HOSPITAL, BGS_C_HOSPITAL }, { S_MAP_C_PHARMACY, BGS_C_PHARMACY },
+            { S_MAP_C_MARKET, BGS_C_MARKET }, { S_MAP_C_FOOD, BGS_C_FOOD }, { S_MAP_C_HOTEL, BGS_C_HOTEL },
+        };
+        for(unsigned i = 0; i < sizeof cats / sizeof cats[0]; i++) {
+            lv_obj_t *b = bf_button(row, NULL, tr(cats[i].s), 0);
+            lv_obj_set_height(b, 44);
+            lv_obj_add_event_cb(b, cat_cb, LV_EVENT_CLICKED, (void *)(intptr_t)cats[i].cat);
+        }
+    }
+    fav_load();
+    if(nfav) bf_label(sv_list, tr(S_MAP_FAVORITES), BF_FONT_S, pal()->text_dim);
+    for(int i = 0; i < nfav; i++) list_row(LV_SYMBOL_SAVE, favs[i].name, NULL, UINT32_MAX, 1000 + i);
+}
+
+static void sv_query(lv_timer_t *t)
+{
+    (void)t;
+    sv_timer = NULL;
+    if(!sv_ta) return;
+    const char *q = lv_textarea_get_text(sv_ta);
+    char norm[128];
+    if(!bgs_norm(q, norm, sizeof norm) || !six) { show_home(); return; }
+    uint32_t x, y;
+    ref_point(&x, &y);
+    sv_nres = bgs_query(six, q, x, y, sv_res, MAXRES);
+    show_results();
+}
+
+static void sv_changed(lv_event_t *e)
+{
+    (void)e;
+    if(sv_timer) lv_timer_reset(sv_timer);
+    else {
+        sv_timer = lv_timer_create(sv_query, 350, NULL);
+        lv_timer_set_repeat_count(sv_timer, 1);
+    }
+}
+
+static void sv_close_cb(lv_event_t *e) { (void)e; search_close(); }
+
+static void search_open(lv_event_t *e)
+{
+    (void)e;
+    if(sv || N.navigating) return;
+    const bf_palette_t *p = pal();
+    close_sheet();
+    sv = lv_obj_create(ov);
+    lv_obj_remove_style_all(sv);
+    lv_obj_set_size(sv, MAP_W, MAP_H);
+    lv_obj_set_style_bg_color(sv, p->bg, 0);
+    lv_obj_set_style_bg_opa(sv, LV_OPA_COVER, 0);
+    lv_obj_add_flag(sv, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(sv, LV_OBJ_FLAG_SCROLLABLE);
+    sv_ta = lv_textarea_create(sv);
+    lv_textarea_set_one_line(sv_ta, true);
+    lv_textarea_set_max_length(sv_ta, 80);
+    lv_textarea_set_placeholder_text(sv_ta, tr(S_MAP_SEARCH_HINT));
+    lv_obj_set_style_text_font(sv_ta, BF_FONT_M, 0);
+    lv_obj_set_size(sv_ta, MAP_W - 96, 52);
+    lv_obj_set_pos(sv_ta, 12, 8);
+    lv_obj_add_event_cb(sv_ta, sv_changed, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_t *x = bf_button(sv, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_size(x, 60, 52);
+    lv_obj_set_pos(x, MAP_W - 72, 8);
+    lv_obj_add_event_cb(x, sv_close_cb, LV_EVENT_CLICKED, NULL);
+    sv_list = bf_plain(sv);
+    lv_obj_set_size(sv_list, MAP_W - 24, MAP_H - 70 - 210);
+    lv_obj_set_pos(sv_list, 12, 66);
+    lv_obj_set_flex_flow(sv_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sv_list, 2, 0);
+    bf_scrollable(sv_list);
+    sv_kb = lv_keyboard_create(sv);
+    lv_obj_set_size(sv_kb, MAP_W, 210);
+    lv_obj_align(sv_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(sv_kb, sv_ta);
+    lv_obj_add_event_cb(sv_kb, sv_close_cb, LV_EVENT_CANCEL, NULL);
+    show_home();
 }
 
 /* -------------------------------------------------------------- eventos */
@@ -1063,6 +1345,7 @@ static void create(lv_obj_t *parent, int arg)
     const bf_palette_t *p = pal();
     bool night = theme_dark_now();
 
+    if(!mk_dsc[0].data) mk_build();
     ov = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, MAP_W, MAP_H);
@@ -1083,7 +1366,6 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_size(layer, MAP_W, MAP_H);
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(layer, layer_draw, LV_EVENT_DRAW_MAIN, NULL);
-    if(!mk_dsc[0].data) mk_build();
     dmark = lv_image_create(ov);
     lv_image_set_src(dmark, &mk_dsc[3]);
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_CLICKABLE);
@@ -1095,6 +1377,14 @@ static void create(lv_obj_t *parent, int arg)
     /* controles */
     lv_obj_t *b = round_btn(ov, LV_SYMBOL_LEFT, close_cb, 0);
     lv_obj_align(b, LV_ALIGN_TOP_LEFT, 12, 12);
+    search_btn = round_btn(ov, "", search_open, 0);
+    lv_obj_align(search_btn, LV_ALIGN_TOP_LEFT, 12 + BTN + 10, 12);
+    lv_obj_t *mg = lv_image_create(search_btn);
+    lv_image_set_src(mg, &mg_dsc);
+    lv_obj_set_style_image_recolor(mg, p->text, 0);
+    lv_obj_set_style_image_recolor_opa(mg, LV_OPA_COVER, 0);
+    lv_obj_center(mg);
+    lv_obj_remove_flag(mg, LV_OBJ_FLAG_CLICKABLE);
     b = round_btn(ov, LV_SYMBOL_PLUS, zoom_cb, 1);
     lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12);
     b = round_btn(ov, LV_SYMBOL_MINUS, zoom_cb, -1);
@@ -1235,6 +1525,21 @@ static void create(lv_obj_t *parent, int arg)
     {
         const char *base = getenv("BIGFOSTON_BIGGPS");
         bgrt_start(base && *base ? base : BIGGPS_DIR_DEFAULT);
+        char sd[600], sp[1100], serr[256];
+        snprintf(sd, sizeof sd, "%s/busca", base && *base ? base : BIGGPS_DIR_DEFAULT);
+        DIR *dp = opendir(sd);
+        if(dp) {
+            struct dirent *de;
+            char best[256] = "";
+            while((de = readdir(dp))) {
+                size_t l = strlen(de->d_name);
+                if(l > 4 && de->d_name[0] != '.' && !strcasecmp(de->d_name + l - 4, ".bgs") && (!best[0] || strcmp(de->d_name, best) < 0)
+                   && snprintf(best, sizeof best, "%s", de->d_name) >= (int)sizeof best) best[0] = 0;
+            }
+            closedir(dp);
+            if(best[0] && snprintf(sp, sizeof sp, "%s/%s", sd, best) < (int)sizeof sp && !(six = bgs_open(sp, serr, sizeof serr)))
+                fprintf(stderr, "biggps: %s\n", serr);
+        }
     }
     R.stop = R.has_req = R.done = 0;
     R.front = 0;
@@ -1268,6 +1573,9 @@ static void destroy(void)
         pthread_join(R.th, NULL);
         R.started = 0;
     }
+    search_close();
+    bgs_close(six);
+    six = NULL;
     bgrt_stop();
     voice_stop();
     if(N.navigating) heading_up = N.prev_heading_up;
@@ -1281,13 +1589,14 @@ static void destroy(void)
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
-    voice_lbl = NULL;
+    voice_lbl = search_btn = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;
     have_shown = 0;
     nplaced = 0;
 }
 
-/* --screenshot: 0 destino em Taguatinga (carro), 1 começa a simulação, 2 avança 60 s */
+/* --screenshot: 0 destino em Taguatinga (carro), 1 começa a simulação, 2 avança 60 s,
+ * 3 abre a busca, 4 busca "hospital", 5 fecha a busca */
 void scr_map_demo(int step)
 {
     if(step == 0) {
@@ -1299,6 +1608,12 @@ void scr_map_demo(int step)
         if(N.active) start_navigation(true);
     } else if(step == 2) {
         for(int i = 0; i < 60 && N.navigating; i++) sim_step();
+    } else if(step == 3) {
+        search_open(NULL);
+    } else if(step == 4) {
+        if(sv_ta) { lv_textarea_set_text(sv_ta, "hospital"); sv_query(NULL); }
+    } else if(step == 5) {
+        search_close();
     }
 }
 

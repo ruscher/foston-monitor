@@ -353,9 +353,10 @@ const char *bgn_text(const bgn_man_t *m, char *buf, int n)
 const char *bgn_dist_text(uint32_t dm, char *buf, int n)
 {
     uint32_t m = dm / 10;
-    if (m < 1000) {
-        uint32_t step = m < 100 ? 10 : m < 500 ? 50 : 100;
-        snprintf(buf, (size_t)n, "%u m", (m + step / 2) / step * step);
+    uint32_t step = m < 100 ? 10 : m < 500 ? 50 : 100;
+    uint32_t r = (m + step / 2) / step * step;
+    if (r < 1000) {
+        snprintf(buf, (size_t)n, "%u m", r);
     } else if (m < 10000) {
         uint32_t d = (m + 50) / 100;
         snprintf(buf, (size_t)n, "%u,%u km", d / 10, d % 10);

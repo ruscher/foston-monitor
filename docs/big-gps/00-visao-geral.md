@@ -9,7 +9,8 @@ favoritos e recálculo de rota. Usa o GPS que já funciona no Linux (`bfgps`, ve
 mapas próprio desenha o DF no aparelho (tela do mapa no shell); o roteamento (quatro perfis,
 Contraction Hierarchies) funciona e foi conferido contra Dijkstra; a navegação curva a curva
 funciona com rota simulada no aparelho (falta teste dirigindo); a voz em português (eSpeak NG)
-fala as instruções; a busca está por fazer.
+fala as instruções; a busca offline (ruas, lugares, locais, endereços, categorias, favoritos)
+funciona.
 Nada aqui está aprovado para uso no trânsito real.
 
 ## Princípios
@@ -33,6 +34,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [07-roteamento.md](07-roteamento.md) | grafo, perfis, CH, conferência, medições |
 | [08-navegacao.md](08-navegacao.md) | uso, manobras, acompanhamento, avisos, testes |
 | [09-voz.md](09-voz.md) | eSpeak NG: escolha medida, funcionamento, dados no cartão |
+| [10-busca.md](10-busca.md) | índice, normalização, ordenação, favoritos, medições |
 
 Os demais documentos (roteamento, navegação, voz, busca, interface, dados do Brasil,
 desempenho, testes, licenças, instalação, uso, problemas conhecidos, relatório de entrega)

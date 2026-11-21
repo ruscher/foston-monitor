@@ -11,15 +11,18 @@ OUT = build/host
 endif
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter
-LIB = bgmap.c raster.c bgrender.c bgroute.c bgnav.c bgrouter.c bgicons.c
+LIB = bgmap.c raster.c bgrender.c bgroute.c bgnav.c bgrouter.c bgicons.c bgsearch.c
 
-all: $(OUT)/bgview $(OUT)/bgroute
+all: $(OUT)/bgview $(OUT)/bgroute $(OUT)/bgsearch
 $(OUT)/bgview: bgview.c $(LIB) *.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ bgview.c $(LIB) -lm
 $(OUT)/bgroute: bgroute-cli.c $(LIB) *.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ bgroute-cli.c $(LIB) -lm
+$(OUT)/bgsearch: bgsearch-cli.c $(LIB) *.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ bgsearch-cli.c $(LIB) -lm
 clean:
 	rm -rf build
 .PHONY: all clean
