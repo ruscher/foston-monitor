@@ -22,6 +22,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_BIGSCREEN] = &scr_bigscreen_def,     [SCR_GALLERY] = &scr_gallery_def,
     [SCR_GPS] = &scr_gps_def,
     [SCR_MAP] = &scr_map_def,
+    [SCR_PERF] = &scr_perf_def,
 };
 
 static lv_obj_t *content;

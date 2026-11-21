@@ -1,0 +1,24 @@
+BigFoston: não desenhar as telas cobertas por um objeto opaco da camada superior
+O mapa do Big GPS e os visualizadores em tela cheia ficam em lv_layer_top; o LVGL 9.2
+redesenhava a tela inteira por baixo a cada quadro (docs/performance/08-lvgl-optimization.md).
+
+--- a/src/core/lv_refr.c
++++ b/src/core/lv_refr.c
+@@ -721,6 +721,17 @@
+     lv_obj_t * top_act_scr = NULL;
+     lv_obj_t * top_prev_scr = NULL;
+ 
++    /*BigFoston: an opaque full-screen object on the top layer (map, viewers) covers
++     *the screens: draw from it and skip everything below*/
++    lv_obj_t * top_layer_cover = lv_refr_get_top_obj(&layer->_clip_area, lv_display_get_layer_top(disp_refr));
++    if(top_layer_cover) {
++        refr_obj_and_children(layer, top_layer_cover);
++        refr_obj_and_children(layer, lv_display_get_layer_sys(disp_refr));
++        draw_buf_flush(disp_refr);
++        LV_PROFILER_END;
++        return;
++    }
++
+     /*Get the most top object which is not covered by others*/
+     top_act_scr = lv_refr_get_top_obj(&layer->_clip_area, lv_display_get_screen_active(disp_refr));
+     if(disp_refr->prev_scr) {

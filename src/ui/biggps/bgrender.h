@@ -16,7 +16,16 @@ typedef struct {
     int rot;                   /* map rotation, degrees clockwise (0 = north up) */
     int night;                 /* night palette */
     int ox, oy;                /* screen point that shows (cx, cy); 0,0 = surface centre */
+    int detail;                /* BGR_DETAIL_*: what is drawn (0 = balanced, the default) */
 } bgr_view_t;
+
+/* level of detail (docs/performance/09-gps-map-engine.md): the economic level leaves out
+ * buildings, paths, service roads, parking and the casing of minor roads until close
+ * zooms; detailed draws everything the map has from its minimum zoom */
+enum { BGR_DETAIL_BALANCED = 0, BGR_DETAIL_ECONOMIC = 1, BGR_DETAIL_DETAILED = 2 };
+
+/* minimum zoom at which a kind is drawn at a level of detail */
+int bgr_kind_minzoom(int kind, int detail);
 
 typedef struct {
     int16_t x, y;              /* screen position (centre of the text) */

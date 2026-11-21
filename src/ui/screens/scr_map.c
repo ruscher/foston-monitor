@@ -14,6 +14,8 @@
 #include "../core/gpsstat.h"
 #include "../core/settings.h"
 #include "../core/voice.h"
+#include "../core/perf.h"
+#include "../third_party/lvgl/src/core/lv_obj_event_private.h"   /* lv_cover_check_info_t */
 #include "../biggps/bgmap.h"
 #include "../biggps/bgrender.h"
 #include "../biggps/bgrouter.h"
@@ -27,6 +29,9 @@
 #include <string.h>
 #include <strings.h>
 #include <time.h>
+#include <unistd.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 
 #define MAP_W   800
 #define MAP_H   480
@@ -45,7 +50,8 @@ typedef struct {               /* rótulo já posicionado (sem sobreposição) *
     lv_area_t a;
     const lv_font_t *font;     /* NULL = área reservada */
     char text[56];
-    int angle;                 /* != 0: nome de via girado, desenhado como imagem */
+    int angle;                 /* != 0: nome de via girado */
+    int cx, cy;                /* centro do texto no quadro */
 } placed_t;
 
 /* nomes de vias girados: texto com contorno num bitmap ARGB8888, girado pelo LVGL */
@@ -115,14 +121,30 @@ static uint32_t *text_bitmap(const char *text, const lv_font_t *f, uint32_t fg, 
         }
         pen += g.adv_w;
     }
+    /* contorno: máximo numa janela 5x5, separável (linha, depois coluna) */
+    uint8_t *hm = malloc((size_t)W * H), *hv = malloc((size_t)W * H);
+    if(!hm || !hv) { free(hm); free(hv); free(cov); free(px); return NULL; }
     for(int y = 0; y < H; y++)
         for(int x = 0; x < W; x++) {
-            int a = cov[y * W + x], hl = 0;                 /* contorno: máximo na vizinhança de 2 px */
-            for(int dy = -2; dy <= 2 && hl < 255; dy++)
-                for(int dx = -2; dx <= 2; dx++) {
-                    int X = x + dx, Y = y + dy;
-                    if(X >= 0 && Y >= 0 && X < W && Y < H && cov[Y * W + X] > hl) hl = cov[Y * W + X];
-                }
+            int m = 0;
+            for(int dx = -2; dx <= 2; dx++) {
+                int X = x + dx;
+                if(X >= 0 && X < W && cov[y * W + X] > m) m = cov[y * W + X];
+            }
+            hm[y * W + x] = (uint8_t)m;
+        }
+    for(int y = 0; y < H; y++)
+        for(int x = 0; x < W; x++) {
+            int m = 0;
+            for(int dy = -2; dy <= 2; dy++) {
+                int Y = y + dy;
+                if(Y >= 0 && Y < H && hm[Y * W + x] > m) m = hm[Y * W + x];
+            }
+            hv[y * W + x] = (uint8_t)m;
+        }
+    for(int y = 0; y < H; y++)
+        for(int x = 0; x < W; x++) {
+            int a = cov[y * W + x], hl = hv[y * W + x];
             hl = hl * 3 / 2 > 255 ? 255 : hl * 3 / 2;
             uint32_t col;
             if(a) {                                          /* texto sobre o contorno */
@@ -134,6 +156,8 @@ static uint32_t *text_bitmap(const char *text, const lv_font_t *f, uint32_t fg, 
             } else col = (uint32_t)hl << 24 | (halo & 0xFFFFFF);
             px[y * W + x] = col;
         }
+    free(hm);
+    free(hv);
     free(cov);
     *w = W;
     *h = H;
@@ -151,6 +175,114 @@ static void rot_clear(void)
     nrot = 0;
 }
 
+/* Rótulos compostos no próprio quadro do mapa (docs/performance/08-lvgl-optimization.md):
+ * antes cada nome era desenhado 9 vezes pelo LVGL (contorno + texto) em todo quadro da
+ * tela e os nomes de vias girados eram imagens transformadas a cada quadro (~120 ms
+ * por quadro no arrasto). Agora cada rótulo vira um bitmap com contorno (guardado num
+ * cache entre quadros do mapa) e é misturado uma vez no buffer RGB565 quando o quadro
+ * chega; arrastar só move uma imagem opaca. */
+#define LCACHE 64
+static struct { char text[56]; const lv_font_t *f; int night; uint32_t *px; int w, h; unsigned used; } lcache[LCACHE];
+static unsigned lcache_clock;
+
+static const uint32_t *label_bitmap(const char *text, const lv_font_t *f, int night, int *w, int *h)
+{
+    int victim = 0;
+    for(int i = 0; i < LCACHE; i++) {
+        if(lcache[i].px && lcache[i].f == f && lcache[i].night == night && !strcmp(lcache[i].text, text)) {
+            lcache[i].used = ++lcache_clock;
+            *w = lcache[i].w;
+            *h = lcache[i].h;
+            return lcache[i].px;
+        }
+        if(lcache[victim].px && (!lcache[i].px || lcache[i].used < lcache[victim].used)) victim = i;
+    }
+    int W, H;
+    uint32_t *px = text_bitmap(text, f, night ? 0xE8E8E8 : 0x202020, night ? 0x101318 : 0xFFFFFF, &W, &H);
+    if(!px) return NULL;
+    free(lcache[victim].px);
+    snprintf(lcache[victim].text, sizeof lcache[victim].text, "%s", text);
+    lcache[victim].f = f;
+    lcache[victim].night = night;
+    lcache[victim].px = px;
+    lcache[victim].w = W;
+    lcache[victim].h = H;
+    lcache[victim].used = ++lcache_clock;
+    *w = W;
+    *h = H;
+    return px;
+}
+
+static void lcache_clear(void)
+{
+    for(int i = 0; i < LCACHE; i++) { free(lcache[i].px); lcache[i].px = NULL; }
+}
+
+static inline void blend565(uint16_t *d, uint32_t argb, unsigned a)
+{
+    if(!a) return;
+    uint32_t sr = argb >> 19 & 31, sg = argb >> 10 & 63, sb = argb >> 3 & 31;
+    if(a >= 255) { *d = (uint16_t)(sr << 11 | sg << 5 | sb); return; }
+    uint32_t v = *d, dr = v >> 11, dg = v >> 5 & 63, db = v & 31;
+    dr += ((sr - dr) * a + 128) >> 8;
+    dg += ((sg - dg) * a + 128) >> 8;
+    db += ((sb - db) * a + 128) >> 8;
+    *d = (uint16_t)(dr << 11 | dg << 5 | db);
+}
+
+/* bitmap ARGB8888 (w x h) com o centro em (cx, cy), girado 'ang' graus (horário) */
+static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int cx, int cy, int ang)
+{
+    if(!ang) {
+        int x0 = cx - w / 2, y0 = cy - h / 2;
+        for(int y = 0; y < h; y++) {
+            int Y = y0 + y;
+            if(Y < 0 || Y >= MAP_H) continue;
+            for(int x = 0; x < w; x++) {
+                int X = x0 + x;
+                if(X < 0 || X >= MAP_W) continue;
+                uint32_t c = px[y * w + x];
+                blend565(&buf[Y * MAP_W + X], c, c >> 24);
+            }
+        }
+        return;
+    }
+    /* mapeamento inverso com interpolação bilinear, ponto fixo Q16 */
+    double r = ang * M_PI / 180;
+    int32_t cs = (int32_t)lround(cos(r) * 65536), sn = (int32_t)lround(sin(r) * 65536);
+    int hw = (int)(fabs(w * cos(r)) + fabs(h * sin(r))) / 2 + 2, hh = (int)(fabs(w * sin(r)) + fabs(h * cos(r))) / 2 + 2;
+    for(int Y = cy - hh; Y <= cy + hh; Y++) {
+        if(Y < 0 || Y >= MAP_H) continue;
+        for(int X = cx - hw; X <= cx + hw; X++) {
+            if(X < 0 || X >= MAP_W) continue;
+            int dx = X - cx, dy = Y - cy;
+            /* rotação inversa: fonte = R(-ang) * destino */
+            int32_t u = (int32_t)(((int64_t)dx * cs + (int64_t)dy * sn) >> 8) + (w << 7) - 128;
+            int32_t v = (int32_t)(((int64_t)-dx * sn + (int64_t)dy * cs) >> 8) + (h << 7) - 128;
+            int ui = u >> 8, vi = v >> 8;
+            if(ui < -1 || vi < -1 || ui >= w || vi >= h) continue;
+            unsigned fu = (unsigned)u & 255, fv = (unsigned)v & 255;
+            uint32_t p[4] = { 0, 0, 0, 0 };
+            if(ui >= 0 && vi >= 0) p[0] = px[vi * w + ui];
+            if(ui + 1 < w && vi >= 0) p[1] = px[vi * w + ui + 1];
+            if(ui >= 0 && vi + 1 < h) p[2] = px[(vi + 1) * w + ui];
+            if(ui + 1 < w && vi + 1 < h) p[3] = px[(vi + 1) * w + ui + 1];
+            unsigned wt[4] = { (256 - fu) * (256 - fv), fu * (256 - fv), (256 - fu) * fv, fu * fv };
+            uint32_t A = 0, Rr = 0, G = 0, B = 0;
+            for(int k = 0; k < 4; k++) {
+                uint32_t a = p[k] >> 24, aw = a * wt[k];
+                A += aw;
+                Rr += (p[k] >> 16 & 255) * aw;
+                G += (p[k] >> 8 & 255) * aw;
+                B += (p[k] & 255) * aw;
+            }
+            if(!A) continue;
+            uint32_t c = (Rr / A) << 16 | (G / A) << 8 | (B / A);
+            blend565(&buf[Y * MAP_W + X], c, A >> 16);
+        }
+    }
+}
+
 /* ------------------------------------------------ thread de renderização */
 static struct {
     pthread_t th;
@@ -162,7 +294,7 @@ static struct {
     int front;                 /* a interface mostra buf[front] */
     lbl_t lbl[2][MAXLBL];
     int nlbl[2];
-    unsigned ms;
+    unsigned ms, us_fetch, us_draw;
     bgm_pack_t *pack;
     uint32_t *route;           /* rota a desenhar (pontos x,y no mundo), dono: interface */
     int route_n;
@@ -171,6 +303,14 @@ static struct {
 static void *worker(void *arg)
 {
     (void)arg;
+    /* um núcleo só: o quadro do mapa (50-350 ms) roda com prioridade menor que a
+     * interface, que assim continua desenhando o arrasto e atendendo o toque
+     * (docs/performance/12-scheduler-tasks.md); BIGFOSTON_MAP_NICE muda (0 = igual) */
+    {
+        const char *e = getenv("BIGFOSTON_MAP_NICE");
+        int nv = e ? atoi(e) : 10;
+        if(nv) setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nv);
+    }
     static bgr_label_t tmp[MAXLBL];
     uint32_t *rcopy = NULL;
     int rcap = 0;
@@ -209,6 +349,8 @@ static void *worker(void *arg)
         R.nlbl[back] = n;
         R.done_view = v;
         R.ms = (st.us_fetch + st.us_draw) / 1000;
+        R.us_fetch = st.us_fetch;
+        R.us_draw = st.us_draw;
         R.done = 1;
         fprintf(stderr, "biggps: quadro z%.1f em %u ms (%u tiles, %u feições)\n", v.zoom256 / 256.0, R.ms, st.tiles, st.feats);
     }
@@ -260,9 +402,29 @@ static void anchor(int *ax, int *ay)
     *ay = follow && heading_up ? MAP_H * 2 / 3 : MAP_H / 2;   /* à frente aparece mais */
 }
 
+/* nível de detalhe do motor (Ajustes > Desempenho). Automático: econômico ao navegar
+ * ou quando os quadros passam de 300 ms em média (volta ao equilibrado abaixo de
+ * 150 ms), equilibrado no resto (docs/performance/09-gps-map-engine.md) */
+static unsigned frame_ema_ms;      /* média móvel do tempo dos quadros do motor */
+static bool auto_slow;
+static int detail_now(void)
+{
+    static int forced = -2;                              /* teste A/B: BIGFOSTON_MAP_DETAIL=0..3 */
+    if(forced == -2) { const char *e = getenv("BIGFOSTON_MAP_DETAIL"); forced = e ? atoi(e) : -1; }
+    switch(forced >= 0 ? forced : settings()->map_detail) {
+        case BF_DETAIL_ECONOMIC: return BGR_DETAIL_ECONOMIC;
+        case BF_DETAIL_BALANCED: return BGR_DETAIL_BALANCED;
+        case BF_DETAIL_DETAILED: return BGR_DETAIL_DETAILED;
+    }
+    if(frame_ema_ms > 300) auto_slow = true;
+    else if(frame_ema_ms < 150) auto_slow = false;
+    return N.navigating || auto_slow ? BGR_DETAIL_ECONOMIC : BGR_DETAIL_BALANCED;
+}
+
 static void request(void)
 {
     if(!R.started) return;
+    cur.detail = detail_now();
     anchor(&cur.ox, &cur.oy);
     cur.night = theme_dark_now();
     pthread_mutex_lock(&R.mu);
@@ -354,53 +516,23 @@ static void layout_labels(const lbl_t *l, int n)
         placed[nplaced].a = a;
         placed[nplaced].font = f;
         placed[nplaced].angle = ang;
+        placed[nplaced].cx = l[i].x;
+        placed[nplaced].cy = l[i].y;
         snprintf(placed[nplaced].text, sizeof placed[nplaced].text, "%s", l[i].text);
         nplaced++;
-        if(ang) {
-            bool night = shown.night;
-            int w, h;
-            uint32_t *px = text_bitmap(l[i].text, f, night ? 0xE8E8E8 : 0x202020, night ? 0x101318 : 0xFFFFFF, &w, &h);
-            if(!px) { nplaced--; continue; }
-            int k = nrot++;
-            rot[k].px = px;
-            memset(&rot[k].dsc, 0, sizeof rot[k].dsc);
-            rot[k].dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
-            rot[k].dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
-            rot[k].dsc.header.w = (uint32_t)w;
-            rot[k].dsc.header.h = (uint32_t)h;
-            rot[k].dsc.header.stride = (uint32_t)w * 4;
-            rot[k].dsc.data = (const uint8_t *)px;
-            rot[k].dsc.data_size = (uint32_t)(w * h * 4);
-            rot[k].img = lv_image_create(ov);
-            lv_obj_remove_flag(rot[k].img, LV_OBJ_FLAG_CLICKABLE);
-            lv_image_set_src(rot[k].img, &rot[k].dsc);
-            lv_image_set_pivot(rot[k].img, w / 2, h / 2);
-            lv_image_set_rotation(rot[k].img, ang * 10);
-            rot[k].cx = l[i].x;
-            rot[k].cy = l[i].y;
-            lv_obj_set_pos(rot[k].img, l[i].x - w / 2 + off_x, l[i].y - h / 2 + off_y);
-            lv_obj_move_to_index(rot[k].img, lv_obj_get_index(layer) + 1);   /* sob os marcadores e botões */
-        }
+        if(ang) nrot++;                                      /* só conta: limite de nomes girados */
     }
 }
 
-static void draw_text_halo(lv_layer_t *ly, const placed_t *p, int dx, int dy, lv_color_t fg, lv_color_t halo)
+static void compose_labels(uint16_t *buf)
 {
-    lv_draw_label_dsc_t d;
-    lv_draw_label_dsc_init(&d);
-    d.font = p->font;
-    d.text = p->text;
-    d.color = halo;
-    static const int8_t o[8][2] = { {-1, -1}, {0, -1}, {1, -1}, {-1, 0}, {1, 0}, {-1, 1}, {0, 1}, {1, 1} };
-    for(int k = 0; k < 8; k++) {
-        lv_area_t a = p->a;
-        lv_area_move(&a, dx + o[k][0], dy + o[k][1]);
-        lv_draw_label(ly, &d, &a);
+    for(int i = 0; i < nplaced; i++) {
+        const placed_t *p = &placed[i];
+        if(!p->font) continue;
+        int w, h;
+        const uint32_t *px = label_bitmap(p->text, p->font, shown.night, &w, &h);
+        if(px) compose_bitmap(buf, px, w, h, p->cx, p->cy, p->angle);
     }
-    d.color = fg;
-    lv_area_t a = p->a;
-    lv_area_move(&a, dx, dy);
-    lv_draw_label(ly, &d, &a);
 }
 
 /* Marcador da posição: bitmaps ARGB8888 gerados uma vez (supersampling 4x4) e girados
@@ -549,8 +681,37 @@ static void layer_draw(lv_event_t *e)
     bool night = shown.night;
     lv_color_t fg = night ? lv_color_hex(0xE8E8E8) : lv_color_hex(0x202020);
     lv_color_t halo = night ? lv_color_hex(0x101318) : lv_color_white();
-    for(int i = 0; i < nplaced; i++)
-        if(placed[i].font && !placed[i].angle) draw_text_halo(ly, &placed[i], off_x, off_y, fg, halo);
+    (void)ly; (void)fg; (void)halo;                 /* rótulos: compostos no quadro (compose_labels) */
+}
+
+static lv_color_t ov_bg;
+
+static void ov_cover(lv_event_t *e)
+{
+    lv_cover_check_info_t *info = lv_event_get_param(e);
+    if(info->res != LV_COVER_RES_MASKED) info->res = LV_COVER_RES_COVER;
+}
+
+static void ov_draw(lv_event_t *e)
+{
+    lv_layer_t *ly = lv_event_get_layer(e);
+    lv_draw_rect_dsc_t d;
+    lv_draw_rect_dsc_init(&d);
+    d.bg_color = ov_bg;
+    d.bg_opa = LV_OPA_COVER;
+    bool full = !have_shown || lv_obj_has_flag(img, LV_OBJ_FLAG_HIDDEN);
+    int ox = full ? 0 : off_x, oy = full ? 0 : off_y;
+    lv_area_t a;
+    if(full || ox >= MAP_W || ox <= -MAP_W || oy >= MAP_H || oy <= -MAP_H) {
+        a = (lv_area_t){ 0, 0, MAP_W - 1, MAP_H - 1 };
+        lv_draw_rect(ly, &d, &a);
+        return;
+    }
+    if(oy > 0) { a = (lv_area_t){ 0, 0, MAP_W - 1, oy - 1 }; lv_draw_rect(ly, &d, &a); }
+    if(oy < 0) { a = (lv_area_t){ 0, MAP_H + oy, MAP_W - 1, MAP_H - 1 }; lv_draw_rect(ly, &d, &a); }
+    int y1 = oy > 0 ? oy : 0, y2 = oy < 0 ? MAP_H + oy - 1 : MAP_H - 1;
+    if(ox > 0) { a = (lv_area_t){ 0, y1, ox - 1, y2 }; lv_draw_rect(ly, &d, &a); }
+    if(ox < 0) { a = (lv_area_t){ MAP_W + ox, y1, MAP_W - 1, y2 }; lv_draw_rect(ly, &d, &a); }
 }
 
 /* ------------------------------------------------------------ barra/escala */
@@ -1340,7 +1501,17 @@ static void tick_cb(lv_timer_t *t)
         R.done = 0;
         shown = R.done_view;
         have_shown = 1;
+        uint64_t t0 = perf_now_us();
         layout_labels(R.lbl[R.front], R.nlbl[R.front]);
+        compose_labels(R.buf[R.front]);
+        perf_add(PERF_MAP_LABELS, (uint32_t)(perf_now_us() - t0));
+        perf_add(PERF_MAP, R.us_fetch + R.us_draw);
+        {
+            unsigned ms = (R.us_fetch + R.us_draw) / 1000;
+            frame_ema_ms = frame_ema_ms ? (frame_ema_ms * 3 + ms) / 4 : ms;
+        }
+        perf_add(PERF_MAP_FETCH, R.us_fetch);
+        perf_add(PERF_MAP_DRAW, R.us_draw);
         pthread_cond_signal(&R.cv);
         swapped = 1;
     }
@@ -1460,7 +1631,7 @@ static lv_obj_t *round_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb, 
     lv_obj_set_size(b, BTN, BTN);
     lv_obj_set_style_radius(b, 14, 0);
     lv_obj_set_style_bg_color(b, pal()->surface, 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_90, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);     /* opaco: mistura de cor custa por pixel */
     lv_obj_set_style_bg_color(b, pal()->surface2, LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(b, 10, 0);
     lv_obj_set_style_shadow_opa(b, LV_OPA_30, 0);
@@ -1479,7 +1650,7 @@ static lv_obj_t *chip(lv_obj_t *parent)
     lv_obj_remove_style_all(c);
     lv_obj_set_size(c, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_color(c, pal()->surface, 0);
-    lv_obj_set_style_bg_opa(c, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(c, 10, 0);
     lv_obj_set_style_pad_hor(c, 10, 0);
     lv_obj_set_style_pad_ver(c, 6, 0);
@@ -1489,6 +1660,149 @@ static lv_obj_t *chip(lv_obj_t *parent)
 
 void scr_map_demo(int step);
 static bool demo_alive;
+
+/* ---------------------------------------------------------------- teste de desempenho
+ * BIGFOSTON_BENCH=<arquivo>: roteiro fixo sem toque (docs/performance/10-rendering-fps.md),
+ * num ponto público de Brasília (BIGFOSTON_BENCH_AT=lat,lon,zoom muda), e grava uma
+ * linha de medidas por fase no arquivo. As posições simuladas aparecem como simulação. */
+static const char *bench_file;
+static lv_timer_t *bench_tm;
+static int bench_phase, bench_tick;
+static double bench_lat = -15.7975, bench_lon = -47.8919;
+static int bench_zoom = 15;
+static uint64_t bench_cpu0, bench_t0;
+static const struct { const char *name; int ticks; } bench_ph[] = {
+    { "parado", 100 }, { "arrasto", 80 }, { "assentar", 60 }, { "arrasto-so-lvgl", 60 }, { "assentar2", 40 }, { "zoom", 160 },
+    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 },
+};
+#define BENCH_TICK_MS 50
+
+static uint64_t self_cpu_ticks(void)
+{
+    FILE *f = fopen("/proc/self/stat", "r");
+    char b[512];
+    uint64_t ut = 0, st = 0;
+    if(f) {
+        if(fgets(b, sizeof b, f)) {
+            char *r = strrchr(b, ')');
+            if(r) sscanf(r + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu",
+                         (unsigned long long *)&ut, (unsigned long long *)&st);
+        }
+        fclose(f);
+    }
+    return ut + st;
+}
+
+static long self_rss_kb(void)
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    char b[128];
+    long v = -1;
+    while(f && fgets(b, sizeof b, f)) if(!strncmp(b, "VmRSS:", 6)) v = atol(b + 6);
+    if(f) fclose(f);
+    return v;
+}
+
+static void bench_end_phase(void)
+{
+    char line[1024];
+    int o = perf_format(line, sizeof line, bench_ph[bench_phase].name);
+    double sec = (perf_now_us() - bench_t0) / 1e6;
+    long hz = sysconf(_SC_CLK_TCK);
+    snprintf(line + o, sizeof line - (size_t)o, " | cpu %.0f%% rss %ld KB",
+             100.0 * (double)(self_cpu_ticks() - bench_cpu0) / ((double)hz * sec), self_rss_kb());
+    fprintf(stderr, "bench: %s\n", line);
+    FILE *f = fopen(bench_file, "a");
+    if(f) { fprintf(f, "%s\n", line); fclose(f); }
+}
+
+static void bench_fix(double lat, double lon, double course, double speed)
+{
+    uint32_t x, y;
+    bgr_lonlat_to_world(lon, lat, &x, &y);
+    on_fix(x, y, speed, course, false);
+}
+
+static void bench_cb(lv_timer_t *t)
+{
+    (void)t;
+    if(!R.started) return;
+    int k = bench_tick++;
+    const char *ph = bench_ph[bench_phase].name;
+    if(!strcmp(ph, "arrasto-so-lvgl")) {            /* só a imagem anda: custo do LVGL */
+        off_x = (k % 40 < 20 ? k % 20 : 20 - k % 20) * 6;
+        off_y = 0;
+        lv_obj_set_pos(img, off_x, off_y);
+        lv_obj_invalidate(layer);
+        for(int i = 0; i < nrot; i++)
+            if(rot[i].img) lv_obj_set_pos(rot[i].img, rot[i].cx - (int)rot[i].dsc.header.w / 2 + off_x, rot[i].cy - (int)rot[i].dsc.header.h / 2 + off_y);
+        if(k + 1 == bench_ph[bench_phase].ticks) update_offset();
+    } else if(!strcmp(ph, "arrasto")) {             /* como um dedo: 12 px a cada 50 ms */
+        rast_surface_t sf = { NULL, MAP_W, MAP_H, MAP_W };
+        bgr_view_t v = cur;
+        anchor(&v.ox, &v.oy);
+        bgr_screen_to_world(&v, &sf, v.ox + 12, v.oy + (k % 40 < 20 ? 4 : -4), &cur.cx, &cur.cy);
+        update_offset();
+        request();
+    } else if(!strcmp(ph, "zoom")) {
+        if(k % 40 == 0) {
+            static const int dz[4] = { 1, 1, -1, -1 };
+            cur.zoom256 += dz[(k / 40) % 4] * 256;
+            update_scale();
+            request();
+        }
+    } else if(!strcmp(ph, "rotacao")) {
+        if(k % 2 == 0) { cur.rot = (cur.rot + 6) % 360; update_offset(); request(); }
+    } else if(!strcmp(ph, "seguir")) {              /* GPS simulado a 50 km/h para leste, 1 Hz */
+        if(k == 0) { heading_up = true; set_follow(true); }
+        if(k % 20 == 0) bench_fix(bench_lat, bench_lon + (k / 20) * 0.00013, 90, 50);
+    } else if(!strcmp(ph, "navegacao")) {           /* rota de demonstração e simulação */
+        if(k == 0) scr_map_demo(0);
+        if(k == 100) scr_map_demo(1);
+    }
+    if(bench_tick >= bench_ph[bench_phase].ticks) {
+        bench_end_phase();
+        bench_tick = 0;
+        if(++bench_phase >= (int)(sizeof bench_ph / sizeof bench_ph[0])) {
+            lv_timer_delete(bench_tm);
+            bench_tm = NULL;
+            fprintf(stderr, "bench: fim\n");
+            FILE *f = fopen(bench_file, "a");
+            if(f) { fprintf(f, "fim\n"); fclose(f); }
+            return;
+        }
+        if(!strcmp(bench_ph[bench_phase].name, "rotacao")) { set_follow(false); heading_up = false; }
+        perf_reset();
+        bench_cpu0 = self_cpu_ticks();
+        bench_t0 = perf_now_us();
+        if(!strcmp(bench_ph[bench_phase].name, "arrasto-so-lvgl")) perf_prof_start();
+        if(!strcmp(bench_ph[bench_phase].name, "assentar2")) perf_prof_stop();
+    }
+}
+
+static void bench_start(void)
+{
+    bench_file = getenv("BIGFOSTON_BENCH");
+    if(!bench_file || !*bench_file) return;
+    const char *at = getenv("BIGFOSTON_BENCH_AT");
+    if(at) sscanf(at, "%lf,%lf,%d", &bench_lat, &bench_lon, &bench_zoom);
+    set_follow(false);
+    heading_up = false;
+    bgr_lonlat_to_world(bench_lon, bench_lat, &cur.cx, &cur.cy);
+    cur.zoom256 = bench_zoom * 256;
+    cur.rot = 0;
+    update_scale();
+    request();
+    bench_fix(bench_lat, bench_lon, 90, 0);         /* posição para a rota da navegação */
+    set_follow(false);
+    bench_phase = bench_tick = 0;
+    perf_reset();
+    bench_cpu0 = self_cpu_ticks();
+    bench_t0 = perf_now_us();
+    bench_tm = lv_timer_create(bench_cb, BENCH_TICK_MS, NULL);
+    FILE *f = fopen(bench_file, "a");
+    if(f) { fprintf(f, "inicio %.5f,%.5f z%d\n", bench_lat, bench_lon, bench_zoom); fclose(f); }
+}
 static void demo_timer(lv_timer_t *t)
 {
     if(demo_alive) scr_map_demo((int)(intptr_t)lv_timer_get_user_data(t));
@@ -1551,8 +1865,12 @@ static void create(lv_obj_t *parent, int arg)
     ov = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, MAP_W, MAP_H);
-    lv_obj_set_style_bg_color(ov, lv_color_hex(night ? 0x1A1D23 : 0xF2EFE9), 0);
-    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    /* sem fundo: ov_draw pinta só as faixas que o arrasto descobre (o fundo da tela
+     * inteira sob a imagem custava ~20 % de cada quadro) e ov_cover diz ao LVGL que
+     * a tela fica toda coberta (o LVGL não desenha as telas por baixo) */
+    ov_bg = lv_color_hex(night ? 0x1A1D23 : 0xF2EFE9);
+    lv_obj_add_event_cb(ov, ov_cover, LV_EVENT_COVER_CHECK, NULL);
+    lv_obj_add_event_cb(ov, ov_draw, LV_EVENT_DRAW_MAIN, NULL);
     lv_obj_add_flag(ov, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(ov, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(ov, press_cb, LV_EVENT_PRESSED, NULL);
@@ -1756,6 +2074,7 @@ static void create(lv_obj_t *parent, int arg)
     gps_update();
     request();
     tick = lv_timer_create(tick_cb, 100, NULL);
+    bench_start();
     /* teste no aparelho sem toque (docs/big-gps): BIGGPS_DEMO=1 marca o destino da
      * demonstração e, 6 s depois, simula o percurso */
     demo_alive = true;
@@ -1770,6 +2089,7 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     demo_alive = false;
+    if(bench_tm) { lv_timer_delete(bench_tm); bench_tm = NULL; }
     if(tick) { lv_timer_delete(tick); tick = NULL; }
     if(R.started) {
         pthread_mutex_lock(&R.mu);
@@ -1792,6 +2112,7 @@ static void destroy(void)
     R.route_n = 0;
     last_save();
     rot_clear();
+    lcache_clear();
     if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }

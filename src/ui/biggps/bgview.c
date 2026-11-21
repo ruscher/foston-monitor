@@ -8,6 +8,7 @@
  *     -b N             benchmark: N frames panning east at ~60 km/h (1 frame per second
  *                      of driving) after the first frame, report times
  *     -z               benchmark: zoom sweep from ZOOM-3 to ZOOM+2 instead
+ *     -d N             level of detail: 0 balanced (default), 1 economic, 2 detailed
  *
  * Runs on the PC and on the device (same code as the shell).
  * SPDX-License-Identifier: GPL-3.0-or-later */
@@ -66,11 +67,11 @@ static void write_ppm(const char *path, const rast_surface_t *s, const bgr_label
 int main(int argc, char **argv)
 {
     if (argc < 5) {
-        fprintf(stderr, "uso: %s MAPA.bgm LAT LON ZOOM [-o arq.ppm] [-r graus] [-n] [-s LxA] [-b N] [-z]\n", argv[0]);
+        fprintf(stderr, "uso: %s MAPA.bgm LAT LON ZOOM [-o arq.ppm] [-r graus] [-n] [-s LxA] [-b N] [-z] [-d 0|1|2]\n", argv[0]);
         return 2;
     }
     const char *out = NULL;
-    int rot = 0, night = 0, w = 800, h = 480, bench = 0, zsweep = 0;
+    int rot = 0, night = 0, w = 800, h = 480, bench = 0, zsweep = 0, detail = 0;
     const char *prof = NULL;
     for (int i = 5; i < argc; i++) {
         if (!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
@@ -79,6 +80,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-s") && i + 1 < argc) { if (sscanf(argv[++i], "%dx%d", &w, &h) != 2) return 2; }
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) bench = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-z")) zsweep = 1;
+        else if (!strcmp(argv[i], "-d") && i + 1 < argc) detail = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-p") && i + 1 < argc) prof = argv[++i];
         else { fprintf(stderr, "opção desconhecida: %s\n", argv[i]); return 2; }
     }
@@ -99,6 +101,7 @@ int main(int argc, char **argv)
     v.zoom256 = (int)(atof(argv[4]) * 256);
     v.rot = rot;
     v.night = night;
+    v.detail = detail;
     bgr_label_t lb[128];
     bgr_stats_t st;
     bgm_stats_t ms;

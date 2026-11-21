@@ -33,10 +33,12 @@ setd('LV_FONT_CUSTOM_DECLARE', 'LV_FONT_DECLARE(bf_font_14) LV_FONT_DECLARE(bf_f
      'LV_FONT_DECLARE(bf_font_28) LV_FONT_DECLARE(bf_mono_16) LV_FONT_DECLARE(bf_font_clock_72)')
 setd('LV_FONT_DEFAULT', '&bf_font_20')
 setd('LV_USE_TJPGD', '1')                           # capas JPEG (ID3 APIC) do Multimídia
+setd('LV_USE_GIF', '1')                             # GIF animado (core/imgload.c)
 setd('LV_USE_SDL', 'BIGFOSTON_USE_SDL')
 setd('LV_USE_LINUX_FBDEV', 'BIGFOSTON_USE_FBDEV')
 setd('LV_LINUX_FBDEV_BUFFER_COUNT', '2')            # buffer duplo
-setd('LV_LINUX_FBDEV_BUFFER_SIZE', '48')            # 48 linhas = 1/10 de 480
+setd('LV_LINUX_FBDEV_BUFFER_SIZE', '480')           # tela inteira: um passe por quadro (docs/performance/08)
+setd('LV_DRAW_SW_SHADOW_CACHE_SIZE', '32')          # sombras dos botões redondos: 1 KB, sem recálculo por quadro
 setd('LV_USE_EVDEV', 'BIGFOSTON_USE_FBDEV')
 setd('LV_BUILD_EXAMPLES', '0')
 pre = '''

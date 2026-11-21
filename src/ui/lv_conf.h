@@ -188,7 +188,7 @@
         /*Allow buffering some shadow calculation.
         *LV_DRAW_SW_SHADOW_CACHE_SIZE is the max. shadow size to buffer, where shadow size is `shadow_width + radius`
         *Caching has LV_DRAW_SW_SHADOW_CACHE_SIZE^2 RAM cost*/
-        #define LV_DRAW_SW_SHADOW_CACHE_SIZE 0
+        #define LV_DRAW_SW_SHADOW_CACHE_SIZE 32
 
         /* Set number of maximally cached circle data.
         * The circumference of 1/4 circle are saved for anti-aliasing
@@ -1012,7 +1012,7 @@
     #define LV_LINUX_FBDEV_BSD           0
     #define LV_LINUX_FBDEV_RENDER_MODE   LV_DISPLAY_RENDER_MODE_PARTIAL
     #define LV_LINUX_FBDEV_BUFFER_COUNT 2
-    #define LV_LINUX_FBDEV_BUFFER_SIZE 48
+    #define LV_LINUX_FBDEV_BUFFER_SIZE 480
 #endif
 
 /*Use Nuttx to open window and handle touchscreen*/

@@ -58,6 +58,39 @@ static const uint8_t LABEL_PRIO[BGK_COUNT] = {
     [BGK_L_TRACK] = 12, [BGK_L_RIVER] = 10, [BGK_L_STREAM] = 12,
 };
 
+int bgr_kind_minzoom(int k, int detail)
+{
+    int z = bgk_minzoom(k);
+    if (detail == BGR_DETAIL_DETAILED) return z;
+    int eco = detail == BGR_DETAIL_ECONOMIC;
+    int m;
+    switch (k) {
+    case BGK_A_BUILDING: m = eco ? 17 : 16; break;
+    case BGK_A_PARKING: case BGK_A_PEDESTRIAN: m = eco ? 17 : 15; break;
+    case BGK_L_PATH: m = eco ? 17 : 16; break;
+    case BGK_L_TRACK: m = eco ? 16 : 15; break;
+    case BGK_L_SERVICE: m = eco ? 16 : 15; break;
+    case BGK_L_STREAM: m = eco ? 15 : 14; break;
+    case BGK_L_RAIL: m = eco ? 14 : 12; break;
+    case BGK_A_COMMERCIAL: case BGK_A_INDUSTRIAL: case BGK_A_FARM: m = eco ? 13 : 12; break;
+    case BGK_P_NEIGHBOURHOOD: m = eco ? 15 : 14; break;
+    case BGK_L_RESIDENTIAL: m = eco ? 14 : 13; break;   /* visão geral da rota: 40 mil ruas em z12 */
+    case BGK_L_TERTIARY: m = eco ? 13 : 11; break;
+    case BGK_A_RESIDENTIAL: m = eco ? 12 : 10; break;
+    default: m = z;
+    }
+    return m > z ? m : z;
+}
+
+/* casing (outline) of a road kind at a level of detail: economic outlines only the
+ * main roads from zoom 15; the others are drawn as a single line in the casing colour
+ * (half the drawing work) */
+static int casing_on(int k, int detail, int z)
+{
+    if (detail != BGR_DETAIL_ECONOMIC) return 1;
+    return (k >= BGK_L_SECONDARY && z >= 15) || z >= 17;
+}
+
 uint16_t bgr_background(int night) { return rgb565(night ? 0x1A1D23 : 0xF2EFE9); }
 
 static uint32_t now_us(void)
@@ -357,7 +390,8 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s, bgr_label_
     };
     for (unsigned pi = 0; pi < sizeof passes / sizeof passes[0]; pi++) {
         for (int k = passes[pi].k0; k <= passes[pi].k1; k++) {
-            if (bgk_minzoom(k) > z) continue;
+            if (bgr_kind_minzoom(k, v->detail) > z) continue;
+            if (passes[pi].casing && !casing_on(k, v->detail, z)) continue;
             uint32_t tk = now_us();
             const style_t *sty = &ST[k];
             int area = k < BGK_L_STREAM;
@@ -372,6 +406,13 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s, bgr_label_
                 cw16 = w16 + (z >= 16 ? RAST_SUB * 3 : RAST_SUB * 2);
             } else {
                 col = rgb565(night ? sty->night : sty->day);
+                /* without its casing a white minor road disappears on the light
+                 * background: draw it closer to the casing colour */
+                if (pi == 3 && !night && sty->cday && !casing_on(k, v->detail, z)) {
+                    uint32_t a = sty->day, b = sty->cday;          /* meio-termo entre as duas cores */
+                    col = rgb565((((a >> 16 & 255) + (b >> 16 & 255) * 2) / 3) << 16 |
+                                 (((a >> 8 & 255) + (b >> 8 & 255) * 2) / 3) << 8 | ((a & 255) + (b & 255) * 2) / 3);
+                }
             }
             for (int vi = 0; vi < nvis; vi++) {
                 const vis_t *vt = &vis[vi];
@@ -408,7 +449,7 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s, bgr_label_
         const bgm_tile_t *t = vt->t;
         for (int fi = 0; fi < t->nfeat; fi++) {
             const bgm_feat_t *f = &t->feat[fi];
-            if (f->name == 0xFFFF || bgk_minzoom(f->kind) > z) continue;
+            if (f->name == 0xFFFF || bgr_kind_minzoom(f->kind, v->detail) > z) continue;
             if (f->bx1 < vt->cu0 || f->bx0 > vt->cu1 || f->by1 < vt->cv0 || f->by0 > vt->cv1) continue;
             int g = f->flags & BGM_F_GEOM;
             if (g == BGM_F_AREA) continue;

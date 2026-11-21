@@ -28,6 +28,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "core/perf.h"
 #ifdef BIGFOSTON_TARGET
 #include <dirent.h>
 #include <fcntl.h>
@@ -174,8 +175,11 @@ int main(int argc, char **argv)
     }
     app_apply_hw_settings();
 
+    perf_init(disp);
     for(;;) {
+        uint64_t t0 = perf_now_us();
         uint32_t idle = lv_timer_handler();
+        perf_add(PERF_LOOP, (uint32_t)(perf_now_us() - t0));
         if(idle == LV_NO_TIMER_READY || idle > 100) idle = 100;
         usleep(idle * 1000);
     }

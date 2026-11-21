@@ -27,6 +27,7 @@ static const item_t items[] = {
     { LV_SYMBOL_USB,       0x8a93a5, S_SET_USB,       S_SUB_USB,       SCR_FEATURE, FEAT_USB },
     { BF_SYMBOL_TOWER,     0xe0a40c, S_SET_FM,        S_SUB_FM,        SCR_FEATURE, FEAT_FM },
     { BF_SYMBOL_KEY,       0x33c7de, S_SET_SSH,       S_SUB_SSH,       SCR_SSH, 0 },
+    { BF_SYMBOL_ROCKET,    0xe66100, S_SET_PERF,      S_SUB_PERF,      SCR_PERF, 0 },
     { BF_SYMBOL_WRENCH,    0x8a93a5, S_SET_ADVANCED,  S_SUB_ADVANCED,  SCR_ADVANCED, 0 },
 };
 #define N_ITEMS (int)(sizeof items / sizeof items[0])
