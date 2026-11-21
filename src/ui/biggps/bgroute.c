@@ -121,8 +121,7 @@ bgr_pack_t *bgr_open(const char *path, char *err, size_t errlen)
     /* sizes must agree with the header, so every index used later stays inside its section */
     if (count(p, BGR_S_NODE_X) != h->nodes || count(p, BGR_S_NODE_Y) != h->nodes || count(p, BGR_S_FIRST_OUT) != h->nodes + 1
         || count(p, BGR_S_ARC_TAIL) != h->arcs || count(p, BGR_S_ARC_HEAD) != h->arcs || count(p, BGR_S_ARC_WAY) != h->arcs || count(p, BGR_S_ARC_LEN) != h->arcs
-        || count(p, BGR_S_ARC_TIME) != h->arcs || count(p, BGR_S_GEOM_FIRST) != h->arcs + 1 || count(p, BGR_S_GEOM_X) != h->geom
-        || count(p, BGR_S_GEOM_Y) != h->geom || count(p, BGR_S_WAY_NAME) != h->ways || count(p, BGR_S_WAY_REF) != h->ways
+        || count(p, BGR_S_ARC_TIME) != h->arcs || count(p, BGR_S_GEOM_FIRST) != h->arcs + 1 || count(p, BGR_S_WAY_NAME) != h->ways || count(p, BGR_S_WAY_REF) != h->ways
         || count(p, BGR_S_WAY_INFO) != h->ways || count(p, BGR_S_EX_HEAD) != h->ex_edges || count(p, BGR_S_CH_ID) != ch_nodes(p)
         || count(p, BGR_S_CHF_FIRST) != ch_nodes(p) + 1 || count(p, BGR_S_CHB_FIRST) != ch_nodes(p) + 1
         || count(p, BGR_S_GRID_CELLS) < 2 || (count(p, BGR_S_GRID_CELLS) & 1) || h->grid_shift < 8 || h->grid_shift > 24) {
@@ -173,14 +172,31 @@ void bgr_node_xy(bgr_pack_t *p, uint32_t u, uint32_t *x, uint32_t *y)
 int bgr_arc_points(bgr_pack_t *p, uint32_t a, uint32_t *xy, int max)
 {
     if (max < 2 || a >= p->h.arcs) return 0;
-    uint32_t g0 = rd(p, BGR_S_GEOM_FIRST, a), g1 = rd(p, BGR_S_GEOM_FIRST, a + 1);
-    if (g1 < g0 || g1 > p->h.geom) g1 = g0;
-    int n = 0;
+    uint32_t g0 = rd(p, BGR_S_GEOM_FIRST, a), g1 = rd(p, BGR_S_GEOM_FIRST, a + 1), len = p->h.sec[BGR_S_GEOM_DATA].len;
+    if (g1 < g0 || g1 > len) g1 = g0;
+    uint32_t base = p->h.sec[BGR_S_GEOM_DATA].off, pos = base + g0, end = base + g1;
     bgr_node_xy(p, bgr_arc_tail(p, a), &xy[0], &xy[1]);
-    n = 1;
-    for (uint32_t k = g0; k < g1 && n < max - 1; k++, n++) {
-        xy[2 * n] = rd(p, BGR_S_GEOM_X, k);
-        xy[2 * n + 1] = rd(p, BGR_S_GEOM_Y, k);
+    int n = 1;
+    uint32_t x = xy[0], y = xy[1];
+    while (pos < end && n < max - 1) {
+        uint32_t v[2];
+        for (int c = 0; c < 2; c++) {                    /* zigzag varint, low 7 bits first */
+            uint32_t r = 0;
+            int sh = 0;
+            uint8_t byte = 0x80;
+            while ((byte & 0x80) && sh < 35 && pos < end) {
+                byte = page(p, pos >> PAGE_SHIFT)[pos & (PAGE_SIZE - 1)];
+                pos++;
+                r |= (uint32_t)(byte & 0x7F) << sh;
+                sh += 7;
+            }
+            v[c] = r;
+        }
+        x += (uint32_t)((int32_t)(v[0] >> 1) ^ -(int32_t)(v[0] & 1));
+        y += (uint32_t)((int32_t)(v[1] >> 1) ^ -(int32_t)(v[1] & 1));
+        xy[2 * n] = x;
+        xy[2 * n + 1] = y;
+        n++;
     }
     bgr_node_xy(p, bgr_arc_head(p, a), &xy[2 * n], &xy[2 * n + 1]);
     return n + 1;

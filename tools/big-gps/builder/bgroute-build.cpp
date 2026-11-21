@@ -406,15 +406,27 @@ int main(int argc, char **argv)
     // coordinates
     std::vector<uint32_t> nx(n), ny(n), gx, gy;
     for (unsigned u = 0; u < n; u++) { nx[u] = world_x(g.longitude[u]); ny[u] = world_y(g.latitude[u]); }
-    std::vector<uint32_t> geom_first(m + 1);
+    std::vector<uint32_t> geom_first(m + 1), geom_byte(m + 1);
+    std::string geom_data;
     for (unsigned a = 0; a < m; a++) {
         geom_first[a] = (uint32_t)gx.size();
+        geom_byte[a] = (uint32_t)geom_data.size();
+        uint32_t px = nx[tail[a]], py = ny[tail[a]];
+        for (unsigned k = g.first_modelling_node[a]; k < g.first_modelling_node[a + 1]; k++) {
+            uint32_t qx = world_x(lon_of(k)), qy = world_y(lat_of(k));
+            put_zz32(geom_data, (int32_t)(qx - px));
+            put_zz32(geom_data, (int32_t)(qy - py));
+            px = qx; py = qy;
+        }
         for (unsigned k = g.first_modelling_node[a]; k < g.first_modelling_node[a + 1]; k++) {
             gx.push_back(world_x(lon_of(k)));
             gy.push_back(world_y(lat_of(k)));
         }
     }
     geom_first[m] = (uint32_t)gx.size();
+    geom_byte[m] = (uint32_t)geom_data.size();
+    if (geom_data.size() > 0xFFFFFFF0ull) { std::fprintf(stderr, "geometria grande demais\n"); return 1; }
+    while (geom_data.size() % 4) geom_data.push_back('\0');
 
     // snapping grid (~300 m cells)
     const uint32_t shift = 15;
@@ -489,7 +501,7 @@ int main(int argc, char **argv)
     vec(BGR_S_NODE_X, nx); vec(BGR_S_NODE_Y, ny);
     uvec(BGR_S_FIRST_OUT, g.first_out); uvec(BGR_S_ARC_TAIL, tail); uvec(BGR_S_ARC_HEAD, g.head); uvec(BGR_S_ARC_WAY, g.way);
     vec(BGR_S_ARC_LEN, len_dm); vec(BGR_S_ARC_TIME, time_ds);
-    vec(BGR_S_GEOM_FIRST, geom_first); vec(BGR_S_GEOM_X, gx); vec(BGR_S_GEOM_Y, gy);
+    vec(BGR_S_GEOM_FIRST, geom_byte); sec(BGR_S_GEOM_DATA, geom_data.data(), geom_data.size()); sec(BGR_S_GEOM_UNUSED, nullptr, 0);
     vec(BGR_S_WAY_NAME, way_name); vec(BGR_S_WAY_REF, way_ref); vec(BGR_S_WAY_INFO, way_info);
     sec(BGR_S_STRINGS, strings.data(), strings.size());
     if (node_mode) sec(BGR_S_EX_HEAD, nullptr, 0);

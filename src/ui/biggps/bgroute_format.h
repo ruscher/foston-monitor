@@ -27,7 +27,7 @@
 #include <stdint.h>
 
 #define BGR_MAGIC   0x31524742u   /* "BGR1" */
-#define BGR_VERSION 2
+#define BGR_VERSION 3
 
 enum { BGR_CAR = 0, BGR_MOTO, BGR_BIKE, BGR_FOOT, BGR_PROFILES };
 
@@ -42,8 +42,11 @@ enum {
     BGR_S_ARC_TAIL, BGR_S_ARC_HEAD, BGR_S_ARC_WAY,   /* u32[arcs] */
     BGR_S_ARC_LEN,                             /* u32[arcs], decimetres */
     BGR_S_ARC_TIME,                            /* u32[arcs], deciseconds */
-    BGR_S_GEOM_FIRST,                          /* u32[arcs + 1] into GEOM_X/Y */
-    BGR_S_GEOM_X, BGR_S_GEOM_Y,                /* u32[geom] (points between tail and head) */
+    BGR_S_GEOM_FIRST,                          /* u32[arcs + 1]: byte offsets into GEOM_DATA */
+    BGR_S_GEOM_DATA,                           /* per arc: points between tail and head as
+                                                  zigzag varint deltas (x, y), the first from
+                                                  the tail node (version 3) */
+    BGR_S_GEOM_UNUSED,                         /* empty (was the second coordinate array) */
     BGR_S_WAY_NAME, BGR_S_WAY_REF,             /* u32[ways]: offset in STRINGS, 0xFFFFFFFF = none */
     BGR_S_WAY_INFO,                            /* u32[ways]: class (low 8 bits, BGR_W_*) | flags << 8 */
     BGR_S_STRINGS,                             /* NUL-terminated UTF-8 */
