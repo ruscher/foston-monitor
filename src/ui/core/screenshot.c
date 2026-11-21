@@ -197,6 +197,8 @@ int screenshot_run(const char *dir)
         snprintf(f, sizeof f, "%s/cover.jpg", data_dir());
         scr_files_demo(f);           shot("24e-arquivos-imagem");
         scr_files_demo(data_dir());
+        scr_files_demo("+nova-pasta"); pump(50); shot("24g-arquivos-nova-pasta");
+        scr_files_demo("+fechar");
     }
     nav_home(); pump(50);
     bottombar_open_power();         shot("25-dialogo-desligar");

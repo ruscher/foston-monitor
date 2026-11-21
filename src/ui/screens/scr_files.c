@@ -464,12 +464,21 @@ static void name_open(int mode, const char *initial)
     name_mode = mode;
     name_panel = bf_card(lv_layer_top());
     lv_obj_set_size(name_panel, 760, LV_SIZE_CONTENT);
-    lv_obj_align(name_panel, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(name_panel, LV_ALIGN_TOP_MID, 0, 8);   /* cabe acima do teclado (210 px) */
     lv_obj_set_style_shadow_width(name_panel, 30, 0);
     lv_obj_set_style_shadow_opa(name_panel, LV_OPA_50, 0);
     lv_obj_set_flex_flow(name_panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(name_panel, BF_SP_S, 0);
-    bf_label(name_panel, tr(mode == 0 ? S_FILES_NEW_FOLDER : S_FILES_RENAME), BF_FONT_L, p->text);
+    /* título + X para fechar */
+    lv_obj_t *head = bf_plain(name_panel);
+    lv_obj_set_size(head, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *title = bf_label(head, tr(mode == 0 ? S_FILES_NEW_FOLDER : S_FILES_RENAME), BF_FONT_L, p->text);
+    lv_obj_set_flex_grow(title, 1);
+    lv_obj_t *x = bf_button(head, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_size(x, 56, 48);
+    lv_obj_add_event_cb(x, name_cancel, LV_EVENT_CLICKED, NULL);
     name_ta = lv_textarea_create(name_panel);
     lv_textarea_set_one_line(name_ta, true);
     lv_textarea_set_max_length(name_ta, 200);
@@ -477,6 +486,18 @@ static void name_open(int mode, const char *initial)
     lv_obj_set_style_text_font(name_ta, BF_FONT_M, 0);
     lv_textarea_set_text(name_ta, initial ? initial : "");
     bf_label(name_panel, tr(S_FILES_NAME_HINT), BF_FONT_S, p->text_dim);
+    /* Cancelar / Criar (ou Renomear) */
+    lv_obj_t *row = bf_plain(name_panel);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, BF_SP_M, 0);
+    lv_obj_t *b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
+    lv_obj_set_size(b, 200, 52);
+    lv_obj_add_event_cb(b, name_cancel, LV_EVENT_CLICKED, NULL);
+    b = bf_button(row, LV_SYMBOL_OK, tr(mode == 0 ? S_FILES_CREATE : S_FILES_RENAME), 1);
+    lv_obj_set_size(b, 200, 52);
+    lv_obj_add_event_cb(b, name_ok, LV_EVENT_CLICKED, NULL);
     name_kb = lv_keyboard_create(lv_layer_top());
     lv_obj_set_size(name_kb, BF_SCREEN_W, 210);
     lv_obj_align(name_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -691,6 +712,8 @@ static void destroy(void)
 void scr_files_demo(const char *path)
 {
     struct stat st;
+    if(path && !strcmp(path, "+nova-pasta")) { name_open(0, "Viagem 2026"); return; }
+    if(path && !strcmp(path, "+fechar")) { name_close(); return; }
     if(path && !stat(path, &st) && S_ISREG(st.st_mode)) {   /* arquivo: abre o visualizador */
         const char *n = strrchr(path, '/');
         n = n ? n + 1 : path;
