@@ -50,7 +50,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | USB ao ligar sem cabo | **FUNCIONANDO** | sem cabo no boot o CE deixa o bloco USB desligado; o glue o liga como o CE (conferido 21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
-| GPS (MT3328) | **FUNCIONANDO** (falta posição com satélites) | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; NMEA de 1 Hz como no CE; posição real ainda não testada ao ar livre | [gps.md](gps.md) |
+| GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026) | [gps.md](gps.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
@@ -97,5 +97,5 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | GPS: confirmar a posição ao ar livre; depois mapa/navegação | navegação | médio |
+| 1 | GPS: mapa/navegação offline sobre a posição | navegação | alto |
 | 2 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

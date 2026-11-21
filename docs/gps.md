@@ -1,6 +1,6 @@
 # GPS (MT3328) no BigFoston
 
-Estado: **funcionando no Linux como serviço, com tela GPS** (21/11/2026) — o `gps.dll` do aparelho roda no `bfgps`, inicia no boot (`S60gps`) e a interface mostra estado, satélites, sinal e posição. Falta confirmar a posição com satélites (céu aberto). Detalhes no fim.
+Estado: **funcionando no Linux, com posição real** (21/11/2026) — o `gps.dll` do aparelho roda no `bfgps`, inicia no boot (`S60gps`) e a interface mostra estado, satélites, sinal e posição. Posição conferida ao ar livre pelo usuário; de volta dentro de casa o motor seguiu rastreando 12 satélites visíveis (2 com sinal), CPU do `bfgps` ~10 %. Detalhes no fim.
 
 ## Como o GPS funciona no aparelho
 
