@@ -1,0 +1,19 @@
+#!/bin/sh
+# Última ação do desligamento (/etc/inittab): se o bigfoston-reboot preparou
+# um reinício, carrega de novo a imagem com a hora deste instante na linha de
+# comando (bigfoston.epoch=; o S05clock do Linux novo acerta o relógio por
+# ela) e salta com kexec. Os sistemas de arquivos já foram desmontados ou
+# ficaram só leitura. Se algo falhar, apenas retorna: o init segue e o
+# watchdog desliga o aparelho.
+D=/kexec
+[ -f "$D/pending" ] || exit 0
+rm -f "$D/pending"
+# o "umount -a -r" anterior desmonta /proc e /dev: o kexec lê /proc/iomem
+[ -r /proc/iomem ] || mount -t proc proc /proc
+[ -c /dev/kmsg ] || mount -t devtmpfs devtmpfs /dev
+kexec -l "$D/zImage" --initrd="$D/initrd.img" --dtb="$D/fs707dc.dtb" \
+    --command-line="$(cat "$D/cmdline")bigfoston.epoch=$(date +%s)" &&
+echo "bigfoston: reiniciando com kexec" > /dev/kmsg &&
+kexec -e
+echo "bigfoston: kexec falhou, desligando" > /dev/kmsg
+exit 0

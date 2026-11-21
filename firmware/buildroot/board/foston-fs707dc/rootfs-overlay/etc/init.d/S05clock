@@ -4,12 +4,17 @@
 # The agent's autoboot stamps the Windows CE clock (kept by its RTC) instead,
 # or nothing when that clock is not set (before 2024). There is no RTC driver
 # in Linux yet, so without a valid stamp the clock stays unset (1970) and the
-# shell shows "--:--".
+# shell shows "--:--". After a restart by kexec (bigfoston-reboot) the time
+# comes in the kernel command line instead (bigfoston.epoch=).
 P=/proc/device-tree/chosen/bigfoston,boot-epoch
 case "$1" in
 start)
-    [ -f "$P" ] || exit 0
-    epoch=$((0x$(hexdump -v -e '1/1 "%02x"' "$P")))
+    # depois de um Reiniciar (kexec) a hora vem na linha de comando
+    epoch=$(sed -n 's/.*bigfoston\.epoch=\([0-9]*\).*/\1/p' /proc/cmdline)
+    if [ -z "$epoch" ]; then
+        [ -f "$P" ] || exit 0
+        epoch=$((0x$(hexdump -v -e '1/1 "%02x"' "$P")))
+    fi
     [ "$epoch" -ge 1704067200 ] || { echo "clock: sem hora válida no boot"; exit 0; }
     up=$(cut -d. -f1 /proc/uptime)
     # /run/bigfoston-clock: o shell mostra "acertada no início do sistema"

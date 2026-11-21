@@ -1,0 +1,40 @@
+#!/bin/sh
+# Reinicia o BigFoston sem desligar o aparelho.
+#
+# O reset do watchdog (o mesmo do Windows CE) deixa este aparelho desligado,
+# e o alarme do RTC não o religa (testado em 21/11/2026). Então o Reiniciar
+# reinicia só o Linux: o kexec carrega de novo o kernel, o initrd e o DTB da
+# última atualização aplicada (BigFoston/update.ok no cartão, conferidos pelo
+# SHA256SUMS que o agente gravou) e salta para eles no fim do desligamento
+# (/usr/sbin/bigfoston-kexec-exec em /etc/inittab), sem cortar a energia.
+#
+# Sai com erro, sem reiniciar, quando falta algo; a interface mostra o motivo.
+# Uma atualização pendente (BigFoston/update) só é aplicada pelo agente do CE
+# ao ligar: nesse caso use Desligar e ligue de novo.
+SRC=/mnt/sd/BigFoston/update.ok
+DST=/kexec
+fail() { echo "bigfoston-reboot: $*" >&2; logger -t bigfoston-reboot "$*" 2>/dev/null; exit 1; }
+
+command -v kexec >/dev/null || fail "kexec ausente neste firmware"
+[ -d /mnt/sd/BigFoston/update ] && fail "há uma atualização pendente no cartão: desligue e ligue para aplicá-la"
+for f in zImage initrd.img fs707dc.dtb SHA256SUMS; do
+    [ -f "$SRC/$f" ] || fail "falta $SRC/$f (cartão SD com a última atualização)"
+done
+
+rm -rf "$DST"
+mkdir -p "$DST" || fail "sem espaço para os arquivos de boot"
+cp "$SRC/zImage" "$SRC/initrd.img" "$SRC/fs707dc.dtb" "$SRC/SHA256SUMS" "$DST/" || fail "cópia falhou"
+( cd "$DST" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ) || { rm -rf "$DST"; fail "arquivos de boot não conferem com o SHA256SUMS"; }
+# linha de comando atual, sem a hora de um reinício anterior
+for a in $(cat /proc/cmdline); do
+    case "$a" in bigfoston.epoch=*) ;; *) printf '%s ' "$a" ;; esac
+done > "$DST/cmdline"
+
+# ensaio: o kernel aceita a imagem agora (a carga final, com a hora certa, é no fim)
+kexec -l "$DST/zImage" --initrd="$DST/initrd.img" --dtb="$DST/fs707dc.dtb" \
+    --command-line="$(cat "$DST/cmdline")bigfoston.epoch=$(date +%s)" ||
+    { rm -rf "$DST"; fail "o kernel recusou a imagem (kexec -l)"; }
+
+touch "$DST/pending"
+sync
+exec /sbin/reboot

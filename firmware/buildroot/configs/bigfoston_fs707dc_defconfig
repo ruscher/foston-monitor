@@ -53,3 +53,5 @@ BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/use
 # MP3 playback (fixed-point arm_nofpu decoder, OSS output) for the Multimedia app
 BR2_PACKAGE_MPG123=y
 BR2_LINUX_KERNEL_XZ=y
+# Reiniciar com kexec (bigfoston-reboot)
+BR2_PACKAGE_KEXEC=y

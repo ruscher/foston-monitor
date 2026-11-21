@@ -87,6 +87,8 @@ mais — … • “ ” € e os símbolos LVGL/Font Awesome usados — ver
   (`bl_power`, nível 3 de 19) e engole os toques; um toque na tela ou no botão de energia
   acorda. Não é suspensão: o kernel deste aparelho não suspende o processador, então
   música, GPS e rotas continuam rodando e a bateria continua sendo gasta.
+- **Reiniciar** reinicia o Linux sem desligar o aparelho (kexec com os arquivos da última
+  atualização no cartão); o reset de hardware deste aparelho o deixaria desligado.
 - Diálogos e teclado ficam na camada superior com fundo escurecido que bloqueia
   toques atrás. A calibração ocupa a tela inteira.
 - Ao voltar para Ajustes, a lista mantém a posição de rolagem.
