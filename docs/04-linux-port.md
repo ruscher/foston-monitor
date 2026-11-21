@@ -131,8 +131,10 @@ desligado (PHY `0x600` b7 / `0x60C` b8, clock e PMU `0x80061358` b0). O glue ago
 esses bits no probe e, se estiverem desligados, liga o bloco com a sequência do
 `usbfn.dll`/`bus.dll` (sem a detecção de carregador); com cabo no boot nada é escrito
 — **falta conferir no aparelho**. O MAC visto pelo PC é fixo (`g_cdc.host_addr=02:46:53:37:30:01`)
-e a conexão `bigfoston` do NetworkManager o usa, em qualquer porta USB. O log do kernel
-fica no cartão em `BigFoston/logs/boot.log` (aos 45 s e aos 3 min). Uso: `ssh root@192.168.7.2` (só chave), serial em
+e a conexão `bigfoston` do NetworkManager o usa, em qualquer porta USB (conferido em
+21/11/2026). O log do kernel fica no cartão em `BigFoston/logs/boot.log` (aos 45 s e aos
+3 min; conferido). Com cabo no boot o probe registra o bloco ligado
+(`USB block: phy 9c486080 10004944 … pmu 00000001`) e não escreve nada. Uso: `ssh root@192.168.7.2` (só chave), serial em
 `/dev/ttyACM0`; no PC, `192.168.7.1/24` na interface `cdc_ether`.
 
 O estado de cada linha é atualizado conforme os testes no aparelho

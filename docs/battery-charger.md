@@ -98,6 +98,11 @@ Mudanças depois do teste:
   e a USB fraca aparecia como cheia);
 - uma linha de progresso no log a cada 5 min (fase, tempo, VBAT, I, VCHG).
 
+Conferido no aparelho depois da atualização (21/11/2026, 10:20): `charge=Y` no boot; na
+USB do PC a carga começou (VCHG 4496 mV), a VCHG caiu a 4305 mV, parou **uma vez** e ficou
+esperando 4450 mV ("VCHG fell to 4305 mV while charging; waiting for 4450 mV"); estado
+`Not charging`, e a interface mostra "ligado, sem carregar" (nível cinza com raio).
+
 ## Em aberto
 
 - Corrente em mA de cada código e período real do watchdog (medir no aparelho).
