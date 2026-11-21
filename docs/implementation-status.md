@@ -40,11 +40,12 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Brilho | **FUNCIONANDO** | `mt3351-backlight`, palavra da PMU `0x80061308` | [04-linux-port.md](04-linux-port.md) |
 | Touchscreen | **FUNCIONANDO** | `mt3351-ts`, calibração de 5 pontos gravada no SD | [touchscreen-driver.md](touchscreen-driver.md) |
 | Alto-falante (ALSA + OSS) | **FUNCIONANDO** | MP3 a ~7 % de CPU com espectro; sons de toque | [audio.md](audio.md) |
-| Fone de ouvido, microfone | **NÃO IMPLEMENTADO** | roteamento analógico do MT3351 não mapeado | [audio.md](audio.md) |
+| Fone de ouvido | **FUNCIONANDO** | detecção no GPIO 12 e troca alto-falante/fone conferidas com um fone | [audio.md](audio.md) |
+| Microfone | **NÃO IMPLEMENTADO** | o CE só grava no caminho de voz do DSP | [audio.md](audio.md) |
 | Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série, duas rodadas de teste com MD5 | [sd-controller.md](sd-controller.md) |
-| Bateria e carregador | **PARCIAL** | leitura de tensão, %, carregador presente/carregando; **a carga é feita por software no CE** | [04-linux-port.md](04-linux-port.md) |
+| Bateria e carregador | **PARCIAL** | leitura completa; carga por software implementada (algoritmo do CE), desligada por padrão; pela USB do PC recusa carregar como o CE (VCHG < 4,35 V); falta testar com carregador de tomada | [battery-charger.md](battery-charger.md) |
 | USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (Full-Speed) | `ssh root@192.168.7.2`, ~190–240 KB/s | [04-linux-port.md](04-linux-port.md) |
-| USB High-Speed, reconexão do cabo | **NÃO IMPLEMENTADO** | — | [04-linux-port.md](04-linux-port.md) |
+| USB High-Speed, reconexão do cabo | **NÃO IMPLEMENTADO** | ao tirar e recolocar o cabo o gadget reaparece, mas a rede não responde até reiniciar | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
 | GPS (MT3328) | **NÃO IMPLEMENTADO** | protocolo binário *host-based*; a posição sai da biblioteca proprietária do CE | [uart.md](uart.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
@@ -62,7 +63,9 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Run, Monitor, Sistema de Informação | **FUNCIONANDO** | |
 | Data: ajuste, fusos, horário de verão, NTP | **FUNCIONANDO** | NTP pelo PC (`sntp_server.py`) testado |
 | Luz posterior, volume, bateria, língua (pt/en/es), calibração, reset, SSH (leitura) | **FUNCIONANDO** | |
-| GPS, GpsInfo, TV, Bluetooth, FM, USB, Big Screen | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
+| Big Screen (painel do PC) | **FUNCIONANDO** | FSP por TCP na rede USB, 36 quadros/s | 
+| Avisos de dispositivos (fone, carregador, USB, SD) | **FUNCIONANDO** | |
+| GPS, GpsInfo, TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
 
 ## Ferramentas no PC
 
@@ -88,9 +91,8 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | Carga da bateria no Linux | usar o Linux por horas | alto: controle do carregador na PMU, precisa mapear o que o CE faz antes de escrever qualquer registrador |
-| 2 | Fone de ouvido e detecção do conector | áudio no carro | médio: rotas analógicas em `0x80061200…`, a partir do driver do CE |
-| 3 | Companion / Big Screen pela rede USB | integração com o PC | baixo: só software (protocolo do Big Screen) |
+| 1 | Carga da bateria: teste com carregador de tomada e ligar por padrão | usar o Linux por horas | médio: algoritmo pronto, falta a validação |
+| 2 | Reconexão do cabo USB (a rede para ao recolocar) | uso diário com o PC | médio: driver USB do MT3351 |
 | 4 | Arquivos com gravação, montar/ejetar o SD pela interface | uso do SD pelo usuário | baixo |
 | 5 | USB High-Speed e reconexão | atualizações mais rápidas | médio |
 | 6 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |

@@ -27,6 +27,7 @@ void settings_defaults(bf_settings_t *s)
     s->anim = true;
     s->sounds = true;
     s->boot_sound = false;
+    s->notify = true;
     s->dim_min = 0;
     snprintf(s->tz, sizeof s->tz, "%s", "brasilia");
     s->dst = false;
@@ -96,6 +97,7 @@ void settings_load(void)
         else if(!strcmp(k, "animations")) cur.anim = atoi(v) != 0;
         else if(!strcmp(k, "sounds"))    cur.sounds = atoi(v) != 0;
         else if(!strcmp(k, "boot_sound")) cur.boot_sound = atoi(v) != 0;
+        else if(!strcmp(k, "device_notices")) cur.notify = atoi(v) != 0;
         else if(!strcmp(k, "dim_minutes")) cur.dim_min = clampi(atoi(v), 0, 60);
         else if(!strcmp(k, "timezone"))  snprintf(cur.tz, sizeof cur.tz, "%.*s", (int)sizeof cur.tz - 1, v);
         else if(!strcmp(k, "dst"))       cur.dst = atoi(v) != 0;
@@ -132,7 +134,7 @@ bool settings_save(void)
     fprintf(f, "theme = %s\n", cur.mode == BF_MODE_LIGHT ? "light" : cur.mode == BF_MODE_AUTO ? "auto" : "dark");
     fprintf(f, "palette = %d\nwallpaper = %d\n", cur.palette, cur.wallpaper);
     fprintf(f, "animations = %d\nsounds = %d\nboot_sound = %d\n", cur.anim, cur.sounds, cur.boot_sound);
-    fprintf(f, "dim_minutes = %d\n", cur.dim_min);
+    fprintf(f, "dim_minutes = %d\ndevice_notices = %d\n", cur.dim_min, cur.notify);
     fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\nntp_servers = %s\n",
             cur.tz, cur.dst, cur.auto_time, cur.ntp);
     fprintf(f, "home_mode = %d\nhome_apps = 0x%x\n", cur.home_mode, cur.home_apps);

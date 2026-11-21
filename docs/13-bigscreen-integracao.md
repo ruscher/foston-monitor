@@ -18,28 +18,25 @@ anterior logo após trocar para serial.
 - Testes do FOSTON no repositório: 49 passam.
 - **No aparelho: NÃO TESTADO** (o mesmo mecanismo foi validado no `bfagent`).
 
-## No BigFoston OS (Linux)
+## No BigFoston OS (Linux) — funcionando
 
-O modo **Big Screen Display** do BigFoston OS usa o mesmo protocolo, para que o serviço
-do PC e os temas funcionem sem um sistema paralelo.
+O app **Big Screen** do shell (`src/ui/core/bigscreen.c`, `screens/scr_bigscreen.c`)
+fala o mesmo **FSP v1** do bsmd-ce, mas por **TCP na rede USB**: `192.168.7.2:7707`.
+Assim a rede, o SSH e o console serial (`ttyGS0`) continuam como estão.
 
-`src/bigscreen/fsp-linux.c` → `bigfoston-bigscreen`:
+- O núcleo do protocolo é o mesmo (`src/ui/third_party/fsp`, cópia sem alterações de
+  `device-clients/wince/src/fsp.c/.h`).
+- Espera com instruções e status; conectado, o quadro do PC cobre a tela inteira e os
+  toques voltam já calibrados; segurar o canto superior esquerdo 3 s sai.
+- `bigfoston-shell --open bigscreen` abre direto no app.
 
-- lê FSP de um dispositivo serial (no aparelho: a porta do USB gadget, `/dev/ttyGS0`);
-- usa o decodificador `fsp.c` **sem alterações** (copiado do bsmd; manter sincronizado);
-- desenha num buffer sombra e só copia para `/dev/fb0` no `PRESENT` (sem quadros rasgados);
-- responde `HELLO_ACK` com o mesmo layout do bsmd-ce (`platform = "BigFoston OS"`,
-  versão do kernel no lugar da versão do CE), `PRESENTED`, `PONG`, `NAK`, `CREDIT`;
-- envia `TOUCH` (down/move/up) a partir de um dispositivo evdev.
+No PC (big-screen-monitor-display, branch `feat/foston-fs707dc`):
 
-Teste ponta a ponta (PC, pseudo-terminal, codificador real do Big Screen):
-`python3 -m unittest discover -s tests/bigscreen` — os pixels de retângulos raw, RLE,
-deflate e fill chegam **exatos** ao framebuffer somente após `PRESENT`. **Passa.**
+- `TcpTransport` (mesma interface do serial) e o driver `FostonLinuxDisplay`
+  (perfil `foston_bigfoston`, janela de 128 KiB);
+- reconhecido sozinho pelo número de série do gadget USB (`0525:a4aa`,
+  `BIGFOSTON-FS707DC`, posto pelo kernel com `g_cdc.iSerialNumber`) e confirmado pelo HELLO.
 
-### O que falta para funcionar no aparelho
-
-1. Driver do USB device do MT3351 → gadget `g_serial`/ACM (bloqueado: IP USB ainda não identificado).
-2. Detecção no serviço do PC: hoje ele procura `045e:00ce` (`ipaq`). Um gadget Linux
-   aparece como `ttyACM` com IDs próprios; o driver `foston` do Big Screen precisará
-   aceitar esse identificador.
-3. Touchscreen no Linux (para o toque voltar ao PC).
+Medido com o aparelho (20/11/2026): quadro cheio em 155 ms, animação a **36 quadros/s**,
+ida e volta de 28 ms, PING e brilho ok; o framebuffer do FOSTON ficou idêntico ao quadro
+enviado. O `src/bigscreen/` (cliente serial separado) fica como referência e teste no PC.

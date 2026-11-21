@@ -418,8 +418,9 @@ static void mt3351_chg_work(struct work_struct *w)
 	    ts->vchg <= 4350 || ts->vchg >= 6000) {
 		if (ts->chg_on)
 			mt3351_chg_stop(ts, false);
-		dev_warn(ts->dev, "charger: not charging (status %#x, fault %#x, %#x, VCHG %d mV)\n",
-			 sta, flt, readl(ts->c018), ts->vchg);
+		if (ts->last_log != 3)		/* once per change, not every 10 s */
+			dev_warn(ts->dev, "charger: not charging (status %#x, fault %#x, %#x, VCHG %d mV)\n",
+				 sta, flt, readl(ts->c018), ts->vchg);
 		ts->last_log = 3;
 		goto changed;
 	}

@@ -14,6 +14,7 @@ int screenshot_run(const char *dir)
 }
 #else
 #include "app.h"
+#include "devwatch.h"
 #include "nav.h"
 #include "settings.h"
 #include "../widgets/imgview.h"
@@ -202,6 +203,9 @@ int screenshot_run(const char *dir)
     dialog_close_all(); pump(30);
     bottombar_open_recents();       shot("26-recentes");
     dialog_close_all(); pump(30);
+    devwatch_demo(0, 1); pump(300); shot("26d-aviso-fone");
+    devwatch_demo(1, 1); pump(300); shot("26e-aviso-carregador");
+    pump(3000);
     {
         lv_obj_t *b = app_bye_screen(true); pump(30); shot("26b-reiniciando");
         lv_obj_delete(b);

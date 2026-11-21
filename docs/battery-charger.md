@@ -70,6 +70,13 @@ dmesg | grep charger                                    # fase, VBAT, I, VCHG
 cat /sys/class/power_supply/battery/status              # Charging / Full
 ```
 
+## Teste no aparelho (20/11/2026)
+
+Com `charge=1`, alimentado pela USB do PC: o driver **recusou carregar**, como o CE —
+VCHG medido em ~4,25 V, abaixo do mínimo de 4,35 V (`not charging ... VCHG 4261 mV`).
+Nenhum registrador do carregador mudou (`CON 0xA00`, `WDT 0`). Falta o teste com um
+carregador de tomada ou de carro (VCHG acima de 4,35 V).
+
 ## Em aberto
 
 - Corrente em mA de cada código e período real do watchdog (medir no aparelho).

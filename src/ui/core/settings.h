@@ -14,6 +14,7 @@ typedef struct {
     bool anim;          /* animações de transição */
     bool sounds;        /* sons de toque */
     bool boot_sound;    /* som ao iniciar a interface */
+    bool notify;        /* avisos na tela ao conectar dispositivos (core/devwatch.c) */
     int  dim_min;       /* escurecer a tela após N min sem toque (0 = nunca) */
     char tz[24];        /* fuso horário: id estável da tabela de core/clock.c */
     bool dst;           /* horário de verão manual (+1 h) nos fusos sem regra */

@@ -217,6 +217,16 @@ aparelho em 20/11/2026: de 2025-03-03 para a hora do PC em menos de 14 s.
 O GPS não serve de fonte: o MT3328 fala um protocolo binário proprietário
 (ver [uart.md](uart.md)).
 
+## Avisos de dispositivos
+
+`core/devwatch.c` lê a cada 700 ms o fone (evdev do driver de áudio), o carregador
+(`power_supply/charger/online`), o PC pela USB (`/sys/class/udc/*/state`) e o cartão SD
+(`/sys/block/mmcblk0`); numa mudança, `core/osd.c` mostra no centro um cartão com ícone,
+título e detalhe (ex.: % da bateria) por 2,5 s, com som curto se os sons estiverem
+ligados. Não bloqueia o toque. Desliga em Aparência > Efeitos > "Avisos de dispositivos".
+
+![](images/ui/26d-aviso-fone.png)
+
 ## Tela de encerramento
 
 Desligar e Reiniciar mostram o logotipo com "Desligando…" / "Reiniciando…"

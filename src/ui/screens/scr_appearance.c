@@ -140,6 +140,12 @@ static void sw_sounds(lv_event_t *e)
     fx_sound(FX_TOGGLE);           /* prévia (só toca se acabou de ligar) */
 }
 
+static void sw_notify(lv_event_t *e)
+{
+    settings()->notify = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_save();
+}
+
 static void boot_preview(lv_timer_t *t) { (void)t; fx_sound(FX_STARTUP); }
 
 static void sw_boot(lv_event_t *e)
@@ -242,6 +248,7 @@ static void build_effects(void)
         { S_AP_ANIM, s->anim, sw_anim },
         { S_AP_SOUNDS, s->sounds, sw_sounds },
         { S_AP_BOOT_SOUND, s->boot_sound, sw_boot },
+        { S_AP_NOTIFY, s->notify, sw_notify },
     };
     for(unsigned i = 0; i < sizeof rows / sizeof rows[0]; i++) {
         lv_obj_t *sw = page_switch_row(c, tr(rows[i].t), rows[i].on, rows[i].cb, NULL);

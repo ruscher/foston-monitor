@@ -2,8 +2,28 @@
 
 Estado: **reprodução funcionando** (driver ALSA `mt3351-audio`, 2026-11-20). Testado com
 um tom de 1 kHz e com `aplay` (WAV 22 050 Hz estéreo, duração correta, som limpo).
-Pendente: fone (detecção no GPIO 12 / IRQ 70), gravação (microfone), interrupção de período
-(IRQ 55; hoje usa um timer) e 48 kHz (código de taxa não confirmado).
+Fone de ouvido: **funcionando** (detecção e troca, 2026-11-20). Pendente: gravação
+(microfone), interrupção de período (IRQ 55; hoje usa um timer) e 48 kHz.
+
+## Fone de ouvido
+
+Do `wavedev_drv.dll` (análise estática) e conferido no aparelho:
+
+| Item | Valor |
+|---|---|
+| Detecção | GPIO 12, nível em `0x80002400` bit 12: **1 = fone plugado** (confirmado com o fone) |
+| No CE | EINT 6 = IRQ 70 (linha 7 do CIRQ, com debounce de hardware); no Linux, leitura a cada 200 ms e duas leituras iguais |
+| Com o fone | amplificador do alto-falante (GPIO 5) desligado e `0x8004B204` = `0x01F0` (bit 12 zerado) |
+| Sem o fone | amplificador ligado durante a reprodução e `0x8004B204` = `0x11F0` |
+| Analógico | nada muda nas palavras `0x800612xx` (o fone sempre recebe o DAC) |
+
+Teste: tom de 440 Hz com o fone plugado saiu só no fone (alto-falante mudo); ao tirar,
+o amplificador religou com `0x11F0`. ALSA: "Headphone Jack" (com dispositivo de entrada
+`SW_HEADPHONE_INSERT`) e "Speaker Playback Switch". O shell mostra um aviso na tela.
+
+**Microfone:** o wave-in do CE não lê nenhum ADC (parece cópia da saída); a captura
+real só aparece no caminho de voz do DSP (Bluetooth viva-voz) e numa rotina de teste de
+fábrica (`0x8004D000`, IRQ 54, 16 kHz mono por PIO). Não implementado.
 
 ## Como funciona
 
@@ -24,6 +44,7 @@ ARM → buffer em anel na RAM → **DMA de áudio em `0x8004B000`** → DAC inte
 | `0x80061208` | rampa do driver analógico: 0x1C, 200 µs, 0x1F |
 | `0x80001344` / `0x80001324` | liga / desliga os clocks do áudio (ids 37 e 43: `0x00082000`) |
 | GPIO 5 (`0x80002000` +0x000 dir, +0x300 saída) | amplificador do alto-falante, 1 = ligado |
+| `0x80002400` bit 12 | entrada do GPIO 12: fone plugado |
 
 O WinCE deixa o áudio parado e com os clocks desligados ao passar para o Linux.
 

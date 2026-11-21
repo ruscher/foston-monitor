@@ -20,5 +20,8 @@ extern const lv_image_dsc_t bf_icon_fm;
 extern const lv_image_dsc_t bf_icon_usb;
 extern const lv_image_dsc_t bf_icon_info;
 extern const lv_image_dsc_t bf_icon_power;
+extern const lv_image_dsc_t bf_icon_headphones;
+extern const lv_image_dsc_t bf_icon_plug;
+extern const lv_image_dsc_t bf_icon_sdcard;
 
 #endif
