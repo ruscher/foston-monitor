@@ -9,10 +9,18 @@
  * GDMA channels running into its old buffers (0x007e8000, 0x007db000:
  * that is the memory corruption seen during the bring-up). Before handing
  * a port to the 8250 core this driver:
- *   - sets HIGHSPEED (+0x24) and DMA_EN (+0x4c) to 0 (plain 16x divisor),
+ *   - sets DMA_EN (+0x4c) to 0,
  *   - stops the GDMA channel named by "mediatek,ce-rx-dma" (its START
  *     register, written 0).
  * Nothing else is written: no clock gates, no pin mux.
+ *
+ * Baud rate: programmed exactly as uart.dll does (function at VA 0x3d31ad0,
+ * for every rate up to 921600): HIGHSPEED = 3, divisor = (clk / baud) / 256
+ * + 1, SAMPLE_COUNT = round(clk / (divisor * baud)) - 1, SAMPLE_POINT =
+ * (SAMPLE_COUNT - 1) / 2, RATE_FIX = 1. CE leaves RATE_FIX at 1 and the plain
+ * 16x mode of the 8250 core was never proven with it (the GPS boot loader
+ * did not answer at all). Checked against CE's own values at 921600:
+ * divisor 1, SAMPLE_COUNT 31, SAMPLE_POINT 15.
  */
 #include <linux/io.h>
 #include <linux/mod_devicetable.h>
@@ -22,8 +30,45 @@
 #include <linux/serial_8250.h>
 #include <linux/serial_core.h>
 
+#include "8250.h"
+
 #define MT3351_UART_HIGHSPEED	0x24
+#define MT3351_UART_SAMPLE_COUNT 0x28
+#define MT3351_UART_SAMPLE_POINT 0x2c
+#define MT3351_UART_RATE_FIX	0x34
 #define MT3351_UART_DMA_EN	0x4c
+
+static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
+			       const struct ktermios *old)
+{
+	struct uart_8250_port *up = up_to_u8250p(port);
+	unsigned int baud, div, cnt, q, r;
+	unsigned long flags;
+
+	serial8250_do_set_termios(port, termios, old);
+	baud = uart_get_baud_rate(port, termios, old, 300, 921600);
+	/* uart.dll: divisor from the high byte of clk/baud, then the sample count */
+	div = (port->uartclk / baud) / 256 + 1;
+	q = port->uartclk / (div * baud);
+	r = port->uartclk % (div * baud);
+	if (r >= div * baud / 2)
+		q++;
+	cnt = q - 1;
+	if (cnt > 255)
+		cnt = 255;
+
+	uart_port_lock_irqsave(port, &flags);
+	uart_update_timeout(port, termios->c_cflag, baud);
+	writeb(3, port->membase + MT3351_UART_HIGHSPEED);
+	writeb(cnt, port->membase + MT3351_UART_SAMPLE_COUNT);
+	writeb((cnt - 1) >> 1, port->membase + MT3351_UART_SAMPLE_POINT);
+	writeb(1, port->membase + MT3351_UART_RATE_FIX);
+	serial_port_out(port, UART_LCR, up->lcr | UART_LCR_DLAB);
+	serial_dl_write(up, div);
+	serial_port_out(port, UART_LCR, up->lcr);
+	uart_port_unlock_irqrestore(port, flags);
+	tty_termios_encode_baud_rate(termios, baud, baud);
+}
 
 struct mt3351_uart {
 	int line;
@@ -61,7 +106,6 @@ static int mt3351_uart_probe(struct platform_device *pdev)
 		}
 	}
 	writeb(0, base + MT3351_UART_DMA_EN);
-	writeb(0, base + MT3351_UART_HIGHSPEED);
 
 	spin_lock_init(&up.port.lock);
 	up.port.dev = dev;
@@ -74,6 +118,7 @@ static int mt3351_uart_probe(struct platform_device *pdev)
 	up.port.type = PORT_16550A;
 	up.port.flags = UPF_FIXED_PORT | UPF_FIXED_TYPE | UPF_SKIP_TEST;
 	up.port.fifosize = 16;
+	up.port.set_termios = mt3351_set_termios;
 
 	data->line = serial8250_register_8250_port(&up);
 	if (data->line < 0)

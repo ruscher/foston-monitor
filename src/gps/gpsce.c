@@ -38,7 +38,7 @@ typedef uint32_t u32;
 typedef uint16_t u16;
 typedef uint64_t (*hfn_t)(u32 *a);
 
-static int verbose, hw;
+static int verbose, hw, strace_;
 static const char *data_dir = "/mnt/sd/BigFoston/gps";
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -70,6 +70,17 @@ static void logf_(const char *fmt, ...)
 #define LOGV(...) do { if(verbose) logf_(__VA_ARGS__); } while(0)
 
 static __thread u32 last_error;
+
+/* -s: rastreio da serial (primeiros bytes de cada leitura/escrita) */
+static void hexlog(const char *dir, const uint8_t *b, u32 n, u32 asked)
+{
+    if(!strace_) return;
+    char line[3 * 40 + 8];
+    u32 k = n < 40 ? n : 40, o = 0;
+    for(u32 i = 0; i < k; i++) o += (u32)snprintf(line + o, sizeof line - o, "%02x ", b[i]);
+    line[o] = 0;
+    logf_("serial %s %u/%u: %s%s", dir, n, asked, line, n > k ? "..." : "");
+}
 
 /* ------------------------------------------------------------------ handles */
 
@@ -898,6 +909,7 @@ static uint64_t h_ReadFile(u32 *a)
     if(h->type == H_SERIAL) {
         int g = serial_read(h->fd, P(a[1]), a[2]);
         if(nread) *nread = (u32)g;
+        if(g || verbose > 1) hexlog("<-", P(a[1]), (u32)g, a[2]);
         return R(TRUE_);
     }
     ssize_t r = read(h->fd, P(a[1]), a[2]);
@@ -920,6 +932,7 @@ static uint64_t h_WriteFile(u32 *a)
     ssize_t r = write(h->fd, P(a[1]), a[2]);
     if(r < 0) { last_error = 29; return 0; }
     if(nw) *nw = (u32)r;
+    if(h->type == H_SERIAL) hexlog("->", P(a[1]), (u32)r, a[2]);
     return R(TRUE_);
 }
 
@@ -1056,7 +1069,12 @@ static u32 comm_to[5];    /* COMMTIMEOUTS: intervalo, mult. leitura, const. leit
 static u32 comm_baud = 38400;
 
 static uint64_t h_comm_ok(u32 *a) { LOGV("serial: config (%#x)", a[0]); return R(TRUE_); }
-static uint64_t h_SetCommTimeouts(u32 *a) { memcpy(comm_to, P(a[1]), sizeof comm_to); return R(TRUE_); }
+static uint64_t h_SetCommTimeouts(u32 *a)
+{
+    memcpy(comm_to, P(a[1]), sizeof comm_to);
+    if(strace_) logf_("serial: tempos %u/%u/%u (intervalo/mult/const)", comm_to[0], comm_to[1], comm_to[2]);
+    return R(TRUE_);
+}
 static uint64_t h_GetCommTimeouts(u32 *a) { memcpy(P(a[1]), comm_to, sizeof comm_to); return R(TRUE_); }
 static uint64_t h_PurgeComm(u32 *a)
 {
@@ -1095,7 +1113,7 @@ static uint64_t h_SetCommState(u32 *a)
 {
     handle_t *h = h_get(a[0]);
     u32 *dcb = P(a[1]);
-    LOGV("SetCommState: %u baud", dcb[1]);
+    if(strace_ || verbose) logf_("SetCommState: %u baud", dcb[1]);
     comm_baud = dcb[1];
     if(!h || h->type != H_SERIAL || h->fd < 0) return R(TRUE_);
     speed_t sp = baud_code(dcb[1]);
@@ -1382,8 +1400,9 @@ int main(int argc, char **argv)
         else if(!strcmp(argv[i], "-d") && i + 1 < argc) data_dir = argv[++i];
         else if(!strcmp(argv[i], "-t") && i + 1 < argc) seconds = atoi(argv[++i]);
         else if(!strcmp(argv[i], "--hw")) hw = 1;
-        else if(!strcmp(argv[i], "-v")) verbose = 1;
-        else { fprintf(stderr, "uso: %s [-b gps.bfx] [-r registro] [-d dados] [-t s] [--hw] [-v]\n", argv[0]); return 2; }
+        else if(!strcmp(argv[i], "-v")) verbose++;
+        else if(!strcmp(argv[i], "-s")) strace_ = 1;
+        else { fprintf(stderr, "uso: %s [-b gps.bfx] [-r registro] [-d dados] [-t s] [--hw] [-v] [-s]\n", argv[0]); return 2; }
     }
     char defbfx[512];
     if(!bfx) { snprintf(defbfx, sizeof defbfx, "%s/gps.bfx", data_dir); bfx = defbfx; }
