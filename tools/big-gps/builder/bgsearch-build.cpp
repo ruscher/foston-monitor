@@ -272,6 +272,34 @@ int main(int argc, char **argv)
         }
     std::fprintf(stderr, "%zu entradas (%zu lugares) em %ld s\n", ents.size(), places.size(), (long)(time(nullptr) - t0));
 
+    /* order: points of interest by category and zoom-10 tile, then everything else */
+    auto tilekey = [](const Ent &e) {
+        uint32_t x = world_x(e.lon) >> 22, y = world_y(e.lat) >> 22;      /* zoom 10 */
+        return y << 16 | x;
+    };
+    std::stable_sort(ents.begin(), ents.end(), [&](const Ent &a, const Ent &b) {
+        int ca = a.type == BGS_T_POI ? a.cat : 255, cb = b.type == BGS_T_POI ? b.cat : 255;
+        if (ca != cb) return ca < cb;
+        if (ca == 255) return false;
+        return tilekey(a) < tilekey(b);
+    });
+    std::vector<uint32_t> cat_first(BGS_C_COUNT + 1, 0), cat_pairs;
+    for (int c = 0; c < BGS_C_COUNT; c++) {
+        cat_first[c] = (uint32_t)(cat_pairs.size() / 2);
+        uint32_t last = 0xFFFFFFFFu;
+        for (size_t i = 0; i < ents.size(); i++) {
+            if (ents[i].type != BGS_T_POI || ents[i].cat != c) continue;
+            uint32_t k = tilekey(ents[i]);
+            if (k != last) { cat_pairs.push_back(k); cat_pairs.push_back((uint32_t)i); last = k; }
+        }
+        /* sentinel: end of this category's entries */
+        uint32_t end = 0;
+        for (size_t i = 0; i < ents.size(); i++) if (ents[i].type == BGS_T_POI && ents[i].cat == c) end = (uint32_t)i + 1;
+        cat_pairs.push_back(0xFFFFFFFFu);
+        cat_pairs.push_back(end);
+    }
+    cat_first[BGS_C_COUNT] = (uint32_t)(cat_pairs.size() / 2);
+
     /* strings, tokens, postings */
     std::string strings;
     std::unordered_map<std::string, uint32_t> sid;
@@ -324,12 +352,16 @@ int main(int argc, char **argv)
     h.off_tokens = h.off_entries + (uint32_t)(out.size() * sizeof(bgs_entry_t));
     h.off_postings = h.off_tokens + (uint32_t)(toks.size() * sizeof(bgs_token_t));
     h.off_strings = h.off_postings + (uint32_t)(post.size() * 4);
+    h.off_catidx = h.off_strings + (uint32_t)strings.size();
+    h.ncatpairs = (uint32_t)(cat_pairs.size() / 2);
     h.created = (uint32_t)time(nullptr);
     std::fwrite(&h, sizeof h, 1, f);
     std::fwrite(out.data(), sizeof(bgs_entry_t), out.size(), f);
     std::fwrite(toks.data(), sizeof(bgs_token_t), toks.size(), f);
     std::fwrite(post.data(), 4, post.size(), f);
     std::fwrite(strings.data(), 1, strings.size(), f);
+    std::fwrite(cat_first.data(), 4, cat_first.size(), f);
+    std::fwrite(cat_pairs.data(), 4, cat_pairs.size(), f);
     if (std::fclose(f)) { std::perror(argv[2]); return 1; }
     std::fprintf(stderr, "%s: %u entradas, %u palavras, %u referências, %u bytes de texto (%ld s)\n", argv[2], h.nentries, h.ntokens,
                  h.npostings, h.strings_len, (long)(time(nullptr) - t0));

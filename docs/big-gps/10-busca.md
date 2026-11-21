@@ -26,7 +26,12 @@ usam `addr:suburb`/`addr:city` quando existem.
 - A palavra com menos ocorrências guia a busca; as outras filtram. Ordem: importância +
   bônus para palavras completas − distância (log) da posição atual (ou do centro do mapa).
 - O mesmo lugar mapeado duas vezes (ponto e prédio, a menos de 300 m) aparece uma vez.
-- Categorias: os pontos da categoria mais próximos (até 30 km).
+- Categorias: os pontos da categoria mais próximos (até 30 km). No índice (formato 2) os
+  locais ficam agrupados por categoria e por tile z10 (~40 km), com uma tabela por
+  categoria: a busca lê só os tiles em volta da posição (antes percorria o índice inteiro —
+  ~76 MB no índice nacional).
+- Uma palavra que só existe no contexto ("… curitiba") não serve de guia: a próxima palavra
+  mais rara guia uma nova rodada.
 
 ## Na tela
 
@@ -55,6 +60,4 @@ Aeroporto Internacional de Brasília; categoria postos → 0,6 km, 0,7 km…
 
 - Nomes do jeito que estão no OSM: em Brasília "quadra 302 norte" não acha "SQN 302"
   (sinônimos/abreviações ainda não tratados).
-- A busca por categoria percorre o índice inteiro: serve para uma região; o índice nacional
-  precisa de ordem espacial (fase dos dados do Brasil).
 - Sem interpolação de números de casa (só endereços mapeados um a um).

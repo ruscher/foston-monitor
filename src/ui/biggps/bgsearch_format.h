@@ -12,6 +12,11 @@
  *   tokens: bgs_token_t[ntokens] sorted by text (strcmp of the normalized word)
  *   postings: u32 entry ids, per token sorted by entry id
  *   strings: NUL-terminated UTF-8 (names, contexts) and normalized words
+ *   category index: for each category, (z10 tile key, first entry) pairs sorted by key,
+ *     then a sentinel (0xFFFFFFFF, end); cat_first[c] .. cat_first[c+1] in pairs
+ *
+ * Points of interest are stored grouped by category and, inside one, by zoom-10 tile
+ * (key = ty << 16 | tx), so "nearest fuel stations" reads only the tiles around the point.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -21,7 +26,7 @@
 #include <stdint.h>
 
 #define BGS_MAGIC   0x31534742u   /* "BGS1" */
-#define BGS_VERSION 1
+#define BGS_VERSION 2
 
 enum { BGS_T_PLACE = 0, BGS_T_STREET, BGS_T_POI, BGS_T_ADDRESS };
 
@@ -37,7 +42,10 @@ typedef struct {
     uint32_t magic, version;
     uint32_t nentries, ntokens, npostings, strings_len;
     uint32_t off_entries, off_tokens, off_postings, off_strings;
-    uint32_t created, reserved[5];
+    uint32_t created;
+    uint32_t off_catidx;       /* u32 cat_first[BGS_C_COUNT + 1] (pair index), then the pairs */
+    uint32_t ncatpairs;
+    uint32_t reserved[3];
 } bgs_header_t;
 
 typedef struct {

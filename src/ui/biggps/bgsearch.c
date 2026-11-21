@@ -48,7 +48,8 @@ bgs_index_t *bgs_open(const char *path, char *err, size_t errlen)
         || (off_t)h->off_entries + (off_t)h->nentries * (off_t)sizeof(bgs_entry_t) > ix->size
         || (off_t)h->off_tokens + (off_t)h->ntokens * (off_t)sizeof(bgs_token_t) > ix->size
         || (off_t)h->off_postings + (off_t)h->npostings * 4 > ix->size
-        || (off_t)h->off_strings + h->strings_len > ix->size) {
+        || (off_t)h->off_strings + h->strings_len > ix->size
+        || (off_t)h->off_catidx + (BGS_C_COUNT + 1) * 4 + (off_t)h->ncatpairs * 8 > ix->size) {
         snprintf(err, errlen, "%s: não é um índice de busca do Big GPS (versão %u)", path, BGS_VERSION);
         goto fail;
     }
@@ -242,24 +243,48 @@ int bgs_query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_res
 
 int bgs_nearby(bgs_index_t *ix, int cat, uint32_t x, uint32_t y, uint32_t max_m, bgs_result_t *out, int max)
 {
-    /* linear scan in blocks (fine for a region; a national index needs a spatial order) */
-    enum { BLK = 512 };
-    bgs_entry_t blk[BLK];
-    double *score = malloc((size_t)(max > 0 ? max : 1) * sizeof *score);
+    /* the category's points are grouped by zoom-10 tile: read the tiles around (x, y) */
+    if (cat <= 0 || cat >= BGS_C_COUNT || max < 1) return 0;
+    uint32_t cf[2];
+    if (rd(ix, (off_t)ix->h.off_catidx + (off_t)cat * 4, cf, sizeof cf) || cf[0] > cf[1] || cf[1] > ix->h.ncatpairs) return 0;
+    off_t pairs = (off_t)ix->h.off_catidx + (BGS_C_COUNT + 1) * 4;
+    double lat = atan(sinh(M_PI * (1.0 - 2.0 * y / 4294967296.0)));
+    double tile_m = 40075016.686 * cos(lat) / 1024.0;           /* zoom-10 tile width here */
+    int reach = (int)(max_m / tile_m) + 1;
+    if (reach > 6) reach = 6;
+    int tx = (int)(x >> 22), ty = (int)(y >> 22);
+    double *score = malloc((size_t)max * sizeof *score);
     int nr = 0;
-    for (uint32_t i = 0; i < ix->h.nentries && score; i += BLK) {
-        uint32_t k = ix->h.nentries - i < BLK ? ix->h.nentries - i : BLK;
-        if (rd(ix, (off_t)ix->h.off_entries + (off_t)i * sizeof(bgs_entry_t), blk, k * sizeof(bgs_entry_t))) break;
-        for (uint32_t j = 0; j < k; j++) {
-            if (blk[j].type != BGS_T_POI || blk[j].cat != cat) continue;
-            uint32_t d = dist_m(x, y, blk[j].x, blk[j].y);
-            if (d > max_m) continue;
-            if (nr == max && -(double)d <= score[max - 1]) continue;
-            bgs_result_t r;
-            fill(ix, &blk[j], x, y, &r);
-            insert(out, score, &nr, max, &r, -(double)d);
+    enum { BLK = 256 };
+    bgs_entry_t blk[BLK];
+    for (int dy = -reach; dy <= reach && score; dy++)
+        for (int dx = -reach; dx <= reach; dx++) {
+            int cx = tx + dx, cy = ty + dy;
+            if (cx < 0 || cy < 0 || cx > 1023 || cy > 1023) continue;
+            uint32_t key = (uint32_t)cy << 16 | (uint32_t)cx, lo = cf[0], hi = cf[1] - 1;   /* last = sentinel */
+            while (lo < hi) {                                   /* first pair with key >= wanted */
+                uint32_t m = lo + (hi - lo) / 2, pk[2];
+                if (rd(ix, pairs + (off_t)m * 8, pk, 8)) { lo = hi; break; }
+                if (pk[0] < key) lo = m + 1;
+                else hi = m;
+            }
+            uint32_t pk[4];
+            if (lo >= cf[1] - 1 || rd(ix, pairs + (off_t)lo * 8, pk, 16) || pk[0] != key) continue;
+            uint32_t e0 = pk[1], e1 = pk[3];                    /* entries of this tile */
+            if (e1 > ix->h.nentries || e0 > e1) continue;
+            for (uint32_t i = e0; i < e1; i += BLK) {
+                uint32_t k = e1 - i < BLK ? e1 - i : BLK;
+                if (rd(ix, (off_t)ix->h.off_entries + (off_t)i * sizeof(bgs_entry_t), blk, k * sizeof(bgs_entry_t))) break;
+                for (uint32_t j = 0; j < k; j++) {
+                    if (blk[j].type != BGS_T_POI || blk[j].cat != cat) continue;
+                    uint32_t d = dist_m(x, y, blk[j].x, blk[j].y);
+                    if (d > max_m || (nr == max && -(double)d <= score[max - 1])) continue;
+                    bgs_result_t r;
+                    fill(ix, &blk[j], x, y, &r);
+                    insert(out, score, &nr, max, &r, -(double)d);
+                }
+            }
         }
-    }
     free(score);
     return nr;
 }
