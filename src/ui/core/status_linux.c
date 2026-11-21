@@ -44,6 +44,7 @@ static void read_power(bf_status_t *s)
     s->battery_present = BF_NO;
     s->battery_pct = -1;
     s->charging = BF_UNKNOWN;
+    s->battery_state = BF_BAT_UNKNOWN;
     s->ext_power = BF_UNKNOWN;
     DIR *d = opendir("/sys/class/power_supply");
     if(!d) { s->battery_present = BF_UNKNOWN; return; }
@@ -60,8 +61,10 @@ static void read_power(bf_status_t *s)
             if(c >= 0 && c <= 100) s->battery_pct = c;
             snprintf(p, sizeof p, "/sys/class/power_supply/%s/status", e->d_name);
             if(!read_line(p, b, sizeof b)) {
-                if(!strcmp(b, "Charging")) s->charging = BF_YES;
-                else if(!strcmp(b, "Discharging") || !strcmp(b, "Not charging")) s->charging = BF_NO;
+                if(!strcmp(b, "Charging")) { s->charging = BF_YES; s->battery_state = BF_BAT_CHARGING; }
+                else if(!strcmp(b, "Discharging")) { s->charging = BF_NO; s->battery_state = BF_BAT_DISCHARGING; }
+                else if(!strcmp(b, "Full")) { s->charging = BF_NO; s->battery_state = BF_BAT_FULL; }
+                else if(!strcmp(b, "Not charging")) { s->charging = BF_NO; s->battery_state = BF_BAT_NOT_CHARGING; }
             }
         }
         else {

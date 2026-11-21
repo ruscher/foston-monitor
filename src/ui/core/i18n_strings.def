@@ -214,6 +214,8 @@ X(S_TIMEZONE,      "date.tz", "Fuso horário", "Time zone", "Zona horaria")
 X(S_BATTERY,       "pwr.battery", "Bateria", "Battery", "Batería")
 X(S_CHARGING,      "pwr.charging", "carregando", "charging", "cargando")
 X(S_DISCHARGING,   "pwr.discharging", "descarregando", "discharging", "descargando")
+X(S_BAT_FULL,      "pwr.full", "carga completa", "fully charged", "carga completa")
+X(S_BAT_NOT_CHARGING, "pwr.notcharging", "ligado, sem carregar", "plugged in, not charging", "conectado, sin cargar")
 X(S_EXT_POWER,     "pwr.ext", "Alimentação externa", "External power", "Alimentación externa")
 
 /* ---- Reset ---- */
@@ -324,7 +326,6 @@ X(S_HOME_NOW_PLAYING, "home.now_playing", "Tocando agora", "Now playing", "Repro
 X(S_HOME_NOTHING,  "home.nothing", "Nada tocando", "Nothing playing", "Nada en reproducción")
 X(S_HOME_OPEN_HINT, "home.open_hint", "Toque para abrir o Multimídia", "Tap to open Multimedia", "Toque para abrir Multimedia")
 X(S_HOME_STOPPED,  "home.stopped", "Parado", "Stopped", "Detenido")
-X(S_HOME_CHARGING, "home.charging", "  carregando", "  charging", "  cargando")
 X(S_HOME_NO_SHORTCUTS, "home.no_shortcuts", "Sem atalhos: escolha em Ajustes > Aparência", "No shortcuts: choose them in Settings > Appearance", "Sin accesos: elíjalos en Ajustes > Apariencia")
 X(S_HOME_KIOSK_EMPTY, "home.kiosk_empty", "Nenhum app escolhido para o modo quiosque. Segure Ajustes por 2 s e escolha em Aparência.", "No apps chosen for kiosk mode. Hold Settings for 2 s and choose them in Appearance.", "Ninguna app elegida para el modo quiosco. Mantenga Ajustes 2 s y elíjalas en Apariencia.")
 X(S_KIOSK_HOLD,    "home.kiosk_hold", "Modo quiosque: segure Ajustes por 2 s", "Kiosk mode: hold Settings for 2 s", "Modo quiosco: mantenga Ajustes 2 s")

@@ -1,5 +1,6 @@
 /* topbar.c — barra superior: logotipo, título da tela, ícones de status, relógio. */
 #include "topbar.h"
+#include "battery.h"
 #include "../core/theme.h"
 #include "../core/status.h"
 #include "../core/settings.h"
@@ -89,7 +90,7 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(batbox, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(batbox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(batbox, 4, 0);
-    ic_bat = icon(batbox, LV_SYMBOL_BATTERY_EMPTY);
+    ic_bat = battery_create(batbox, 30, 16, BF_FONT_S);
     bat_pct = bf_label(batbox, "—", BF_FONT_S, p->text);
 
     lv_obj_t *clockbox = bf_plain(icons);
@@ -169,20 +170,12 @@ void topbar_update(void)
                 (s->volume_pct >= 0 && s->volume_pct < 50 ? LV_SYMBOL_VOLUME_MID : LV_SYMBOL_VOLUME_MAX));
     icon_state(ic_vol, vol_st, p->text);
 
-    /* Bateria: nunca inventar porcentagem. */
-    const char *bsym = LV_SYMBOL_BATTERY_EMPTY;
+    /* Bateria: nunca inventar porcentagem; o raio e o verde ficam no ícone. */
+    battery_set(ic_bat, s->battery_pct, s->battery_state);
     if(s->battery_pct >= 0) {
-        int b = s->battery_pct;
-        bsym = b > 80 ? LV_SYMBOL_BATTERY_FULL : b > 55 ? LV_SYMBOL_BATTERY_3 :
-               b > 30 ? LV_SYMBOL_BATTERY_2 : b > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
-        snprintf(buf, sizeof buf, "%s%d%%", s->charging == BF_YES ? LV_SYMBOL_CHARGE " " : "", b);
+        snprintf(buf, sizeof buf, "%d%%", s->battery_pct);
         set_text_if(bat_pct, buf);
-        icon_state(ic_bat, BF_YES, b <= 10 && s->charging != BF_YES ? p->danger : p->text);
     }
-    else {
-        set_text_if(bat_pct, s->ext_power == BF_YES ? LV_SYMBOL_CHARGE " —" : "—");
-        icon_state(ic_bat, BF_UNKNOWN, p->text);
-    }
-    set_text_if(ic_bat, bsym);
+    else set_text_if(bat_pct, "—");
     lv_obj_set_style_text_color(bat_pct, s->battery_pct >= 0 ? p->text : p->text_dim, 0);
 }

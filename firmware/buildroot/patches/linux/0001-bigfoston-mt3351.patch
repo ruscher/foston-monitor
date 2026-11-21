@@ -16,7 +16,7 @@ diff -Nur a/arch/arm/boot/dts/mediatek/Makefile b/arch/arm/boot/dts/mediatek/Mak
 diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 --- a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
 +++ b/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,212 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * FOSTON FS-707DC (MediaTek MT3351), BigFoston OS.
@@ -213,7 +213,15 @@ diff -Nur a/arch/arm/boot/dts/mediatek/mt3351-foston-fs707dc.dts b/arch/arm/boot
 +		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 +		usb@80100000 {
 +			compatible = "mediatek,mt3351-musb";
-+			reg = <0x80100000 0x1000>;
++			/*
++			 * MUSB + PHY (0x600..0x61b), then, only to power the block on
++			 * when Windows CE left it off (no cable at boot), the words its
++			 * usbfn.dll/bus.dll use: clock gate 0x80001204 bit 7, PDN status
++			 * and clear 0x80001300/0x80001340 bit 1, 0x8006002c bit 15 and
++			 * PMU 0x80061358 bit 0.
++			 */
++			reg = <0x80100000 0x1000>, <0x80001204 0x4>, <0x80001300 0x44>,
++			      <0x8006002c 0x4>, <0x80061358 0x4>;
 +			interrupts = <8 IRQ_TYPE_LEVEL_HIGH>;
 +			interrupt-names = "mc";
 +			phys = <&usb_phy>;
@@ -704,7 +712,7 @@ diff -Nur a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makef
 diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt3351-ts.c
 --- a/drivers/input/touchscreen/mt3351-ts.c
 +++ b/drivers/input/touchscreen/mt3351-ts.c
-@@ -0,0 +1,683 @@
+@@ -0,0 +1,714 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * MediaTek MT3351 resistive touchscreen ADC (FOSTON FS-707DC).
@@ -801,10 +809,14 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +#define MT3351_TS_MAX		1023
 +#define MT3351_TS_SAMPLES	5
 +
-+/* Charging is done by software, as Windows CE does; off until enabled. */
-+static bool charge;
++/*
++ * Charging is done by software, as Windows CE does.  On by default since the
++ * wall charger test of 21/11/2026 (16 min in constant current, watchdog
++ * kicked, no fault, VBAT 4100 -> 4151 mV); mt3351_ts.charge=0 turns it off.
++ */
++static bool charge = true;
 +module_param(charge, bool, 0644);
-+MODULE_PARM_DESC(charge, "charge the battery (Windows CE Battdrvr.dll algorithm)");
++MODULE_PARM_DESC(charge, "charge the battery (Windows CE Battdrvr.dll algorithm; default on)");
 +
 +static unsigned int charge_current = 0x80;
 +module_param(charge_current, uint, 0644);
@@ -844,6 +856,8 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +	void __iomem *c018;		/* 0x8002c018, read only: bit7 must be 1 to charge */
 +	struct delayed_work chg_work;
 +	bool chg_on, chg_full, chg_locked;
++	bool chg_weak;			/* VCHG fell under load: wait for a margin */
++	unsigned int log_s;		/* seconds since the last progress line */
 +	int chg_state;			/* 0 idle, CE states 0x1000..0x1003 */
 +	unsigned int pre_s, cv_s, total_s;
 +	int vbat, visense, vchg, low_count;
@@ -1107,7 +1121,7 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +	if (!(sta & MT3351_CHR_PRESENT)) {
 +		if (ts->chg_on || ts->chg_locked || ts->chg_full)
 +			mt3351_chg_stop(ts, false);
-+		ts->chg_full = ts->chg_locked = false;
++		ts->chg_full = ts->chg_locked = ts->chg_weak = false;
 +		ts->pre_s = ts->cv_s = ts->total_s = 0;
 +		mt3351_chg_log(ts, 1, "no charger");
 +		goto changed;
@@ -1120,9 +1134,19 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +	}
 +	if (ts->chg_locked)
 +		goto again;
++	/*
++	 * A weak source (a PC's USB port) reads above 4350 mV idle and below it
++	 * while charging, which turned charging on and off every 10 s: once
++	 * VCHG has fallen under load, start again only above 4450 mV.
++	 */
++	if (ts->chg_on && ts->vchg <= 4350 && !ts->chg_weak) {
++		ts->chg_weak = true;
++		dev_info(ts->dev, "charger: VCHG fell to %d mV while charging; waiting for %d mV\n",
++			 ts->vchg, 4450);
++	}
 +	if ((sta & (MT3351_CHR_FAULT | MT3351_CHR_NOBAT | MT3351_CHR_INVALID)) ||
 +	    (flt & 3) >= 2 || (flt & BIT(2)) || !(readl(ts->c018) & BIT(7)) ||
-+	    ts->vchg <= 4350 || ts->vchg >= 6000) {
++	    ts->vchg <= (ts->chg_weak ? 4450 : 4350) || ts->vchg >= 6000) {
 +		if (ts->chg_on)
 +			mt3351_chg_stop(ts, false);
 +		if (ts->last_log != 3)		/* once per change, not every 10 s */
@@ -1187,6 +1211,13 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +	}
 +	mt3351_chg_log(ts, st, st == 0x1000 ? "pre-charge" : st == 0x1002 ? "constant current" :
 +		       st == 0x1003 ? "constant voltage" : "charging (state 0x1001)");
++	/* the line above only appears on a change: show the progress every 5 min */
++	ts->log_s += CHR_PERIOD_S;
++	if (ts->log_s >= 300) {
++		ts->log_s = 0;
++		dev_info(ts->dev, "charger: state %#x for %u s (VBAT %d mV, I %d, VCHG %d mV)\n",
++			 st, ts->total_s, ts->vbat, (ts->visense - ts->vbat) * 5, ts->vchg);
++	}
 +changed:
 +	if (ts->bat)
 +		power_supply_changed(ts->bat);
@@ -1215,7 +1246,9 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +			val->intval = POWER_SUPPLY_STATUS_CHARGING;
 +		else if (!(chr & MT3351_CHR_PRESENT))
 +			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-+		else if (ts->chg_full || mt3351_bat_capacity(mt3351_bat_mv(ts)) >= 100)
++		/* Full only when the charge algorithm ended it: on a weak source (a
++		 * PC's USB port) the reading reaches "100%" without a full charge */
++		else if (ts->chg_full)
 +			val->intval = POWER_SUPPLY_STATUS_FULL;
 +		else
 +			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -1233,6 +1266,12 @@ diff -Nur a/drivers/input/touchscreen/mt3351-ts.c b/drivers/input/touchscreen/mt
 +		mv = mt3351_bat_mv(ts);
 +		if (!mv)
 +			return -EIO;
++		/*
++		 * Charging raises the reading: 3888-3908 mV on battery read 4100 mV
++		 * the moment the wall charger started (21/11/2026, code 0x80).
++		 */
++		if (chr & MT3351_CHR_CHARGING)
++			mv -= 200;
 +		val->intval = mt3351_bat_capacity(mv);
 +		return 0;
 +	case POWER_SUPPLY_PROP_TECHNOLOGY:
@@ -2311,7 +2350,7 @@ diff -Nur a/drivers/usb/musb/Makefile b/drivers/usb/musb/Makefile
 diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 --- a/drivers/usb/musb/mt3351.c
 +++ b/drivers/usb/musb/mt3351.c
-@@ -0,0 +1,469 @@
+@@ -0,0 +1,541 @@
 +// SPDX-License-Identifier: GPL-2.0+
 +/*
 + * MediaTek MT3351 MUSB glue (FOSTON FS-707DC), BigFoston OS.
@@ -2720,6 +2759,61 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	.platform_ops	= &mt3351_musb_ops,
 +};
 +
++/*
++ * Without a cable at power-on, Windows CE's usbfn.dll leaves the USB block
++ * off (its "D4" path: PHY 0x600 bit 7 and 0x60c bit 8 cleared, clock gated,
++ * PMU 0x80061358 bit 0 cleared) and then nothing enumerates when a cable is
++ * plugged into Linux.  Power it on with CE's own sequence (usbfn.dll VA
++ * 0x3cd1fec with on=1, bus.dll 0x3d231f8), skipping its charger detection.
++ * Nothing is written when the block is already on (cable present at boot).
++ */
++static void __iomem *mt3351_map(struct platform_device *pdev, unsigned int i)
++{
++	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, i);
++
++	return r ? devm_ioremap(&pdev->dev, r->start, resource_size(r)) : NULL;
++}
++
++static void mt3351_power_on(struct platform_device *pdev)
++{
++	void __iomem *usb = mt3351_map(pdev, 0), *gate = mt3351_map(pdev, 1);
++	void __iomem *pdn = mt3351_map(pdev, 2), *g2 = mt3351_map(pdev, 3), *pmu = mt3351_map(pdev, 4);
++	u32 p600, p60c, pdns, g, g2v, pm;
++
++	if (!usb || !gate || !pdn || !g2 || !pmu) {
++		dev_warn(&pdev->dev, "USB power words not mapped: block left as found\n");
++		return;
++	}
++	p600 = readl(usb + 0x600);
++	p60c = readl(usb + 0x60c);
++	pdns = readl(pdn);
++	g = readl(gate);
++	g2v = readl(g2);
++	pm = readl(pmu);
++	dev_info(&pdev->dev, "USB block: phy %08x %08x pdn %08x gate %08x %08x pmu %08x\n",
++		 p600, p60c, pdns, g, g2v, pm);
++	if ((p600 & BIT(7)) && (p60c & BIT(8)) && !(pdns & BIT(1)) && !(g & BIT(7)) &&
++	    !(g2v & BIT(15)) && (pm & BIT(0)))
++		return;
++
++	dev_info(&pdev->dev, "USB block off (no cable at boot?): powering it on as Windows CE does\n");
++	writel(pm | BIT(0), pmu);
++	writel(BIT(1), pdn + 0x40);			/* PDN clear: USB clock on */
++	writel(g & ~BIT(7), gate);
++	writel(g2v & ~BIT(15), g2);
++	usleep_range(2000, 3000);
++	writel((readl(usb + 0x600) & ~BIT(18)) | BIT(19), usb + 0x600);
++	writel(readl(usb + 0x60c) | BIT(8), usb + 0x60c);
++	usleep_range(2000, 3000);
++	writel(readl(usb + 0x600) | BIT(7), usb + 0x600);
++	writel(readl(usb + 0x610) & ~BIT(18), usb + 0x610);
++	writeb(readb(usb + 0x61b) & ~BIT(2), usb + 0x61b);
++	writeb(readb(usb + 0x80) & ~BIT(1), usb + 0x80);
++	usleep_range(2000, 3000);
++	dev_info(&pdev->dev, "USB block now: phy %08x %08x pdn %08x pmu %08x\n",
++		 readl(usb + 0x600), readl(usb + 0x60c), readl(pdn), readl(pmu));
++}
++
 +static int mt3351_musb_probe(struct platform_device *pdev)
 +{
 +	struct device *dev = &pdev->dev;
@@ -2728,6 +2822,7 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	int ret;
 +
 +	mt3351_musb_config.maximum_speed = mt3351_hs ? USB_SPEED_HIGH : USB_SPEED_FULL;
++	mt3351_power_on(pdev);
 +
 +	glue = devm_kzalloc(dev, sizeof(*glue), GFP_KERNEL);
 +	if (!glue)
@@ -2744,7 +2839,23 @@ diff -Nur a/drivers/usb/musb/mt3351.c b/drivers/usb/musb/mt3351.c
 +	glue->musb = musb;
 +	platform_set_drvdata(pdev, glue);
 +
-+	ret = platform_device_add_resources(musb, pdev->resource, pdev->num_resources);
++	/*
++	 * Only the MUSB window goes to the core (the interrupt comes from the DT
++	 * node, platform_get_irq_byname "mc"): the power words (entries 1-4)
++	 * overlap other drivers' windows (PDN with the audio node) and must not
++	 * be claimed by the child device.
++	 */
++	{
++		struct resource *mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
++		struct resource res;
++
++		if (!mem) {
++			platform_device_put(musb);
++			return dev_err_probe(dev, -EINVAL, "missing MUSB window\n");
++		}
++		res = DEFINE_RES_MEM_NAMED(mem->start, resource_size(mem), mem->name);
++		ret = platform_device_add_resources(musb, &res, 1);
++	}
 +	if (!ret)
 +		ret = platform_device_add_data(musb, &mt3351_musb_pdata, sizeof(mt3351_musb_pdata));
 +	if (!ret)

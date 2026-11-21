@@ -1,0 +1,34 @@
+#!/bin/sh
+# Log do kernel no cartão SD (BigFoston/logs/boot.log; as 2 inicializações
+# anteriores em boot.1.log e boot.2.log), gravado aos 45 s e aos 3 min. Serve
+# para diagnosticar quando a rede USB não sobe (sem SSH). Só com o cartão
+# montado com gravação; nada é gravado na memória interna.
+DIR=/mnt/sd/BigFoston/logs
+
+save() {
+    grep -q " /mnt/sd vfat rw," /proc/mounts || return 0
+    mkdir -p "$DIR" || return 0
+    {
+        echo "=== $(date) uptime $(cut -d' ' -f1 /proc/uptime) s"
+        dmesg
+    } > "$DIR/boot.log.tmp" && mv "$DIR/boot.log.tmp" "$DIR/boot.log"
+    sync
+}
+
+case "$1" in
+start)
+    (
+        sleep 45
+        if grep -q " /mnt/sd vfat rw," /proc/mounts && mkdir -p "$DIR"; then
+            [ -f "$DIR/boot.1.log" ] && mv "$DIR/boot.1.log" "$DIR/boot.2.log"
+            [ -f "$DIR/boot.log" ] && mv "$DIR/boot.log" "$DIR/boot.1.log"
+        fi
+        save
+        sleep 135
+        save
+    ) > /dev/null 2>&1 < /dev/null &
+    ;;
+stop)
+    save
+    ;;
+esac

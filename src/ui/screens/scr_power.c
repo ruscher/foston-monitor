@@ -1,6 +1,7 @@
 /* scr_power.c — Potência: bateria (só valores reais) e desligar/reiniciar. */
 #include "screens.h"
 #include "../core/theme.h"
+#include "../widgets/battery.h"
 #include "../core/status.h"
 #include "../widgets/page.h"
 #include "../widgets/bottombar.h"
@@ -27,8 +28,8 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(c, BF_SP_XL, 0);
     bool known = s->battery_pct >= 0;
-    page_round_icon(c, known ? LV_SYMBOL_BATTERY_3 : LV_SYMBOL_BATTERY_EMPTY,
-                    known ? p->success : p->text_dim, 72);
+    lv_obj_t *bat = battery_create(c, 84, 42, BF_FONT_L);
+    battery_set(bat, s->battery_pct, s->battery_state);
     lv_obj_t *col = bf_plain(c);
     lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_grow(col, 1);
@@ -39,8 +40,8 @@ static void create(lv_obj_t *parent, int arg)
     if(known) snprintf(b, sizeof b, "%d%%", s->battery_pct);
     else snprintf(b, sizeof b, "—");
     bf_label(col, b, BF_FONT_L, known ? p->text : p->text_dim);
-    const char *st = s->charging == BF_YES ? tr(S_CHARGING) :
-                     s->charging == BF_NO ? tr(S_DISCHARGING) : tr(S_UNKNOWN);
+    const char *st = s->battery_state == BF_BAT_DISCHARGING ? tr(S_DISCHARGING) :
+                     s->battery_state == BF_BAT_UNKNOWN ? tr(S_UNKNOWN) : battery_state_text(s->battery_state);
     lv_obj_t *l = lv_label_create(col);
     lv_label_set_text_fmt(l, "%s  " LV_SYMBOL_BULLET "  %s: %s", st, tr(S_EXT_POWER), tri(s->ext_power));
     lv_obj_set_style_text_font(l, BF_FONT_S, 0);

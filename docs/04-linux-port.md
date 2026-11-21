@@ -125,8 +125,14 @@ O CE (engenharia reversa do `usbfn.dll`, região XIP 1) liga o PHY com `0x600` b
 (`0x80002400` bit 7), não do comparador do MUSB.
 
 Limitações atuais: PIO (sem o DMA Inventra); tirar e recolocar o cabo funciona
-(6 de 6 em High-Speed, 21/11/2026), mas **ligar o aparelho sem o cabo e conectar
-depois não foi testado** (o CE detecta o VBUS pelo EINT1/GPIO7). Uso: `ssh root@192.168.7.2` (só chave), serial em
+(6 de 6 em High-Speed, 21/11/2026). **Ligar o aparelho sem o cabo e conectar depois
+falhava** (21/11/2026: nenhum evento USB no PC): sem cabo no boot, o CE deixa o bloco USB
+desligado (PHY `0x600` b7 / `0x60C` b8, clock e PMU `0x80061358` b0). O glue agora lê
+esses bits no probe e, se estiverem desligados, liga o bloco com a sequência do
+`usbfn.dll`/`bus.dll` (sem a detecção de carregador); com cabo no boot nada é escrito
+— **falta conferir no aparelho**. O MAC visto pelo PC é fixo (`g_cdc.host_addr=02:46:53:37:30:01`)
+e a conexão `bigfoston` do NetworkManager o usa, em qualquer porta USB. O log do kernel
+fica no cartão em `BigFoston/logs/boot.log` (aos 45 s e aos 3 min). Uso: `ssh root@192.168.7.2` (só chave), serial em
 `/dev/ttyACM0`; no PC, `192.168.7.1/24` na interface `cdc_ether`.
 
 O estado de cada linha é atualizado conforme os testes no aparelho

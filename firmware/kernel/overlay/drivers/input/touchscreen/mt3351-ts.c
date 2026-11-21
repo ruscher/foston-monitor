@@ -94,10 +94,14 @@
 #define MT3351_TS_MAX		1023
 #define MT3351_TS_SAMPLES	5
 
-/* Charging is done by software, as Windows CE does; off until enabled. */
-static bool charge;
+/*
+ * Charging is done by software, as Windows CE does.  On by default since the
+ * wall charger test of 21/11/2026 (16 min in constant current, watchdog
+ * kicked, no fault, VBAT 4100 -> 4151 mV); mt3351_ts.charge=0 turns it off.
+ */
+static bool charge = true;
 module_param(charge, bool, 0644);
-MODULE_PARM_DESC(charge, "charge the battery (Windows CE Battdrvr.dll algorithm)");
+MODULE_PARM_DESC(charge, "charge the battery (Windows CE Battdrvr.dll algorithm; default on)");
 
 static unsigned int charge_current = 0x80;
 module_param(charge_current, uint, 0644);
@@ -137,6 +141,8 @@ struct mt3351_ts {
 	void __iomem *c018;		/* 0x8002c018, read only: bit7 must be 1 to charge */
 	struct delayed_work chg_work;
 	bool chg_on, chg_full, chg_locked;
+	bool chg_weak;			/* VCHG fell under load: wait for a margin */
+	unsigned int log_s;		/* seconds since the last progress line */
 	int chg_state;			/* 0 idle, CE states 0x1000..0x1003 */
 	unsigned int pre_s, cv_s, total_s;
 	int vbat, visense, vchg, low_count;
@@ -400,7 +406,7 @@ static void mt3351_chg_work(struct work_struct *w)
 	if (!(sta & MT3351_CHR_PRESENT)) {
 		if (ts->chg_on || ts->chg_locked || ts->chg_full)
 			mt3351_chg_stop(ts, false);
-		ts->chg_full = ts->chg_locked = false;
+		ts->chg_full = ts->chg_locked = ts->chg_weak = false;
 		ts->pre_s = ts->cv_s = ts->total_s = 0;
 		mt3351_chg_log(ts, 1, "no charger");
 		goto changed;
@@ -413,9 +419,19 @@ static void mt3351_chg_work(struct work_struct *w)
 	}
 	if (ts->chg_locked)
 		goto again;
+	/*
+	 * A weak source (a PC's USB port) reads above 4350 mV idle and below it
+	 * while charging, which turned charging on and off every 10 s: once
+	 * VCHG has fallen under load, start again only above 4450 mV.
+	 */
+	if (ts->chg_on && ts->vchg <= 4350 && !ts->chg_weak) {
+		ts->chg_weak = true;
+		dev_info(ts->dev, "charger: VCHG fell to %d mV while charging; waiting for %d mV\n",
+			 ts->vchg, 4450);
+	}
 	if ((sta & (MT3351_CHR_FAULT | MT3351_CHR_NOBAT | MT3351_CHR_INVALID)) ||
 	    (flt & 3) >= 2 || (flt & BIT(2)) || !(readl(ts->c018) & BIT(7)) ||
-	    ts->vchg <= 4350 || ts->vchg >= 6000) {
+	    ts->vchg <= (ts->chg_weak ? 4450 : 4350) || ts->vchg >= 6000) {
 		if (ts->chg_on)
 			mt3351_chg_stop(ts, false);
 		if (ts->last_log != 3)		/* once per change, not every 10 s */
@@ -480,6 +496,13 @@ static void mt3351_chg_work(struct work_struct *w)
 	}
 	mt3351_chg_log(ts, st, st == 0x1000 ? "pre-charge" : st == 0x1002 ? "constant current" :
 		       st == 0x1003 ? "constant voltage" : "charging (state 0x1001)");
+	/* the line above only appears on a change: show the progress every 5 min */
+	ts->log_s += CHR_PERIOD_S;
+	if (ts->log_s >= 300) {
+		ts->log_s = 0;
+		dev_info(ts->dev, "charger: state %#x for %u s (VBAT %d mV, I %d, VCHG %d mV)\n",
+			 st, ts->total_s, ts->vbat, (ts->visense - ts->vbat) * 5, ts->vchg);
+	}
 changed:
 	if (ts->bat)
 		power_supply_changed(ts->bat);
@@ -508,7 +531,9 @@ static int mt3351_bat_get(struct power_supply *psy, enum power_supply_property p
 			val->intval = POWER_SUPPLY_STATUS_CHARGING;
 		else if (!(chr & MT3351_CHR_PRESENT))
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-		else if (ts->chg_full || mt3351_bat_capacity(mt3351_bat_mv(ts)) >= 100)
+		/* Full only when the charge algorithm ended it: on a weak source (a
+		 * PC's USB port) the reading reaches "100%" without a full charge */
+		else if (ts->chg_full)
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else
 			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -526,6 +551,12 @@ static int mt3351_bat_get(struct power_supply *psy, enum power_supply_property p
 		mv = mt3351_bat_mv(ts);
 		if (!mv)
 			return -EIO;
+		/*
+		 * Charging raises the reading: 3888-3908 mV on battery read 4100 mV
+		 * the moment the wall charger started (21/11/2026, code 0x80).
+		 */
+		if (chr & MT3351_CHR_CHARGING)
+			mv -= 200;
 		val->intval = mt3351_bat_capacity(mv);
 		return 0;
 	case POWER_SUPPLY_PROP_TECHNOLOGY:

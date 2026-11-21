@@ -406,6 +406,61 @@ static const struct musb_hdrc_platform_data mt3351_musb_pdata = {
 	.platform_ops	= &mt3351_musb_ops,
 };
 
+/*
+ * Without a cable at power-on, Windows CE's usbfn.dll leaves the USB block
+ * off (its "D4" path: PHY 0x600 bit 7 and 0x60c bit 8 cleared, clock gated,
+ * PMU 0x80061358 bit 0 cleared) and then nothing enumerates when a cable is
+ * plugged into Linux.  Power it on with CE's own sequence (usbfn.dll VA
+ * 0x3cd1fec with on=1, bus.dll 0x3d231f8), skipping its charger detection.
+ * Nothing is written when the block is already on (cable present at boot).
+ */
+static void __iomem *mt3351_map(struct platform_device *pdev, unsigned int i)
+{
+	struct resource *r = platform_get_resource(pdev, IORESOURCE_MEM, i);
+
+	return r ? devm_ioremap(&pdev->dev, r->start, resource_size(r)) : NULL;
+}
+
+static void mt3351_power_on(struct platform_device *pdev)
+{
+	void __iomem *usb = mt3351_map(pdev, 0), *gate = mt3351_map(pdev, 1);
+	void __iomem *pdn = mt3351_map(pdev, 2), *g2 = mt3351_map(pdev, 3), *pmu = mt3351_map(pdev, 4);
+	u32 p600, p60c, pdns, g, g2v, pm;
+
+	if (!usb || !gate || !pdn || !g2 || !pmu) {
+		dev_warn(&pdev->dev, "USB power words not mapped: block left as found\n");
+		return;
+	}
+	p600 = readl(usb + 0x600);
+	p60c = readl(usb + 0x60c);
+	pdns = readl(pdn);
+	g = readl(gate);
+	g2v = readl(g2);
+	pm = readl(pmu);
+	dev_info(&pdev->dev, "USB block: phy %08x %08x pdn %08x gate %08x %08x pmu %08x\n",
+		 p600, p60c, pdns, g, g2v, pm);
+	if ((p600 & BIT(7)) && (p60c & BIT(8)) && !(pdns & BIT(1)) && !(g & BIT(7)) &&
+	    !(g2v & BIT(15)) && (pm & BIT(0)))
+		return;
+
+	dev_info(&pdev->dev, "USB block off (no cable at boot?): powering it on as Windows CE does\n");
+	writel(pm | BIT(0), pmu);
+	writel(BIT(1), pdn + 0x40);			/* PDN clear: USB clock on */
+	writel(g & ~BIT(7), gate);
+	writel(g2v & ~BIT(15), g2);
+	usleep_range(2000, 3000);
+	writel((readl(usb + 0x600) & ~BIT(18)) | BIT(19), usb + 0x600);
+	writel(readl(usb + 0x60c) | BIT(8), usb + 0x60c);
+	usleep_range(2000, 3000);
+	writel(readl(usb + 0x600) | BIT(7), usb + 0x600);
+	writel(readl(usb + 0x610) & ~BIT(18), usb + 0x610);
+	writeb(readb(usb + 0x61b) & ~BIT(2), usb + 0x61b);
+	writeb(readb(usb + 0x80) & ~BIT(1), usb + 0x80);
+	usleep_range(2000, 3000);
+	dev_info(&pdev->dev, "USB block now: phy %08x %08x pdn %08x pmu %08x\n",
+		 readl(usb + 0x600), readl(usb + 0x60c), readl(pdn), readl(pmu));
+}
+
 static int mt3351_musb_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -414,6 +469,7 @@ static int mt3351_musb_probe(struct platform_device *pdev)
 	int ret;
 
 	mt3351_musb_config.maximum_speed = mt3351_hs ? USB_SPEED_HIGH : USB_SPEED_FULL;
+	mt3351_power_on(pdev);
 
 	glue = devm_kzalloc(dev, sizeof(*glue), GFP_KERNEL);
 	if (!glue)
@@ -430,7 +486,23 @@ static int mt3351_musb_probe(struct platform_device *pdev)
 	glue->musb = musb;
 	platform_set_drvdata(pdev, glue);
 
-	ret = platform_device_add_resources(musb, pdev->resource, pdev->num_resources);
+	/*
+	 * Only the MUSB window goes to the core (the interrupt comes from the DT
+	 * node, platform_get_irq_byname "mc"): the power words (entries 1-4)
+	 * overlap other drivers' windows (PDN with the audio node) and must not
+	 * be claimed by the child device.
+	 */
+	{
+		struct resource *mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+		struct resource res;
+
+		if (!mem) {
+			platform_device_put(musb);
+			return dev_err_probe(dev, -EINVAL, "missing MUSB window\n");
+		}
+		res = DEFINE_RES_MEM_NAMED(mem->start, resource_size(mem), mem->name);
+		ret = platform_device_add_resources(musb, &res, 1);
+	}
 	if (!ret)
 		ret = platform_device_add_data(musb, &mt3351_musb_pdata, sizeof(mt3351_musb_pdata));
 	if (!ret)

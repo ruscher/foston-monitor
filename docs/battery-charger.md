@@ -1,6 +1,6 @@
 # Carga da bateria no Linux (FS-707DC)
 
-Estado: **implementado, desligado por padrão, em teste no aparelho**
+Estado: **funcionando, ligado por padrão** (carregador de tomada testado em 21/11/2026)
 (parâmetro `mt3351_ts.charge`, ver abaixo). A leitura de tensão, porcentagem e
 estado do carregador já funcionava; a carga em si é feita **por software**, como
 no Windows CE.
@@ -77,9 +77,31 @@ VCHG medido em ~4,25 V, abaixo do mínimo de 4,35 V (`not charging ... VCHG 4261
 Nenhum registrador do carregador mudou (`CON 0xA00`, `WDT 0`). Falta o teste com um
 carregador de tomada ou de carro (VCHG acima de 4,35 V).
 
+## Teste com carregador de tomada (21/11/2026)
+
+Registro de 10 em 10 s no cartão SD (`charge=1`, corrente `0x80`):
+
+| Fonte | Resultado |
+|---|---|
+| USB do PC | VCHG ~4,37–4,40 V parado e ~4,34 V sob carga: a carga **ligava e desligava a cada 10 s** (sem histerese) |
+| carregador de tomada | **16 min em corrente constante**, `CON 0xA82`, watchdog rearmado (`WDT 0x7`), nenhuma falha (`FLT 0x48`), VBAT 4100 → 4151 mV, VCHG 5,05 V estável |
+
+Ao ligar o carregador, a leitura da bateria pulou de 3888–3908 mV para 4100 mV.
+
+Mudanças depois do teste:
+
+- `charge` **ligado por padrão** (`mt3351_ts.charge=0` desliga);
+- **histerese**: se a VCHG cair a 4350 mV ou menos durante a carga, só volta a carregar
+  acima de 4450 mV (até tirar o carregador) — a USB do PC deixa de alternar;
+- porcentagem durante a carga: desconta 200 mV da leitura;
+- `Full` só quando o algoritmo terminou a carga (antes, "100 %" pela leitura bastava,
+  e a USB fraca aparecia como cheia);
+- uma linha de progresso no log a cada 5 min (fase, tempo, VBAT, I, VCHG).
+
 ## Em aberto
 
 - Corrente em mA de cada código e período real do watchdog (medir no aparelho).
 - Significado de `0x8002C018` bit 7, `0x80061408` e `0x80061410` bits 6–7.
 - O tipo de carregador (USB do PC × carregador dedicado) vem do `usbfn.dll` no CE;
   o Linux trata todos como o caso mais conservador.
+- Carga completa até o fim (fase CV e `Full`) ainda não observada: o teste durou 16 min.

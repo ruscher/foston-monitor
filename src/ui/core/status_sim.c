@@ -3,10 +3,43 @@
  * exibir o selo "SIM" na barra superior. */
 #include "status.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 static int sim_backlight = 80;
 static int sim_volume = 60;
+
+/* BIGFOSTON_SIM_BATTERY="pct,estado" (d descarregando, c carregando, f carga
+ * completa, n ligado sem carregar, u desconhecido) ou sim_set_battery(): para
+ * ver e fotografar cada estado do ícone no simulador. */
+static int ov_pct = -2;
+static char ov_state;
+
+void sim_set_battery(int pct, char state)
+{
+    ov_pct = pct;
+    ov_state = state;
+}
+
+static void sim_battery_override(bf_status_t *s)
+{
+    if(ov_pct == -2) {
+        const char *e = getenv("BIGFOSTON_SIM_BATTERY");
+        int pct;
+        char st;
+        if(!e || sscanf(e, "%d,%c", &pct, &st) != 2) return;
+        ov_pct = pct;
+        ov_state = st;
+    }
+    s->battery_pct = ov_pct < -1 ? -1 : ov_pct > 100 ? 100 : ov_pct;
+    switch(ov_state) {
+    case 'c': s->battery_state = BF_BAT_CHARGING; s->charging = BF_YES; s->ext_power = BF_YES; break;
+    case 'f': s->battery_state = BF_BAT_FULL; s->charging = BF_NO; s->ext_power = BF_YES; break;
+    case 'n': s->battery_state = BF_BAT_NOT_CHARGING; s->charging = BF_NO; s->ext_power = BF_YES; break;
+    case 'u': s->battery_state = BF_BAT_UNKNOWN; s->charging = BF_UNKNOWN; break;
+    default:  s->battery_state = BF_BAT_DISCHARGING; s->charging = BF_NO; s->ext_power = BF_NO; break;
+    }
+}
 
 static void sim_read(bf_status_t *s)
 {
@@ -14,7 +47,9 @@ static void sim_read(bf_status_t *s)
     s->battery_present = BF_YES;
     s->battery_pct = 76;                  /* SIMULADO */
     s->charging = BF_NO;
+    s->battery_state = BF_BAT_DISCHARGING;
     s->ext_power = BF_NO;
+    sim_battery_override(s);
     s->volume_pct = sim_volume;
     s->muted = sim_volume == 0 ? BF_YES : BF_NO;
     s->usb = BF_YES;                      /* SIMULADO */

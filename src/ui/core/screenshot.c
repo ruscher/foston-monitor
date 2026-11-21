@@ -133,6 +133,15 @@ int screenshot_run(const char *dir)
     go(SCR_APPEARANCE, 0);          shot("03b-aparencia");
     s->home_mode = BF_HOME_PANEL;
     nav_home(); pump(450);          shot("01b-inicio-painel");
+    /* ícone da bateria em cada estado (barra superior + Painel) */
+    sim_set_battery(64, 'c'); status_refresh(); pump(1100); shot("01d-bateria-carregando");
+    sim_set_battery(100, 'f'); status_refresh(); pump(1100); shot("01e-bateria-carga-completa");
+    sim_set_battery(88, 'n'); status_refresh(); pump(1100); shot("01f-bateria-ligado-sem-carregar");
+    sim_set_battery(12, 'd'); status_refresh(); pump(1100); shot("01g-bateria-fraca");
+    sim_set_battery(64, 'c'); status_refresh();
+    go(SCR_POWER, 0);               shot("27b-potencia-carregando");
+    sim_set_battery(-2, 0); status_refresh();      /* volta ao padrão (ou BIGFOSTON_SIM_BATTERY) */
+    nav_home(); pump(450);
     s->home_mode = BF_HOME_KIOSK;
     app_rebuild_now(); pump(450);   shot("01c-inicio-quiosque");
     s->home_mode = BF_HOME_GRID;

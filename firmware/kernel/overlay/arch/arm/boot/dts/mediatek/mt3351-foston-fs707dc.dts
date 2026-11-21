@@ -194,7 +194,15 @@
 		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
 		usb@80100000 {
 			compatible = "mediatek,mt3351-musb";
-			reg = <0x80100000 0x1000>;
+			/*
+			 * MUSB + PHY (0x600..0x61b), then, only to power the block on
+			 * when Windows CE left it off (no cable at boot), the words its
+			 * usbfn.dll/bus.dll use: clock gate 0x80001204 bit 7, PDN status
+			 * and clear 0x80001300/0x80001340 bit 1, 0x8006002c bit 15 and
+			 * PMU 0x80061358 bit 0.
+			 */
+			reg = <0x80100000 0x1000>, <0x80001204 0x4>, <0x80001300 0x44>,
+			      <0x8006002c 0x4>, <0x80061358 0x4>;
 			interrupts = <8 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "mc";
 			phys = <&usb_phy>;

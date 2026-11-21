@@ -4,6 +4,7 @@
  *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c) */
 #include "screens.h"
 #include "../core/theme.h"
+#include "../widgets/battery.h"
 #include "../core/fx.h"
 #include "../core/settings.h"
 #include "../core/status.h"
@@ -177,7 +178,7 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
 /* ================================================================= painel */
 
 static lv_timer_t *panel_timer;
-static lv_obj_t *clk_lbl, *ampm_lbl, *date_lbl, *bat_lbl, *song_lbl, *artist_lbl, *bar, *play_lbl;
+static lv_obj_t *clk_lbl, *ampm_lbl, *date_lbl, *bat_icon, *bat_lbl, *song_lbl, *artist_lbl, *bar, *play_lbl;
 
 static void set_text_if(lv_obj_t *l, const char *t)
 {
@@ -210,10 +211,10 @@ static void panel_tick(lv_timer_t *t)
     set_text_if(date_lbl, b);
 
     const bf_status_t *s = status_get();
-    if(s->battery_pct >= 0)
-        snprintf(b, sizeof b, "%s  %d%%%s", s->charging == BF_YES ? LV_SYMBOL_CHARGE : LV_SYMBOL_BATTERY_FULL,
-                 s->battery_pct, s->charging == BF_YES ? tr(S_HOME_CHARGING) : "");
-    else snprintf(b, sizeof b, "%s  —", LV_SYMBOL_BATTERY_EMPTY);
+    battery_set(bat_icon, s->battery_pct, s->battery_state);
+    const char *bst = battery_state_text(s->battery_state);
+    if(s->battery_pct >= 0) snprintf(b, sizeof b, "%d%%%s%s", s->battery_pct, bst[0] ? "  " : "", bst);
+    else snprintf(b, sizeof b, "—%s%s", bst[0] ? "  " : "", bst);
     set_text_if(bat_lbl, b);
 
     /* tocando agora */
@@ -334,7 +335,13 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_set_style_pad_bottom(ampm_lbl, 14, 0);
     date_lbl = bf_label(c, "", BF_FONT_M, p->text);
     bf_label_ellipsis(date_lbl, LV_PCT(100));
-    bat_lbl = bf_label(c, "", BF_FONT_M, p->accent);
+    lv_obj_t *brow = bf_plain(c);
+    lv_obj_set_size(brow, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(brow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(brow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(brow, BF_SP_S, 0);
+    bat_icon = battery_create(brow, 48, 24, BF_FONT_M);
+    bat_lbl = bf_label(brow, "", BF_FONT_M, p->text);
 
     /* tocando agora */
     c = panel_card(top, 360, 200);
@@ -396,7 +403,7 @@ static void destroy(void)
 {
     if(panel_timer) { lv_timer_delete(panel_timer); panel_timer = NULL; }
     tv = NULL;
-    clk_lbl = ampm_lbl = date_lbl = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;
+    clk_lbl = ampm_lbl = date_lbl = bat_icon = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;
 }
 
 const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, NULL };

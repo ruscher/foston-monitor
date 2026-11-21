@@ -13,11 +13,19 @@
 
 typedef enum { BF_UNKNOWN = -1, BF_NO = 0, BF_YES = 1 } bf_tri_t;
 
+/* Estado da bateria (/sys/class/power_supply/<bateria>/status). FULL e
+ * NOT_CHARGING só existem com o carregador ligado: carga terminada, ou fonte
+ * fraca demais (USB do PC) ou falha. */
+typedef enum {
+    BF_BAT_UNKNOWN = 0, BF_BAT_DISCHARGING, BF_BAT_CHARGING, BF_BAT_FULL, BF_BAT_NOT_CHARGING
+} bf_bat_state_t;
+
 typedef struct {
     bool     simulated;      /* true => valores falsos (simulador) */
     int      battery_pct;    /* 0..100 ou -1 (desconhecido) */
     bf_tri_t battery_present;
     bf_tri_t charging;
+    bf_bat_state_t battery_state;
     bf_tri_t ext_power;      /* alimentação externa (DC/USB) */
     int      volume_pct;     /* -1 = sem mixer */
     bf_tri_t muted;
@@ -44,6 +52,10 @@ typedef struct {
 
 extern const bf_status_provider_t bf_status_linux;
 extern const bf_status_provider_t bf_status_sim;
+
+/* simulador: força o estado da bateria (pct -1 desconhecido; estado d/c/f/n/u;
+ * pct -2 volta ao padrão ou a BIGFOSTON_SIM_BATTERY) */
+void sim_set_battery(int pct, char state);
 
 void status_select(const bf_status_provider_t *p);
 const bf_status_provider_t *status_provider(void);
