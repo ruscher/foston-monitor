@@ -32,9 +32,18 @@ static unsigned now_ms(void)
 }
 
 /* called with T.mu held or from the worker only */
+/* moto has no file of its own: it follows the car rules (docs/big-gps/07-roteamento.md) */
+static int file_profile(int profile)
+{
+    if (profile == BGR_MOTO && !T.path[BGR_MOTO][0] && T.path[BGR_CAR][0]) return BGR_CAR;
+    return profile;
+}
+
 static bgr_pack_t *pack_for(int profile)
 {
-    if (profile < 0 || profile >= BGR_PROFILES || !T.path[profile][0]) return NULL;
+    if (profile < 0 || profile >= BGR_PROFILES) return NULL;
+    profile = file_profile(profile);
+    if (!T.path[profile][0]) return NULL;
     if (T.pack && T.pack_profile == profile) return T.pack;
     bgr_close(T.pack);
     T.pack = NULL;
@@ -138,7 +147,7 @@ void bgrt_stop(void)
     T.pack_profile = -1;
 }
 
-int bgrt_have_profile(int profile) { return profile >= 0 && profile < BGR_PROFILES && T.path[profile][0]; }
+int bgrt_have_profile(int profile) { return profile >= 0 && profile < BGR_PROFILES && T.path[file_profile(profile)][0]; }
 
 void bgrt_request(const bgrt_req_t *r)
 {

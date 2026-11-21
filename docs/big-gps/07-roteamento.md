@@ -24,6 +24,12 @@ ferramenta [src/ui/biggps/bgroute-cli.c](../../src/ui/biggps/bgroute-cli.c).
 - **Encaixe na via:** grade de ~300 m com os arcos de cada célula (só do maior componente
   fortemente conexo); projeção no segmento mais próximo; o rumo do GPS penaliza a via no
   sentido contrário.
+- **Formato 2 (compacto):** cada nó da CH guarda seus arcos num bloco de varints (destino
+  em delta, peso, e o id da aresta expandida — ou, num atalho, só o nó do meio, desempacotado
+  procurando os dois arcos no bloco dele, como numa CH clássica). Grade de encaixe esparsa
+  (só as células com vias, busca binária). DF: carro 58,3 → **37,4 MB**, a pé 92,6 →
+  **55,1 MB**; leituras por rota 318 → 219. Moto sem arquivo próprio usa o de carro (mesmas
+  regras hoje).
 - **Localidade no SD:** nós numerados pela curva de Hilbert e arcos na ordem da origem; ids
   da CH na ordem espacial para a parte baixa da hierarquia e o topo (2 %) junto, em ordem
   de nível. Leitura com `pread` por páginas de 8 KB e cache de 8 MB (funciona com arquivos
@@ -41,16 +47,16 @@ Dijkstra comum sobre o grafo expandido; `bgroute -c` refaz cada uma pela CH:
 | bicicleta | 300 consultas, **0 diferentes** |
 | a pé | 300 consultas, **0 diferentes** |
 
-No aparelho, a mesma conferência do carro: **300 consultas, 0 diferentes**.
+No aparelho, a mesma conferência do carro: **300 consultas, 0 diferentes** (formatos 1 e 2).
 
 ## Medições (DF, 2026-11-21)
 
 | Perfil | Nós | Arcos | Arestas expandidas | CH (ida + volta) | Arquivo | Construção (PC) |
 |---|---|---|---|---|---|---|
-| carro | 155 622 | 357 074 | 664 356 | 967 299 + 966 961 | 60,9 MB | 27 s |
-| moto | 155 643 | 357 100 | 664 393 | 968 061 + 967 235 | 60,9 MB | 28 s |
-| bicicleta | 183 187 | 444 023 | 860 221 | 1 372 725 + 1 372 224 | 77,4 MB | 46 s |
-| a pé | 179 208 | 478 342 | 1 425 538 | 1 771 828 + 1 770 407 | 92,6 MB | 47 s |
+| carro | 155 622 | 357 074 | 664 356 | 967 299 + 966 961 | 37,4 MB (formato 2) | 30 s |
+| moto | 155 643 | 357 100 | 664 393 | 968 061 + 967 235 | 37,5 MB | 32 s |
+| bicicleta | 183 187 | 444 023 | 860 221 | 1 372 725 + 1 372 224 | 47,2 MB | 49 s |
+| a pé | 179 208 | 478 342 | 1 425 538 | 1 771 828 + 1 770 407 | 55,1 MB | 51 s |
 
 Rota de teste Rodoviária do Plano Piloto → Taguatinga Centro: carro 23,11 km / 21 min 24 s
 (N1, S1, EPIG, EPTG…), bicicleta 22,65 km / 89 min, a pé 21,77 km / 262 min.
@@ -60,8 +66,11 @@ No aparelho (carro, cache do sistema limpo antes de cada rota — o pior caso, p
 | Rota | Encaixe | Busca + desempacotamento | Nós visitados | Leituras de 8 KB |
 |---|---|---|---|---|
 | Rodoviária → Taguatinga (23 km) | 427 ms | 975 ms | 324 | 318 |
-| Planaltina → Gama (37 km) | 338 ms | 1109 ms | 498 | 355 |
-| Asa Sul → Guará (curta) | 280 ms | 685 ms | 244 | 198 |
+| Planaltina → Gama (73 km) | 338 ms | 1109 ms | 498 | 355 |
+| Asa Sul → Guará (12,5 km) | 280 ms | 685 ms | 244 | 198 |
+| *formato 2:* Rodoviária → Taguatinga | 682 ms | 861 ms | 324 | 219 |
+| *formato 2:* Planaltina → Gama | 509 ms | 1120 ms | 498 | 274 |
+| *formato 2:* Asa Sul → Guará | 291 ms | 706 ms | 244 | 133 |
 
 Com o cache quente (rota repetida): busca de 9 ms. O tempo frio é quase todo leitura do SD
 (~3 ms por leitura aleatória). Tamanho da página medido: 4 KB, 8 KB e 16 KB dão o mesmo
@@ -72,7 +81,7 @@ ordem espacial pura 597; espacial + topo de 2 % em ordem de nível **425** (pág
 
 ## Pendências
 
-- **Tamanho:** ~290 MB para os quatro perfis só do DF — o Brasil exige compactar (pesos e
-  ids com menos bits, a pé e bicicleta sem grafo expandido) — fase de dados nacionais.
+- **Tamanho:** formato 2 = 177 MB para os quatro perfis do DF (290 MB no formato 1). O
+  Brasil: ver [13-dados-brasil.md](13-dados-brasil.md).
 - Semáforos (`highway=traffic_signals`) ainda não somam tempo.
 - Rotas **não aprovadas para uso no trânsito real**: precisam de testes de campo.

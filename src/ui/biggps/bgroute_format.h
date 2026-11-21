@@ -15,7 +15,7 @@
  *   - locality on the SD card: routing nodes are numbered along a Hilbert curve and arcs
  *     follow their tail; CH node ids keep that spatial order for the lower part of the
  *     hierarchy and put the top (visited by every long query) together, in rank order;
- *   - a grid of arcs for snapping a position to the nearest road.
+ *   - a sparse grid of arcs (~300 m cells) for snapping a position to the nearest road.
  *
  * File: bgr_header_t, then sections (offset/length in header.sec[]), all little endian,
  * 4-byte aligned arrays.
@@ -27,7 +27,7 @@
 #include <stdint.h>
 
 #define BGR_MAGIC   0x31524742u   /* "BGR1" */
-#define BGR_VERSION 1
+#define BGR_VERSION 2
 
 enum { BGR_CAR = 0, BGR_MOTO, BGR_BIKE, BGR_FOOT, BGR_PROFILES };
 
@@ -44,15 +44,21 @@ enum {
     BGR_S_STRINGS,                             /* NUL-terminated UTF-8 */
     BGR_S_EX_HEAD,                             /* u32[ex_edges]: arc entered by the expanded edge */
     BGR_S_CH_ID,                               /* u32[arcs]: expanded node (arc) -> CH node id */
-    BGR_S_CHF_FIRST, BGR_S_CHF_HEAD, BGR_S_CHF_WEIGHT, BGR_S_CHF_A, BGR_S_CHF_B, BGR_S_CHF_ORIG,
-    BGR_S_CHB_FIRST, BGR_S_CHB_HEAD, BGR_S_CHB_WEIGHT, BGR_S_CHB_A, BGR_S_CHB_B, BGR_S_CHB_ORIG,
-    BGR_S_GRID_FIRST,                          /* u32[gw * gh + 1] */
+    BGR_S_CHF_FIRST, BGR_S_CHF_DATA,           /* forward upward graph: u32[n+1] byte offsets, blocks */
+    BGR_S_CHB_FIRST, BGR_S_CHB_DATA,           /* backward upward graph */
+    BGR_S_GRID_CELLS,                          /* u32 pairs (cell, first) for the non-empty cells,
+                                                  sorted by cell = gy * gw + gx, then a sentinel
+                                                  (0xFFFFFFFF, total) */
     BGR_S_GRID_ARCS,                           /* u32[...]: arcs touching each cell */
     BGR_NSEC
 };
-/* CH sides (forward / backward), as RoutingKit: FIRST u32[n+1], HEAD/WEIGHT/A/B u32[m],
- * ORIG bit vector (u32 words, bit i of word i/32): set = A is an expanded edge id (B its
- * tail); clear = shortcut of backward arc A then forward arc B. */
+/* CH sides (forward / backward): the arcs of CH node u are a block of varints at
+ * DATA[FIRST[u] .. FIRST[u+1]), one entry per arc:
+ *   zigzag(head - u), (weight << 1 | original), original ? expanded edge id : zigzag(mid - u)
+ * A shortcut is unpacked through its middle node mid (lower than both ends), as in a
+ * classic CH: the backward arc stored at mid with head = the arc's upper tail end, then the
+ * forward arc stored at mid with head = its other end.  (Varint: 7 bits per byte, low
+ * first; zigzag: (v << 1) ^ (v >> 31).) */
 
 /* way classes (instructions, road names) */
 enum {

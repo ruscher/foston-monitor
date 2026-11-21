@@ -10,6 +10,8 @@
 //   --levels=11,14 --chunk11=...       one block of zoom-11 tiles (inclusive range): only the
 //                                      tiles inside are written; features are clipped to
 //                                      the block plus a margin while being collected
+//   --water=FILE                       ocean polygons (tools/big-gps/water-extract.py: OSM
+//                                      coastline water polygons, ODbL) drawn as water
 //   --spill=DIR,N                      all of it in one reading of the input: zoom 11/14
 //                                      features go to block files of N x N zoom-11 tiles in
 //                                      DIR, low zooms stay in memory (simplified); writes
@@ -738,6 +740,7 @@ int main(int argc, char **argv)
     Box clip{0, 0, 0, 0}, own{0, 0, 0, 0};   // own: tiles written (chunk), clip: features collected
     bool have_clip = false, have_own = false;
     bool want[NLEVELS] = {true, true, true, true};
+    const char *water_file = nullptr;
     if (argc < 3) {
         std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgm [--bbox=MINLON,MINLAT,MAXLON,MAXLAT] [--levels=5,8,11,14] "
                              "[--maxminzoom=N] [--chunk11=TX0,TY0,TX1,TY1]\n", argv[0]);
@@ -763,6 +766,8 @@ int main(int argc, char **argv)
             }
         } else if (!std::strncmp(a, "--maxminzoom=", 13)) {
             g_maxminzoom = std::atoi(a + 13);
+        } else if (!std::strncmp(a, "--water=", 8)) {
+            water_file = a + 8;
         } else if (!std::strncmp(a, "--spill=", 8)) {
             const char *comma = std::strrchr(a + 8, ',');
             if (!comma || (g_spill_n = std::atoi(comma + 1)) < 1 || g_spill_n > 512) { std::fprintf(stderr, "--spill=PASTA,N\n"); return 2; }
@@ -823,6 +828,32 @@ int main(int argc, char **argv)
         rd.close();
     }
     std::fprintf(stderr, "%zu feições coletadas em %ld s\n", feats.size(), (long)(time(nullptr) - t0));
+    if (water_file) {                                  /* ocean: water areas like any other */
+        FILE *wf = std::fopen(water_file, "rb");
+        char mg[4];
+        uint32_t np = 0;
+        if (!wf || std::fread(mg, 1, 4, wf) != 4 || std::memcmp(mg, "BGW1", 4) || std::fread(&np, 4, 1, wf) != 1) {
+            std::fprintf(stderr, "%s: arquivo de água inválido\n", water_file);
+            return 1;
+        }
+        for (uint32_t i = 0; i < np; i++) {
+            uint32_t nr;
+            if (std::fread(&nr, 4, 1, wf) != 1 || nr > 100000) { std::fprintf(stderr, "%s: truncado\n", water_file); return 1; }
+            Feat f{BGK_A_WATER, BGM_F_AREA, {}, {}};
+            for (uint32_t r = 0; r < nr; r++) {
+                uint32_t n;
+                if (std::fread(&n, 4, 1, wf) != 1 || n > 50000000) { std::fprintf(stderr, "%s: truncado\n", water_file); return 1; }
+                std::vector<double> ll(2 * (size_t)n);
+                if (std::fread(ll.data(), sizeof(double), ll.size(), wf) != ll.size()) { std::fprintf(stderr, "%s: truncado\n", water_file); return 1; }
+                Ring ring(n);
+                for (uint32_t k = 0; k < n; k++) ring[k] = project(ll[2 * k], ll[2 * k + 1]);
+                if (n >= 4) f.rings.push_back(std::move(ring));
+            }
+            if (!f.rings.empty()) keep(std::move(f));
+        }
+        std::fclose(wf);
+        std::fprintf(stderr, "%u polígonos de oceano\n", np);
+    }
 
     std::fprintf(stderr, "%zu pontos guardados\n", g_points);
 

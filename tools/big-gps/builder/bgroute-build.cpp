@@ -124,6 +124,17 @@ OSMWayDirectionCategory way_cb(uint64_t id, unsigned rid, const TagMap &t)
     }
 }
 
+void put_var(std::string &o, uint64_t v)
+{
+    while (v >= 0x80) { o.push_back((char)(v | 0x80)); v >>= 7; }
+    o.push_back((char)v);
+}
+void put_zz32(std::string &o, int64_t v)
+{
+    int32_t x = (int32_t)v;
+    put_var(o, (uint32_t)((uint32_t)x << 1) ^ (uint32_t)(x >> 31));
+}
+
 uint32_t world_x(double lon) { return (uint32_t)std::llround(std::min(std::max((lon + 180.0) / 360.0 * 4294967296.0, 0.0), 4294967295.0)); }
 uint32_t world_y(double lat)
 {
@@ -281,7 +292,11 @@ int main(int argc, char **argv)
     ContractionHierarchy ch = ContractionHierarchy::build(m, ex_tail, ex_head, ex_w,
         [](const std::string &s) { (void)s; });
     std::fprintf(stderr, "CH: %zu arcos para frente, %zu para trás (%ld s)\n", ch.forward.head.size(), ch.backward.head.size(), (long)(time(nullptr) - t0));
+    // the section table uses 32-bit offsets: the whole file must stay below 4 GB (FAT32 too)
 
+    std::vector<uint32_t> chf_first, chb_first;
+    std::string chf_data, chb_data;
+    uint32_t ch_arcs[2] = {0, 0};
     // CH node ids: the lower part keeps the spatial order of the arcs, the top of the
     // hierarchy goes to the end in rank order (BGR_TOP_PERMILLE, default 20 = 2 %)
     std::vector<unsigned> ch_id(m), ch_node(m);          // arc -> id, id -> arc
@@ -301,7 +316,7 @@ int main(int argc, char **argv)
     {
         ContractionHierarchy::Side *side[2] = {&ch.forward, &ch.backward};
         std::vector<unsigned> amap[2];
-        ContractionHierarchy::Side out[2];
+        ContractionHierarchy::Side out[2];   /* new layout: first_out, head, weight */
         for (int sd = 0; sd < 2; sd++) {
             ContractionHierarchy::Side &S = *side[sd];
             amap[sd].assign(S.head.size(), 0);
@@ -316,26 +331,38 @@ int main(int argc, char **argv)
                 out[sd].first_out[id + 1] = (unsigned)out[sd].head.size();
             }
         }
+        /* format 2: varint blocks; shortcuts keep only their middle node (the CH node that
+         * owns the shortcut's backward part) */
+        std::vector<unsigned> owner_b(ch.backward.head.size());
+        for (unsigned r = 0; r < m; r++)
+            for (unsigned arc = ch.backward.first_out[r]; arc < ch.backward.first_out[r + 1]; arc++) owner_b[arc] = ch_id[ch.order[r]];
         for (int sd = 0; sd < 2; sd++) {
             ContractionHierarchy::Side &S = *side[sd];
             size_t na = S.head.size();
-            out[sd].shortcut_first_arc.assign(na, 0);
-            out[sd].shortcut_second_arc.assign(na, 0);
-            out[sd].is_shortcut_an_original_arc = BitVector(na, false);
-            for (size_t arc = 0; arc < na; arc++) {
-                unsigned na_ = amap[sd][arc];
-                if (S.is_shortcut_an_original_arc.is_set(arc)) {
-                    out[sd].is_shortcut_an_original_arc.set(na_);
-                    out[sd].shortcut_first_arc[na_] = S.shortcut_first_arc[arc];     // expanded edge id
-                    out[sd].shortcut_second_arc[na_] = S.shortcut_second_arc[arc];   // expanded tail node
-                } else {
-                    out[sd].shortcut_first_arc[na_] = amap[1][S.shortcut_first_arc[arc]];   // backward arc
-                    out[sd].shortcut_second_arc[na_] = amap[0][S.shortcut_second_arc[arc]]; // forward arc
+            std::vector<uint32_t> &first = sd ? chb_first : chf_first;
+            std::string &data = sd ? chb_data : chf_data;
+            first.assign(m + 1, 0);
+            /* entries in the order of out[sd] (already per new id); aux from the old arc */
+            std::vector<unsigned> old_of_new(na);
+            for (size_t arc = 0; arc < na; arc++) old_of_new[amap[sd][arc]] = (unsigned)arc;
+            for (unsigned id = 0; id < m; id++) {
+                first[id] = (uint32_t)data.size();
+                for (unsigned na_ = out[sd].first_out[id]; na_ < out[sd].first_out[id + 1]; na_++) {
+                    unsigned arc = old_of_new[na_];
+                    bool orig = S.is_shortcut_an_original_arc.is_set(arc);
+                    put_zz32(data, (int64_t)out[sd].head[na_] - id);
+                    put_var(data, (uint64_t)out[sd].weight[na_] << 1 | (orig ? 1 : 0));
+                    if (orig) put_var(data, S.shortcut_first_arc[arc]);          // expanded edge id
+                    else put_zz32(data, (int64_t)owner_b[S.shortcut_first_arc[arc]] - id);   // middle node
                 }
             }
+            first[m] = (uint32_t)data.size();
+            if (data.size() > 0xFFFFFFF0ull) { std::fprintf(stderr, "CH grande demais\n"); return 1; }
         }
-        ch.forward = std::move(out[0]);
-        ch.backward = std::move(out[1]);
+        ch_arcs[0] = (uint32_t)ch.forward.head.size();
+        ch_arcs[1] = (uint32_t)ch.backward.head.size();
+        ch = ContractionHierarchy();                                 // frees the RoutingKit arrays
+        (void)out;
     }
 
     // largest strongly connected component of the expanded graph: only its arcs are snappable
@@ -389,7 +416,8 @@ int main(int argc, char **argv)
     x0 &= ~((1u << shift) - 1);
     y0 &= ~((1u << shift) - 1);
     uint32_t gw = ((x1 - x0) >> shift) + 1, gh = ((y1 - y0) >> shift) + 1;
-    std::vector<std::vector<uint32_t>> cells((size_t)gw * gh);
+    if ((uint64_t)gw * gh >= 0xFFFFFFFFull) { std::fprintf(stderr, "região grande demais para a grade\n"); return 1; }
+    std::vector<std::pair<uint32_t, uint32_t>> cell_arc;          // (cell, arc), sorted later
     for (unsigned a = 0; a < m; a++) {
         if (!in_big[a]) continue;
         uint32_t ax0 = std::min(nx[tail[a]], nx[g.head[a]]), ax1 = std::max(nx[tail[a]], nx[g.head[a]]);
@@ -400,14 +428,17 @@ int main(int argc, char **argv)
         }
         for (uint32_t cy = (ay0 - y0) >> shift; cy <= (ay1 - y0) >> shift && cy < gh; cy++)
             for (uint32_t cx = (ax0 - x0) >> shift; cx <= (ax1 - x0) >> shift && cx < gw; cx++)
-                cells[(size_t)cy * gw + cx].push_back(a);
+                cell_arc.push_back({cy * gw + cx, a});
     }
-    std::vector<uint32_t> grid_first(cells.size() + 1), grid_arcs;
-    for (size_t c = 0; c < cells.size(); c++) {
-        grid_first[c] = (uint32_t)grid_arcs.size();
-        grid_arcs.insert(grid_arcs.end(), cells[c].begin(), cells[c].end());
+    std::sort(cell_arc.begin(), cell_arc.end());
+    std::vector<uint32_t> grid_cells, grid_arcs;
+    for (size_t i = 0; i < cell_arc.size(); i++) {
+        if (!i || cell_arc[i].first != cell_arc[i - 1].first) { grid_cells.push_back(cell_arc[i].first); grid_cells.push_back((uint32_t)grid_arcs.size()); }
+        grid_arcs.push_back(cell_arc[i].second);
     }
-    grid_first[cells.size()] = (uint32_t)grid_arcs.size();
+    grid_cells.push_back(0xFFFFFFFFu);
+    grid_cells.push_back((uint32_t)grid_arcs.size());
+    std::vector<std::pair<uint32_t, uint32_t>>().swap(cell_arc);
 
     // strings and way tables
     std::string strings;
@@ -426,25 +457,21 @@ int main(int argc, char **argv)
     for (size_t w = 0; w < ways.size(); w++) { way_name[w] = intern(ways[w].name); way_ref[w] = intern(ways[w].ref); way_info[w] = ways[w].info; }
     while (strings.size() % 4) strings.push_back('\0');
 
-    auto bits = [](const BitVector &b, size_t count) {
-        std::vector<uint32_t> o((count + 31) / 32, 0);
-        for (size_t i = 0; i < count; i++) if (b.is_set(i)) o[i / 32] |= 1u << (i % 32);
-        return o;
-    };
-    std::vector<uint32_t> chf_orig = bits(ch.forward.is_shortcut_an_original_arc, ch.forward.head.size());
-    std::vector<uint32_t> chb_orig = bits(ch.backward.is_shortcut_an_original_arc, ch.backward.head.size());
+    while (chf_data.size() % 4) chf_data.push_back('\0');
+    while (chb_data.size() % 4) chb_data.push_back('\0');
 
     // write
     FILE *out = std::fopen(argv[2], "wb");
     if (!out) { std::perror(argv[2]); return 1; }
     bgr_header_t h{};
     std::fwrite(&h, sizeof h, 1, out);
-    uint32_t pos = sizeof h;
+    uint64_t pos = sizeof h;
     auto sec = [&](int id, const void *data, size_t bytes) {
-        h.sec[id].off = pos;
+        if (pos + bytes > 0xFFFFFFF0ull) { std::fprintf(stderr, "arquivo de rotas passaria de 4 GB\n"); std::exit(1); }
+        h.sec[id].off = (uint32_t)pos;
         h.sec[id].len = (uint32_t)bytes;
         if (bytes) std::fwrite(data, 1, bytes, out);
-        pos += (uint32_t)bytes;
+        pos += bytes;
     };
     auto vec = [&](int id, const std::vector<uint32_t> &v) { sec(id, v.data(), v.size() * 4); };
     auto uvec = [&](int id, const std::vector<unsigned> &v) { sec(id, v.data(), v.size() * 4); };
@@ -457,19 +484,17 @@ int main(int argc, char **argv)
     sec(BGR_S_STRINGS, strings.data(), strings.size());
     uvec(BGR_S_EX_HEAD, ex_head);
     uvec(BGR_S_CH_ID, ch_id);
-    uvec(BGR_S_CHF_FIRST, ch.forward.first_out); uvec(BGR_S_CHF_HEAD, ch.forward.head); uvec(BGR_S_CHF_WEIGHT, ch.forward.weight);
-    uvec(BGR_S_CHF_A, ch.forward.shortcut_first_arc); uvec(BGR_S_CHF_B, ch.forward.shortcut_second_arc); vec(BGR_S_CHF_ORIG, chf_orig);
-    uvec(BGR_S_CHB_FIRST, ch.backward.first_out); uvec(BGR_S_CHB_HEAD, ch.backward.head); uvec(BGR_S_CHB_WEIGHT, ch.backward.weight);
-    uvec(BGR_S_CHB_A, ch.backward.shortcut_first_arc); uvec(BGR_S_CHB_B, ch.backward.shortcut_second_arc); vec(BGR_S_CHB_ORIG, chb_orig);
-    vec(BGR_S_GRID_FIRST, grid_first); vec(BGR_S_GRID_ARCS, grid_arcs);
+    vec(BGR_S_CHF_FIRST, chf_first); sec(BGR_S_CHF_DATA, chf_data.data(), chf_data.size());
+    vec(BGR_S_CHB_FIRST, chb_first); sec(BGR_S_CHB_DATA, chb_data.data(), chb_data.size());
+    vec(BGR_S_GRID_CELLS, grid_cells); vec(BGR_S_GRID_ARCS, grid_arcs);
     h.magic = BGR_MAGIC; h.version = BGR_VERSION; h.profile = (uint32_t)profile;
     h.nodes = n; h.arcs = m; h.ways = (uint32_t)ways.size(); h.geom = (uint32_t)gx.size();
-    h.ex_edges = (uint32_t)ex_head.size(); h.ch_fwd = (uint32_t)ch.forward.head.size(); h.ch_bwd = (uint32_t)ch.backward.head.size();
+    h.ex_edges = (uint32_t)ex_head.size(); h.ch_fwd = ch_arcs[0]; h.ch_bwd = ch_arcs[1];
     h.grid_x0 = x0; h.grid_y0 = y0; h.grid_shift = shift; h.grid_w = gw; h.grid_h = gh;
     h.created = (uint32_t)time(nullptr);
     std::fseek(out, 0, SEEK_SET);
     std::fwrite(&h, sizeof h, 1, out);
     if (std::fclose(out)) { std::perror(argv[2]); return 1; }
-    std::fprintf(stderr, "%s: %u bytes em %ld s\n", argv[2], pos, (long)(time(nullptr) - t0));
+    std::fprintf(stderr, "%s: %llu bytes em %ld s\n", argv[2], (unsigned long long)pos, (long)(time(nullptr) - t0));
     return 0;
 }
