@@ -1,6 +1,6 @@
 # GPS (MT3328) no BigFoston
 
-Estado: **NMEA funcionando no Linux** (21/11/2026) — M1–M3 concluídos e saída NMEA de 1 Hz (M4) igual à do CE; falta testar com satélites (céu aberto), integrar à interface (tela GPS) e rodar como serviço (M5). Detalhes no fim.
+Estado: **funcionando no Linux como serviço, com tela GPS** (21/11/2026) — o `gps.dll` do aparelho roda no `bfgps`, inicia no boot (`S60gps`) e a interface mostra estado, satélites, sinal e posição. Falta confirmar a posição com satélites (céu aberto). Detalhes no fim.
 
 ## Como o GPS funciona no aparelho
 
@@ -112,3 +112,22 @@ satélites — o mesmo que o CE mostrou no mesmo lugar.
 **Teste anterior (já feito):** provar se a transmissão do Linux chega ao chip — com o GPS ligado pelo
 CE (`gpsopen`), iniciar o Linux, ouvir a 921600 (o DSP carregado transmite medidas) e
 enviar um dos pacotes do `gps.dll` ao DSP em execução, sem reset.
+
+## Serviço e tela (21/11/2026)
+
+| Peça | O que faz |
+|---|---|
+| `/usr/bin/bfgps` (pacote `bigfoston-gps`) | `--hw -q -t 0 -d /mnt/sd/BigFoston/gps --status /run/bigfoston-gps --pty /run/gps-nmea` |
+| `/etc/init.d/S60gps` | inicia depois do cartão se `BigFoston/gps/gps.bfx` existir e `/data/bigfoston/gps-off` não; reinicia se cair; `stop` encerra e limpa |
+| `/run/bigfoston-gps` | estado a cada segundo (chave=valor): hora/data UTC, válido, modo 2D/3D, lat/lon, altitude, velocidade, rumo, HDOP, usados/visíveis e cada satélite (PRN, elevação, azimute, sinal) |
+| `/run/gps-nmea` | NMEA cru num pseudo-terminal (para gpsd ou testes; descarta se ninguém lê) |
+| Tela GPS (app GPS e Ajustes > GpsInfo) | estado, satélites, HDOP, posição, altitude, velocidade, rumo, hora GPS (só com posição), mapa do céu, sinal por satélite, ligar/desligar |
+
+Arquivos do aparelho no cartão (copiados do próprio aparelho, não distribuídos): `gps.bfx`
+(`tools/bigfoston/gps-extract.py`), e em `gps/root/ResidentFlash/` o `mtkgps.dat`, `BEE.BIN`
+e `ARC.BIN` da partição 3 da NAND.
+
+Conferido no aparelho: o serviço sobe sozinho (motor iniciado aos 8 s de boot), a tela mostra
+"Procurando satélites" dentro de casa, `S60gps stop/start` desliga e religa sem sobras.
+
+![](images/ui/38-gps-posicao.png)

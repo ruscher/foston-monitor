@@ -155,7 +155,9 @@ static void refresh(void)
     if(fix) snprintf(b, sizeof b, "%s %.0f°", tr(S_GPS_COURSE), cur.course);
     else snprintf(b, sizeof b, "%s —", tr(S_GPS_COURSE));
     set_text(crs_lbl, b);
-    if(cur.running && strlen(cur.time) >= 6 && strlen(cur.date) >= 6)
+    /* sem posição o motor ainda não tem a hora dos satélites (conta a partir de
+     * um valor inicial): só mostra com posição válida */
+    if(fix && strlen(cur.time) >= 6 && strlen(cur.date) >= 6)
         snprintf(b2, sizeof b2, "%.2s/%.2s/20%.2s %.2s:%.2s:%.2s UTC", cur.date, cur.date + 2, cur.date + 4,
                  cur.time, cur.time + 2, cur.time + 4);
     else snprintf(b2, sizeof b2, "—");
