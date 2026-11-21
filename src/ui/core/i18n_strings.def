@@ -344,6 +344,9 @@ X(S_BS_CONNECTED,  "bs.connected", "Conectado a %s", "Connected to %s", "Conecta
 X(S_BS_FRAMES,     "bs.frames", "%u quadros recebidos", "%u frames received", "%u cuadros recibidos")
 X(S_BS_FAILED,     "bs.failed", "Não foi possível abrir a conexão", "Could not open the connection", "No se pudo abrir la conexión")
 X(S_BS_STEPS,      "bs.steps", "1. Ligue o FOSTON ao PC pelo cabo USB (rede USB, 192.168.7.2).\n2. No Big Screen Monitor do PC, ative o display \"FOSTON FS-707DC (BigFoston OS)\".\n3. O painel aparece aqui sozinho, com toque.", "1. Connect the FOSTON to the PC with the USB cable (USB network, 192.168.7.2).\n2. In the PC's Big Screen Monitor, enable the \"FOSTON FS-707DC (BigFoston OS)\" display.\n3. The panel shows up here by itself, with touch.", "1. Conecte el FOSTON al PC con el cable USB (red USB, 192.168.7.2).\n2. En el Big Screen Monitor del PC, active la pantalla \"FOSTON FS-707DC (BigFoston OS)\".\n3. El panel aparece aquí solo, con toque.")
+X(S_BS_OSD_ON,     "bs.osd_on", "Big Screen conectado", "Big Screen connected", "Big Screen conectado")
+X(S_BS_OSD_EXIT,   "bs.osd_exit", "Para sair, segure o canto superior esquerdo por 3 s", "To leave, hold the top-left corner for 3 s", "Para salir, mantenga la esquina superior izquierda 3 s")
+X(S_BS_OSD_OFF,    "bs.osd_off", "Big Screen desconectado", "Big Screen disconnected", "Big Screen desconectado")
 X(S_BS_EXIT_HINT,  "bs.exit_hint", "Para sair durante a transmissão, segure o canto superior esquerdo da tela por 3 segundos.", "To leave while streaming, hold the top-left corner of the screen for 3 seconds.", "Para salir durante la transmisión, mantenga la esquina superior izquierda 3 segundos.")
 
 /* ---- Avisos de dispositivos ---- */

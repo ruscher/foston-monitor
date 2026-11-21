@@ -6,6 +6,7 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/bigscreen.h"
+#include "../core/osd.h"
 #include "../widgets/page.h"
 #include "../assets/icons/bf_icons.h"
 #include "../third_party/fsp/fsp.h"
@@ -77,7 +78,11 @@ static void panel_show(void)
 
 static void panel_hide(void)
 {
-    if(panel) { lv_obj_delete(panel); panel = NULL; }
+    if(!panel) return;
+    lv_obj_delete(panel);
+    panel = NULL;
+    /* o PC saiu: avisa que voltou a esperar (sem aviso quando quem sai é o usuário) */
+    if(!leaving) osd_show(&bf_icon_bigscreen, 0x6c7383, tr(S_BS_OSD_OFF), tr(S_BS_WAITING));
 }
 
 /* ------------------------------------------------------------ espera */
@@ -88,7 +93,11 @@ static void tick(lv_timer_t *t)
     const bf_palette_t *p = pal();
     if(bs_poll()) {
         uint32_t t0 = lv_tick_get();
-        panel_show();
+        if(!panel) {
+            panel_show();
+            /* primeiro quadro: o aviso fica por cima do painel e ensina a sair */
+            osd_show(&bf_icon_bigscreen, 0x2a6fd0, tr(S_BS_OSD_ON), tr(S_BS_OSD_EXIT));
+        }
         lv_area_t a = bs_last_dirty();
         if(a.x2 >= a.x1 && a.y2 >= a.y1) lv_obj_invalidate_area(panel, &a);
         lv_refr_now(NULL);
@@ -157,6 +166,7 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     if(timer) { lv_timer_delete(timer); timer = NULL; }
+    leaving = true;                     /* saindo do app: sem aviso de "desconectado" */
     panel_hide();
     bs_stop();
     state_lbl = detail_lbl = err_lbl = NULL;
