@@ -156,6 +156,13 @@ uint32_t bgr_way_info(bgr_pack_t *p, uint32_t w) { return rd(p, BGR_S_WAY_INFO, 
 
 uint32_t bgr_arc_tail(bgr_pack_t *p, uint32_t a) { return clampi(p, rd(p, BGR_S_ARC_TAIL, a), p->h.nodes); }
 
+uint32_t bgr_node_first_out(bgr_pack_t *p, uint32_t u)
+{
+    if (u > p->h.nodes) u = p->h.nodes;
+    uint32_t f = rd(p, BGR_S_FIRST_OUT, u);
+    return f <= p->h.arcs ? f : p->h.arcs;
+}
+
 void bgr_node_xy(bgr_pack_t *p, uint32_t u, uint32_t *x, uint32_t *y)
 {
     *x = rd(p, BGR_S_NODE_X, u);

@@ -7,8 +7,8 @@ favoritos e recálculo de rota. Usa o GPS que já funciona no Linux (`bfgps`, ve
 
 **Estado (2026-11-21):** fases 1 e 2 feitas (auditoria e provas de viabilidade). O motor de
 mapas próprio desenha o DF no aparelho (tela do mapa no shell); o roteamento (quatro perfis,
-Contraction Hierarchies) funciona e foi conferido contra Dijkstra; navegação curva a curva,
-voz e busca estão por fazer.
+Contraction Hierarchies) funciona e foi conferido contra Dijkstra; a navegação curva a curva
+funciona com rota simulada no aparelho (falta teste dirigindo); voz e busca estão por fazer.
 Nada aqui está aprovado para uso no trânsito real.
 
 ## Princípios
@@ -30,6 +30,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [05-construtor-mapas.md](05-construtor-mapas.md) | `bgmap-build` no PC |
 | [06-renderizacao.md](06-renderizacao.md) | rasterizador, estilos, medições de quadro |
 | [07-roteamento.md](07-roteamento.md) | grafo, perfis, CH, conferência, medições |
+| [08-navegacao.md](08-navegacao.md) | uso, manobras, acompanhamento, avisos, testes |
 
 Os demais documentos (roteamento, navegação, voz, busca, interface, dados do Brasil,
 desempenho, testes, licenças, instalação, uso, problemas conhecidos, relatório de entrega)

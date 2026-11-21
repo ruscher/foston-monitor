@@ -219,6 +219,67 @@ static int transform(const vis_t *vt, const bgm_feat_t *f, int64_t A, int64_t B)
     return n;
 }
 
+/* clip p..q (64-bit screen units) to |v| <= L; 0 if outside */
+static int clip64(int64_t *px, int64_t *py, int64_t *qx, int64_t *qy, int64_t L)
+{
+    double x0 = (double)*px, y0 = (double)*py, dx = (double)(*qx - *px), dy = (double)(*qy - *py), t0 = 0, t1 = 1;
+    double p_[4] = {-dx, dx, -dy, dy}, q_[4] = {x0 + L, L - x0, y0 + L, L - y0};
+    for (int k = 0; k < 4; k++) {
+        if (p_[k] == 0) { if (q_[k] < 0) return 0; continue; }
+        double t = q_[k] / p_[k];
+        if (p_[k] < 0) { if (t > t1) return 0; if (t > t0) t0 = t; }
+        else { if (t < t0) return 0; if (t < t1) t1 = t; }
+    }
+    int64_t ax = (int64_t)(x0 + t0 * dx), ay = (int64_t)(y0 + t0 * dy), bx = (int64_t)(x0 + t1 * dx), by = (int64_t)(y0 + t1 * dy);
+    *px = ax; *py = ay; *qx = bx; *qy = by;
+    return 1;
+}
+
+void bgr_draw_polyline(const bgr_view_t *v, rast_surface_t *s, const uint32_t *xy, int n,
+                       int w16, uint16_t color, int cw16, uint16_t casing)
+{
+    if (n < 2) return;
+    xf_t x;
+    xf_init(v, s, &x);
+    /* per point: 64-bit multiply and shift; screen = centre + R * (p - c) * k, Q32 */
+    double k16 = x.k * RAST_SUB * 4294967296.0;
+    int64_t A = llround(k16 * x.c), B = llround(k16 * x.s);
+    int64_t sx0 = llround(x.sx0 * RAST_SUB), sy0 = llround(x.sy0 * RAST_SUB);
+    const int64_t LIM = (int64_t)1 << 26;            /* fits int32 for rast_line, far beyond the screen */
+    int32_t buf[2 * 512];
+    for (int pass = cw16 ? 0 : 1; pass < 2; pass++) {
+        int m = 0;
+        int64_t px = 0, py = 0;
+        for (int i = 0; i < n; i++) {
+            int64_t dx = (int32_t)(xy[2 * i] - v->cx), dy = (int32_t)(xy[2 * i + 1] - v->cy);
+            int64_t qx = sx0 + ((dx * A - dy * B) >> 32), qy = sy0 + ((dx * B + dy * A) >> 32);
+            if (i > 0) {
+                int64_t ax = px, ay = py, bx = qx, by = qy;
+                int inside = ax >= -LIM && ax <= LIM && ay >= -LIM && ay <= LIM && bx >= -LIM && bx <= LIM && by >= -LIM && by <= LIM;
+                if (inside || clip64(&ax, &ay, &bx, &by, LIM)) {
+                    int joined = m > 0 && buf[2 * m - 2] == (int32_t)ax && buf[2 * m - 1] == (int32_t)ay;
+                    if (!joined) {                    /* new piece */
+                        if (m > 1) rast_line(s, buf, m, pass ? w16 : cw16, pass ? color : casing, 0);
+                        m = 0;
+                        buf[0] = (int32_t)ax; buf[1] = (int32_t)ay;
+                        m = 1;
+                    }
+                    buf[2 * m] = (int32_t)bx; buf[2 * m + 1] = (int32_t)by;
+                    m++;
+                    if (m == 512) {                   /* full: draw, keep the last point */
+                        rast_line(s, buf, m, pass ? w16 : cw16, pass ? color : casing, 0);
+                        buf[0] = buf[2 * m - 2]; buf[1] = buf[2 * m - 1];
+                        m = 1;
+                    }
+                }
+            }
+            px = qx;
+            py = qy;
+        }
+        if (m > 1) rast_line(s, buf, m, pass ? w16 : cw16, pass ? color : casing, 0);
+    }
+}
+
 static int label_cmp(const void *a, const void *b)
 {
     return (int)((const bgr_label_t *)a)->prio - (int)((const bgr_label_t *)b)->prio;

@@ -11,7 +11,7 @@ OUT = build/host
 endif
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -D_GNU_SOURCE -Wall -Wextra -Wno-unused-parameter
-LIB = bgmap.c raster.c bgrender.c bgroute.c
+LIB = bgmap.c raster.c bgrender.c bgroute.c bgnav.c bgrouter.c bgicons.c
 
 all: $(OUT)/bgview $(OUT)/bgroute
 $(OUT)/bgview: bgview.c $(LIB) *.h

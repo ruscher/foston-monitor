@@ -4,13 +4,19 @@
  * buffer duplo: a interface continua respondendo ao toque durante os 50–300 ms de um
  * quadro. Arrastar move a imagem na hora e pede quadros novos; os rótulos (nomes de
  * lugares e de vias) e o marcador da posição são desenhados por cima pelo LVGL.
- * A posição vem do bfgps (core/gpsstat), uma vez por segundo. */
+ * A posição vem do bfgps (core/gpsstat), uma vez por segundo.
+ *
+ * Navegação: toque longo marca o destino; a rota é calculada numa thread (biggps/bgrouter)
+ * e desenhada no quadro do mapa; a faixa de cima mostra a próxima manobra e a de baixo o
+ * que falta. "Simular" percorre a rota sem GPS (sempre identificado na tela). */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/gpsstat.h"
 #include "../core/settings.h"
 #include "../biggps/bgmap.h"
 #include "../biggps/bgrender.h"
+#include "../biggps/bgrouter.h"
+#include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -18,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #define MAP_W   800
 #define MAP_H   480
@@ -51,12 +58,16 @@ static struct {
     int nlbl[2];
     unsigned ms;
     bgm_pack_t *pack;
+    uint32_t *route;           /* rota a desenhar (pontos x,y no mundo), dono: interface */
+    int route_n;
 } R = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *worker(void *arg)
 {
     (void)arg;
     static bgr_label_t tmp[MAXLBL];
+    uint32_t *rcopy = NULL;
+    int rcap = 0;
     pthread_mutex_lock(&R.mu);
     for(;;) {
         while(!R.stop && (!R.has_req || R.done)) pthread_cond_wait(&R.cv, &R.mu);
@@ -64,11 +75,23 @@ static void *worker(void *arg)
         bgr_view_t v = R.req;
         R.has_req = 0;
         int back = !R.front;
+        int rn = R.route_n;                         /* cópia da rota: a interface pode trocá-la */
+        if(rn > rcap) {
+            uint32_t *nb = realloc(rcopy, (size_t)rn * 2 * sizeof *nb);
+            if(nb) { rcopy = nb; rcap = rn; }
+            else rn = 0;
+        }
+        if(rn) memcpy(rcopy, R.route, (size_t)rn * 2 * sizeof *rcopy);
         pthread_mutex_unlock(&R.mu);
 
         rast_surface_t s = { R.buf[back], MAP_W, MAP_H, MAP_W };
         bgr_stats_t st;
         int n = bgr_render(R.pack, &v, &s, tmp, MAXLBL, &st);
+        if(rn >= 2) {
+            int z = v.zoom256 >> 8, w = z >= 16 ? 8 : z >= 14 ? 6 : 4;
+            bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, rgb565(v.night ? 0x4c8bf5 : 0x1a73e8),
+                              (w + 3) * RAST_SUB, rgb565(v.night ? 0x0d2b5e : 0x0b3d91));
+        }
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
             l->x = tmp[i].x; l->y = tmp[i].y; l->angle = tmp[i].angle;
@@ -84,11 +107,12 @@ static void *worker(void *arg)
         fprintf(stderr, "biggps: quadro z%.1f em %u ms (%u tiles, %u feições)\n", v.zoom256 / 256.0, R.ms, st.tiles, st.feats);
     }
     pthread_mutex_unlock(&R.mu);
+    free(rcopy);
     return NULL;
 }
 
 /* ------------------------------------------------------------ estado da tela */
-static lv_obj_t *ov, *img, *layer, *info_lbl, *scale_lbl, *scale_bar, *follow_btn, *rot_lbl, *msg;
+static lv_obj_t *ov, *img, *layer, *info_chip, *info_lbl, *scale_lbl, *scale_bar, *follow_btn, *rot_lbl, *msg;
 static lv_timer_t *tick;
 static lv_image_dsc_t dsc[2];
 static bgr_view_t cur;         /* vista pedida (alvo) */
@@ -105,6 +129,24 @@ static bgr_view_t drag_view;
 static bool dragging;
 static unsigned gps_ms;
 
+/* navegação */
+static struct {
+    int has_dest, waiting, active, navigating, simulate, rerouting, arrived_ms;
+    int profile;
+    uint32_t dx, dy;           /* destino */
+    unsigned req_id;
+    bgn_route_t route;
+    bgn_state_t st;
+    double sim_t;              /* simulação: tempo percorrido na rota (décimos de segundo) */
+    int said_next, said_far, said_near;
+    bool prev_heading_up;
+    char dest_name[64];
+} N;
+static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark;
+static lv_image_dsc_t icon_dsc;
+static uint16_t icon_px[80 * 80];
+static int icon_type = -1, icon_exit = -1;
+static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
 static void anchor(int *ax, int *ay)
 {
     *ax = MAP_W / 2;
@@ -219,8 +261,8 @@ static void draw_text_halo(lv_layer_t *ly, const placed_t *p, int dx, int dy, lv
 /* Marcador da posição: bitmaps ARGB8888 gerados uma vez (supersampling 4x4) e girados
  * pelo LVGL; seta no rumo quando anda, ponto quando parado. */
 #define MK 48
-static uint32_t mk_arrow[MK * MK], mk_dot[MK * MK], mk_stale[MK * MK];
-static lv_image_dsc_t mk_dsc[3];
+static uint32_t mk_arrow[MK * MK], mk_dot[MK * MK], mk_stale[MK * MK], mk_pin[MK * MK];
+static lv_image_dsc_t mk_dsc[4];
 static lv_obj_t *mark;
 
 static bool in_poly(const float *p, int n, float x, float y)
@@ -259,13 +301,24 @@ static void mk_build(void)
                 (((((col) >> 16 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 16) | \
                 (((((col) >> 8 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 8) | \
                 ((((col) & 255) * (b) + 255 * (w)) / ((w) + (b))) : 0)
+            /* alfinete do destino: gota vermelha com miolo branco, ponta em (24, 46) */
+            int pr = 0, pw = 0;
+            for(int sy = 0; sy < 4; sy++)
+                for(int sx = 0; sx < 4; sx++) {
+                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 24, dy = fy - 18;
+                    bool head = dx * dx + dy * dy < 13.0f * 13.0f;
+                    bool tail = fy >= 18 && fy <= 46 && fabsf(dx) < 13.0f * (46 - fy) / 28;
+                    if(dx * dx + dy * dy < 5.0f * 5.0f) pw++;
+                    else if(head || tail) pr++;
+                }
+            mk_pin[y * MK + x] = MIX(pw, pr, 0xd93025u);
             mk_arrow[y * MK + x] = MIX(wa, ba, blue);
             mk_dot[y * MK + x] = MIX(wd, bd, blue);
             mk_stale[y * MK + x] = MIX(wd, bd, grey);
             #undef MIX
         }
-    uint32_t *bufs[3] = { mk_arrow, mk_dot, mk_stale };
-    for(int i = 0; i < 3; i++) {
+    uint32_t *bufs[4] = { mk_arrow, mk_dot, mk_stale, mk_pin };
+    for(int i = 0; i < 4; i++) {
         memset(&mk_dsc[i], 0, sizeof mk_dsc[i]);
         mk_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
         mk_dsc[i].header.cf = LV_COLOR_FORMAT_ARGB8888;
@@ -277,8 +330,23 @@ static void mk_build(void)
     }
 }
 
+static void update_dest_marker(void)
+{
+    if(!dmark) return;
+    if(!N.has_dest || !have_shown) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
+    int sx, sy;
+    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+    bgr_world_to_screen(&shown, &s, N.dx, N.dy, &sx, &sy);
+    sx += off_x;
+    sy += off_y;
+    if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_obj_set_pos(dmark, sx - 24, sy - 46);
+    lv_obj_remove_flag(dmark, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void update_marker(void)
 {
+    update_dest_marker();
     if(!mark) return;
     if(!have_pos || !have_shown) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     uint32_t wx, wy;
@@ -368,25 +436,420 @@ static bool last_load(double *lat, double *lon, int *zoom, int *was_pos)
     return ok;
 }
 
+/* ------------------------------------------------------------- navegação */
+static void request(void);
+
+static void set_route_overlay(const uint32_t *xy, int n)
+{
+    uint32_t *copy = NULL;
+    if(n >= 2) {
+        copy = malloc((size_t)n * 2 * sizeof *copy);
+        if(copy) memcpy(copy, xy, (size_t)n * 2 * sizeof *copy);
+        else n = 0;
+    } else n = 0;
+    pthread_mutex_lock(&R.mu);
+    free(R.route);
+    R.route = copy;
+    R.route_n = n;
+    pthread_mutex_unlock(&R.mu);
+}
+
+/* enquadra a rota inteira (visão geral) */
+static void fit_route(void)
+{
+    const bgn_route_t *r = &N.route;
+    if(r->npts < 2) return;
+    uint32_t x0 = UINT32_MAX, y0 = UINT32_MAX, x1 = 0, y1 = 0;
+    for(int i = 0; i < r->npts; i++) {
+        uint32_t x = r->xy[2 * i], y = r->xy[2 * i + 1];
+        if(x < x0) x0 = x;
+        if(x > x1) x1 = x;
+        if(y < y0) y0 = y;
+        if(y > y1) y1 = y;
+    }
+    double w = (double)(x1 - x0) + 1, h = (double)(y1 - y0) + 1;
+    /* px = world * 2^(z - 24): z para caber em 560 x 280 px (folha e botões ocupam o resto) */
+    double z = fmin(log2(560.0 / w), log2(280.0 / h)) + 24;
+    if(z > 17) z = 17;
+    if(z < 5) z = 5;
+    cur.zoom256 = (int)(z * 256);
+    cur.cx = x0 + (x1 - x0) / 2;
+    cur.cy = y0 + (y1 - y0) / 2 + (uint32_t)(h * 0.18);   /* sobe a rota acima da folha */
+    cur.rot = 0;
+    follow = false;
+    update_scale();
+    request();
+}
+
+/* voz: os textos já são os definitivos; a síntese entra na fase de voz (docs/big-gps) */
+static void say(const char *text)
+{
+    fprintf(stderr, "biggps: voz: %s\n", text);
+}
+
+static const char *spoken_dist(uint32_t dm, char *buf, int n)
+{
+    uint32_t m = dm / 10;
+    if(m < 1000) {
+        uint32_t step = m < 300 ? 50 : 100;
+        snprintf(buf, (size_t)n, "%u metros", (m + step / 2) / step * step);
+    } else if(m < 1950) {
+        snprintf(buf, (size_t)n, m < 1250 ? "1 quilômetro" : m < 1750 ? "1 quilômetro e meio" : "2 quilômetros");
+    } else snprintf(buf, (size_t)n, "%u quilômetros", (m + 500) / 1000);
+    return buf;
+}
+
+static void lower_first(char *t)
+{
+    /* "Vire" -> "vire"; só ASCII (os verbos das instruções começam sem acento) */
+    if(t[0] >= 'A' && t[0] <= 'Z') t[0] = (char)(t[0] - 'A' + 'a');
+}
+
+static void announce(void)
+{
+    const bgn_state_t *st = &N.st;
+    if(!st->valid || st->next < 0 || st->next >= N.route.nman) return;
+    if(st->next != N.said_next) { N.said_next = st->next; N.said_far = N.said_near = 0; }
+    const bgn_man_t *m = &N.route.man[st->next];
+    double v = pos_speed / 3.6;
+    if(v < 5) v = 5;
+    uint32_t dist = st->next_dm / 10;
+    uint32_t near = (uint32_t)fmax(30, v * 6);
+    uint32_t far = v > 22 ? 2000 : v > 14 ? 1000 : 300;
+    char t[160], d[48], full[400];
+    bgn_text(m, t, sizeof t);
+    if(!N.said_near && dist <= near) {
+        N.said_near = N.said_far = 1;
+        /* "e depois" quando a manobra seguinte vem logo em seguida */
+        if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE) {
+            char t2[160];
+            bgn_text(&N.route.man[st->next + 1], t2, sizeof t2);
+            lower_first(t2);
+            snprintf(full, sizeof full, "%s, e depois %s", t, t2);
+            say(full);
+        } else say(t);
+    } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE) {
+        N.said_far = 1;
+        lower_first(t);
+        snprintf(full, sizeof full, "Em %s, %s", spoken_dist(st->next_dm, d, sizeof d), t);
+        say(full);
+    }
+}
+
+static void update_banner(void)
+{
+    if(!banner) return;
+    const bgn_state_t *st = &N.st;
+    char t[160], d[32];
+    if(N.rerouting) {
+        lv_label_set_text(ban_dist, "");
+        lv_label_set_text(ban_text, tr(S_MAP_REROUTE));
+        lv_label_set_text(ban_then, "");
+        return;
+    }
+    if(st->next < 0 || st->next >= N.route.nman) return;
+    const bgn_man_t *m = &N.route.man[st->next];
+    if(m->type != icon_type || m->exit != icon_exit) {
+        rast_surface_t s = { icon_px, 80, 80, 80 };
+        bgn_icon(&s, m->type, m->exit, rgb565(0xffffff), rgb565(0x9fd4a8), rgb565(0x1e6e34));
+        icon_type = m->type;
+        icon_exit = m->exit;
+        lv_image_cache_drop(&icon_dsc);
+        lv_image_set_src(ban_icon, &icon_dsc);
+        lv_obj_invalidate(ban_icon);
+    }
+    lv_label_set_text(ban_dist, m->type == BGN_ARRIVE && st->arrived ? "" : bgn_dist_text(st->next_dm, d, sizeof d));
+    lv_label_set_text(ban_text, bgn_text(m, t, sizeof t));
+    if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500) {
+        char t2[160], line[200];
+        snprintf(line, sizeof line, "%s: %s", tr(S_MAP_THEN), bgn_text(&N.route.man[st->next + 1], t2, sizeof t2));
+        lv_label_set_text(ban_then, line);
+    } else lv_label_set_text(ban_then, "");
+}
+
+static void update_botbar(void)
+{
+    if(!bot_lbl) return;
+    char d[32], line[128];
+    uint32_t rem_dm = N.navigating ? N.st.remain_dm : N.route.total_dm;
+    uint32_t rem_ds = N.navigating ? N.st.remain_ds : N.route.total_ds;
+    int min = (int)((rem_ds + 300) / 600);
+    char tm[24];
+    if(min >= 60) snprintf(tm, sizeof tm, "%d h %02d min", min / 60, min % 60);
+    else snprintf(tm, sizeof tm, "%d min", min);
+    int n = snprintf(line, sizeof line, "%s · %s", bgn_dist_text(rem_dm, d, sizeof d), tm);
+    time_t now = time(NULL);
+    struct tm lt;
+    if(now > 1700000000 && localtime_r(&now, &lt)) {          /* só com relógio acertado */
+        time_t eta = now + rem_ds / 10;
+        localtime_r(&eta, &lt);
+        if(n > 0 && n < (int)sizeof line) {
+            line[n] = 0;
+            char a[32];
+            snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
+            snprintf(line + n, sizeof line - (size_t)n, " · %s", a);
+        }
+    }
+    lv_label_set_text(bot_lbl, line);
+}
+
+static void close_sheet(void)
+{
+    if(sheet) { lv_obj_delete(sheet); sheet = NULL; }
+}
+
+static void end_navigation(void)
+{
+    N.navigating = N.simulate = N.rerouting = N.active = N.has_dest = N.waiting = 0;
+    bgn_free(&N.route);
+    memset(&N.st, 0, sizeof N.st);
+    set_route_overlay(NULL, 0);
+    close_sheet();
+    if(banner) lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
+    if(botbar) lv_obj_add_flag(botbar, LV_OBJ_FLAG_HIDDEN);
+    if(sim_chip) lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
+    if(info_chip) lv_obj_remove_flag(info_chip, LV_OBJ_FLAG_HIDDEN);
+    heading_up = N.prev_heading_up;
+    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    cur.rot = 0;
+    update_marker();
+    request();
+}
+
+static void end_cb(lv_event_t *e) { (void)e; end_navigation(); }
+static void cancel_cb(lv_event_t *e) { (void)e; end_navigation(); }
+
+static void start_navigation(bool simulate)
+{
+    close_sheet();
+    N.navigating = 1;
+    N.simulate = simulate;
+    N.sim_t = 0;
+    N.said_next = -1;
+    N.route.seg = 0;
+    N.route.off_count = 0;
+    N.prev_heading_up = heading_up;
+    heading_up = true;
+    lv_label_set_text(rot_lbl, LV_SYMBOL_UP);
+    follow = true;
+    lv_obj_remove_flag(banner, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(botbar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(info_chip, LV_OBJ_FLAG_HIDDEN);             /* a barra de baixo ocupa o lugar */
+    if(simulate) lv_obj_remove_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
+    cur.zoom256 = N.profile >= BGR_BIKE ? 17 * 256 : 16 * 256 + 128;
+    update_scale();
+    char t[160];
+    if(N.route.nman) { bgn_text(&N.route.man[0], t, sizeof t); say(t); }
+    if(simulate) on_fix(N.route.xy[0], N.route.xy[1], 0, -1, true);
+    else if(have_pos) {
+        uint32_t x, y;
+        bgr_lonlat_to_world(pos_lon, pos_lat, &x, &y);
+        on_fix(x, y, pos_speed, pos_course, pos_live);
+    }
+}
+
+static void start_cb(lv_event_t *e) { (void)e; start_navigation(false); }
+static void sim_cb(lv_event_t *e) { (void)e; start_navigation(true); }
+
+static lv_obj_t *sheet_new(void)
+{
+    close_sheet();
+    sheet = bf_card(ov);
+    lv_obj_set_size(sheet, 620, LV_SIZE_CONTENT);
+    lv_obj_align(sheet, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+    lv_obj_set_flex_flow(sheet, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(sheet, BF_SP_S, 0);
+    lv_obj_add_flag(sheet, LV_OBJ_FLAG_CLICKABLE);              /* não deixa o toque passar para o mapa */
+    return sheet;
+}
+
+static lv_obj_t *sheet_row(lv_obj_t *parent)
+{
+    lv_obj_t *r = bf_plain(parent);
+    lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(r, BF_SP_S, 0);
+    return r;
+}
+
+static void sheet_message(const char *title, const char *text)
+{
+    lv_obj_t *sh = sheet_new();
+    bf_label(sh, title, BF_FONT_M, pal()->text);
+    lv_obj_t *l = bf_label(sh, text, BF_FONT_S, pal()->text_dim);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_t *row = sheet_row(sh);
+    lv_obj_t *b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
+    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void route_request(int profile, bool reroute)
+{
+    uint32_t sx, sy;
+    int heading = -1;
+    if(N.simulate && N.navigating) { sx = N.st.x; sy = N.st.y; }
+    else if(have_pos) {
+        bgr_lonlat_to_world(pos_lon, pos_lat, &sx, &sy);
+        if(pos_live && pos_speed >= 8) heading = (int)lround(pos_course);
+    } else return;
+    bgrt_req_t q = { ++N.req_id, profile, sx, sy, heading, N.dx, N.dy };
+    N.profile = profile;
+    N.waiting = 1;
+    N.rerouting = reroute;
+    bgrt_request(&q);
+}
+
+static void profile_cb(lv_event_t *e)
+{
+    int profile = (int)(intptr_t)lv_event_get_user_data(e);
+    if(!have_pos) { sheet_message(tr(S_MAP_DEST), tr(S_MAP_NOPOS)); return; }
+    lv_obj_t *sh = sheet_new();
+    bf_label(sh, tr(S_MAP_CALC), BF_FONT_M, pal()->text);
+    if(!pos_live) {
+        lv_obj_t *l = bf_label(sh, tr(S_MAP_FROM_LAST), BF_FONT_S, pal()->text_dim);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, LV_PCT(100));
+    }
+    route_request(profile, false);
+}
+
+static void open_dest_sheet(uint32_t x, uint32_t y)
+{
+    if(N.navigating) return;
+    bgn_free(&N.route);
+    set_route_overlay(NULL, 0);
+    N.active = 0;
+    N.has_dest = 1;
+    N.dx = x;
+    N.dy = y;
+    update_marker();
+    lv_obj_t *sh = sheet_new();
+    bf_label(sh, tr(S_MAP_DEST), BF_FONT_M, pal()->text);
+    bf_label(sh, tr(S_MAP_DEST_HINT), BF_FONT_S, pal()->text_dim);
+    lv_obj_t *row = sheet_row(sh);
+    static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
+    for(int i = 0; i < BGR_PROFILES; i++) {
+        lv_obj_t *b = bf_button(row, NULL, tr(names[i]), i == BGR_CAR ? 1 : 0);
+        lv_obj_set_height(b, 48);
+        if(bgrt_have_profile(i)) lv_obj_add_event_cb(b, profile_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        else lv_obj_add_state(b, LV_STATE_DISABLED);
+    }
+    lv_obj_t *b = bf_button(row, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_height(b, 48);
+    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void route_result(bgrt_res_t *r)
+{
+    N.waiting = 0;
+    if(r->id != N.req_id) { bgn_free(&r->route); return; }       /* resposta antiga */
+    if(r->rc != BGRT_OK) {
+        bgn_free(&r->route);
+        if(N.rerouting) { N.rerouting = 0; N.route.off_count = 0; return; }   /* tenta de novo ao sair da rota */
+        bf_str_t why = r->rc == BGRT_NOFILE ? S_MAP_NOFILE : r->rc == BGRT_NOSTART ? S_MAP_NOSTART
+                     : r->rc == BGRT_NODEST ? S_MAP_NODEST : S_MAP_NOROUTE;
+        sheet_message(tr(S_MAP_DEST), tr(why));
+        return;
+    }
+    bgn_free(&N.route);
+    N.route = r->route;
+    snprintf(N.dest_name, sizeof N.dest_name, "%s", r->dest_name);
+    N.active = 1;
+    set_route_overlay(N.route.xy, N.route.npts);
+    if(N.rerouting) {
+        N.rerouting = 0;
+        N.said_next = -1;
+        say(tr(S_MAP_REROUTE));
+        return;
+    }
+    /* visão geral com resumo */
+    fit_route();
+    lv_obj_t *sh = sheet_new();
+    char d[32], line[160];
+    int min = (int)((N.route.total_ds + 300) / 600);
+    if(min >= 60) snprintf(line, sizeof line, "%s · %d h %02d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min / 60, min % 60);
+    else snprintf(line, sizeof line, "%s · %d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min);
+    bf_label(sh, line, BF_FONT_L, pal()->text);
+    if(N.dest_name[0]) bf_label(sh, N.dest_name, BF_FONT_S, pal()->text_dim);
+    lv_obj_t *row = sheet_row(sh);
+    lv_obj_t *b = bf_button(row, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
+    lv_obj_set_height(b, 48);
+    lv_obj_add_event_cb(b, start_cb, LV_EVENT_CLICKED, NULL);
+    if(!pos_live) lv_obj_add_state(b, LV_STATE_DISABLED);       /* sem GPS: só simulação */
+    b = bf_button(row, LV_SYMBOL_SHUFFLE, tr(S_MAP_SIM), 0);
+    lv_obj_set_height(b, 48);
+    lv_obj_add_event_cb(b, sim_cb, LV_EVENT_CLICKED, NULL);
+    b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
+    lv_obj_set_height(b, 48);
+    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+}
+
+/* uma posição (GPS ou simulação) */
+static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live)
+{
+    have_pos = true;
+    pos_live = live;
+    bgr_world_to_lonlat(x, y, &pos_lon, &pos_lat);
+    pos_speed = speed;
+    if(speed >= 3.0 && course >= 0) pos_course = course;
+    uint32_t cx = x, cy = y;
+    if(N.navigating) {
+        bgn_update(&N.route, x, y, speed, speed >= 3 ? pos_course : -1, &N.st);
+        if(N.st.valid) { cx = N.st.x; cy = N.st.y; }           /* a câmera segue o ponto na via */
+        if(N.st.off_route && !N.rerouting && !N.waiting && !N.simulate) route_request(N.profile, true);
+        announce();
+        update_banner();
+        update_botbar();
+        if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
+        /* zoom pela velocidade: mais longe na estrada */
+        int z = N.profile >= BGR_BIKE ? 17 * 256 : speed > 80 ? 15 * 256 + 128 : speed > 50 ? 16 * 256 : 16 * 256 + 128;
+        if(follow && z != cur.zoom256) { cur.zoom256 = z; update_scale(); }
+    }
+    if(follow) {
+        cur.cx = cx;
+        cur.cy = cy;
+        cur.rot = heading_up ? -(int)lround(pos_course) : 0;
+        request();
+    }
+    update_marker();
+}
+
+/* simulação: avança 1 s pela rota na velocidade dos trechos */
+static void sim_step(void)
+{
+    const bgn_route_t *r = &N.route;
+    if(r->npts < 2) return;
+    uint32_t total = r->cum_ds[r->npts - 1];
+    N.sim_t += 10;
+    if(N.sim_t > total) N.sim_t = total;
+    int k = 0;
+    while(k + 1 < r->npts - 1 && r->cum_ds[k + 1] < N.sim_t) k++;
+    double span = (double)r->cum_ds[k + 1] - r->cum_ds[k], f = span > 0 ? (N.sim_t - r->cum_ds[k]) / span : 1;
+    const uint32_t *a = &r->xy[2 * k], *b = &r->xy[2 * k + 2];
+    uint32_t x = a[0] + (uint32_t)(int32_t)lround(f * (double)(int32_t)(b[0] - a[0]));
+    uint32_t y = a[1] + (uint32_t)(int32_t)lround(f * (double)(int32_t)(b[1] - a[1]));
+    double hd = atan2((double)(int32_t)(b[0] - a[0]), -(double)(int32_t)(b[1] - a[1])) * 180 / M_PI;
+    double kmh = span > 0 ? ((double)r->cum_dm[k + 1] - r->cum_dm[k]) / span * 3.6 : 0;
+    on_fix(x, y, kmh, hd < 0 ? hd + 360 : hd, true);
+}
+
 /* -------------------------------------------------------------- eventos */
 static void gps_update(void)
 {
     gps_info_t g;
     gps_read(&g);
     update_info(&g);
-    pos_live = g.running && g.state >= GPS_FIX2D;
-    if(!pos_live) return;
-    have_pos = true;
-    pos_lat = g.lat;
-    pos_lon = g.lon;
-    pos_speed = g.speed_kmh;
-    if(g.speed_kmh >= 3.0) pos_course = g.course;
-    if(follow) {
-        bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
-        cur.rot = heading_up ? -(int)lround(pos_course) : 0;
-        request();
+    if(N.navigating && N.simulate) { sim_step(); return; }   /* a simulação substitui o GPS */
+    bool live = g.running && g.state >= GPS_FIX2D;
+    if(!live) {
+        if(pos_live) { pos_live = false; update_marker(); }
+        return;
     }
-    update_marker();
+    uint32_t x, y;
+    bgr_lonlat_to_world(g.lon, g.lat, &x, &y);
+    on_fix(x, y, g.speed_kmh, g.speed_kmh >= 3.0 ? g.course : -1, true);
 }
 
 static void tick_cb(lv_timer_t *t)
@@ -408,6 +871,11 @@ static void tick_cb(lv_timer_t *t)
         lv_image_set_src(img, &dsc[R.front]);
         update_offset();
         lv_obj_invalidate(img);
+    }
+    bgrt_res_t rr;
+    if(bgrt_poll(&rr)) route_result(&rr);
+    if(N.arrived_ms) {                                /* chegou: encerra depois de 5 s */
+        if((N.arrived_ms += 100) > 5000) { N.arrived_ms = 0; end_navigation(); }
     }
     gps_ms += 100;
     if(gps_ms >= 1000) {
@@ -449,6 +917,12 @@ static void press_cb(lv_event_t *e)
         bgr_screen_to_world(&v, &s, v.ox - dx, v.oy - dy, &cur.cx, &cur.cy);
         update_offset();
         request();
+    } else if(c == LV_EVENT_LONG_PRESSED) {
+        if(dragging || N.navigating || !R.started) return;
+        rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+        uint32_t x, y;
+        bgr_screen_to_world(&shown, &s, p.x - off_x, p.y - off_y, &x, &y);
+        open_dest_sheet(x, y);
     } else if(c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
         dragging = false;
     }
@@ -524,6 +998,13 @@ static lv_obj_t *chip(lv_obj_t *parent)
     return c;
 }
 
+void scr_map_demo(int step);
+static bool demo_alive;
+static void demo_timer(lv_timer_t *t)
+{
+    if(demo_alive) scr_map_demo((int)(intptr_t)lv_timer_get_user_data(t));
+}
+
 /* primeiro .bgm em <dir>/mapas ou <dir> (ordem alfabética) */
 static bool find_map(char *out, size_t n)
 {
@@ -580,6 +1061,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_add_event_cb(ov, press_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(ov, press_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(ov, press_cb, LV_EVENT_PRESS_LOST, NULL);
+    lv_obj_add_event_cb(ov, press_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     img = lv_image_create(ov);
     lv_obj_remove_flag(img, LV_OBJ_FLAG_CLICKABLE);
@@ -589,6 +1071,10 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(layer, layer_draw, LV_EVENT_DRAW_MAIN, NULL);
     if(!mk_dsc[0].data) mk_build();
+    dmark = lv_image_create(ov);
+    lv_image_set_src(dmark, &mk_dsc[3]);
+    lv_obj_remove_flag(dmark, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN);
     mark = lv_image_create(ov);
     lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
@@ -608,9 +1094,9 @@ static void create(lv_obj_t *parent, int arg)
     b = round_btn(ov, LV_SYMBOL_BARS, sats_cb, 0);
     lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + 4 * (BTN + 10));
 
-    lv_obj_t *c = chip(ov);
-    lv_obj_align(c, LV_ALIGN_BOTTOM_LEFT, 12, -12);
-    info_lbl = bf_label(c, "", BF_FONT_S, p->text);
+    info_chip = chip(ov);
+    lv_obj_align(info_chip, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+    info_lbl = bf_label(info_chip, "", BF_FONT_S, p->text);
 
     lv_obj_t *sc = chip(ov);
     lv_obj_set_flex_flow(sc, LV_FLEX_FLOW_COLUMN);
@@ -625,6 +1111,59 @@ static void create(lv_obj_t *parent, int arg)
     /* atribuição exigida pela ODbL: sempre visível */
     lv_obj_t *attr = bf_label(sc, "\xC2\xA9 OpenStreetMap", BF_FONT_S, p->text_dim);
     (void)attr;
+
+    /* navegação: faixa da manobra, barra do que falta, aviso de simulação */
+    banner = lv_obj_create(ov);
+    lv_obj_remove_style_all(banner);
+    lv_obj_set_size(banner, 632, 104);
+    lv_obj_set_pos(banner, 80, 12);
+    lv_obj_set_style_bg_color(banner, lv_color_hex(0x1e6e34), 0);
+    lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(banner, 14, 0);
+    lv_obj_set_style_shadow_width(banner, 14, 0);
+    lv_obj_set_style_shadow_opa(banner, LV_OPA_40, 0);
+    lv_obj_remove_flag(banner, LV_OBJ_FLAG_SCROLLABLE);
+    memset(&icon_dsc, 0, sizeof icon_dsc);
+    icon_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    icon_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    icon_dsc.header.w = 80;
+    icon_dsc.header.h = 80;
+    icon_dsc.header.stride = 160;
+    icon_dsc.data = (const uint8_t *)icon_px;
+    icon_dsc.data_size = sizeof icon_px;
+    icon_type = icon_exit = -1;
+    ban_icon = lv_image_create(banner);
+    lv_obj_set_pos(ban_icon, 12, 12);
+    ban_dist = bf_label(banner, "", BF_FONT_L, lv_color_white());
+    lv_obj_set_pos(ban_dist, 104, 8);
+    ban_text = bf_label(banner, "", BF_FONT_M, lv_color_white());
+    lv_obj_set_pos(ban_text, 104, 44);
+    lv_label_set_long_mode(ban_text, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(ban_text, 516);
+    ban_then = bf_label(banner, "", BF_FONT_S, lv_color_hex(0xcfe8d4));
+    lv_obj_set_pos(ban_then, 104, 74);
+    lv_label_set_long_mode(ban_then, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(ban_then, 516);
+    lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
+
+    botbar = chip(ov);
+    lv_obj_add_flag(botbar, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(botbar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(botbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(botbar, BF_SP_M, 0);
+    lv_obj_align(botbar, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+    bot_lbl = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_t *eb = bf_button(botbar, LV_SYMBOL_CLOSE, tr(S_MAP_END), 2);
+    lv_obj_set_height(eb, 44);
+    lv_obj_add_event_cb(eb, end_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(botbar, LV_OBJ_FLAG_HIDDEN);
+
+    sim_chip = chip(ov);
+    lv_obj_set_style_bg_color(sim_chip, lv_color_hex(0xd93025), 0);
+    lv_obj_set_style_bg_opa(sim_chip, LV_OPA_COVER, 0);
+    bf_label(sim_chip, tr(S_MAP_SIMULATING), BF_FONT_S, lv_color_white());
+    lv_obj_align(sim_chip, LV_ALIGN_TOP_MID, 6, 124);
+    lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
 
     set_follow(follow);
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
@@ -676,6 +1215,10 @@ static void create(lv_obj_t *parent, int arg)
         cur.cy = h->bbox[1] / 2 + h->bbox[3] / 2;
         cur.zoom256 = 11 * 256;
     }
+    {
+        const char *base = getenv("BIGFOSTON_BIGGPS");
+        bgrt_start(base && *base ? base : BIGGPS_DIR_DEFAULT);
+    }
     R.stop = R.has_req = R.done = 0;
     R.front = 0;
     int rc = pthread_create(&R.th, NULL, worker, NULL);
@@ -685,10 +1228,20 @@ static void create(lv_obj_t *parent, int arg)
     gps_update();
     request();
     tick = lv_timer_create(tick_cb, 100, NULL);
+    /* teste no aparelho sem toque (docs/big-gps): BIGGPS_DEMO=1 marca o destino da
+     * demonstração e, 6 s depois, simula o percurso */
+    demo_alive = true;
+    if(getenv("BIGGPS_DEMO")) {
+        lv_timer_t *t1 = lv_timer_create(demo_timer, 3000, (void *)0);
+        lv_timer_set_repeat_count(t1, 1);
+        lv_timer_t *t2 = lv_timer_create(demo_timer, 9000, (void *)1);
+        lv_timer_set_repeat_count(t2, 1);
+    }
 }
 
 static void destroy(void)
 {
+    demo_alive = false;
     if(tick) { lv_timer_delete(tick); tick = NULL; }
     if(R.started) {
         pthread_mutex_lock(&R.mu);
@@ -698,13 +1251,36 @@ static void destroy(void)
         pthread_join(R.th, NULL);
         R.started = 0;
     }
+    bgrt_stop();
+    if(N.navigating) heading_up = N.prev_heading_up;
+    bgn_free(&N.route);
+    memset(&N, 0, sizeof N);
+    free(R.route);
+    R.route = NULL;
+    R.route_n = 0;
     last_save();
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
-    img = layer = mark = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
+    img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
+    sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;
     have_shown = 0;
     nplaced = 0;
+}
+
+/* --screenshot: 0 destino em Taguatinga (carro), 1 começa a simulação, 2 avança 60 s */
+void scr_map_demo(int step)
+{
+    if(step == 0) {
+        uint32_t x, y;
+        bgr_lonlat_to_world(-48.0560, -15.8335, &x, &y);
+        open_dest_sheet(x, y);
+        if(bgrt_have_profile(BGR_CAR) && have_pos) route_request(BGR_CAR, false);
+    } else if(step == 1) {
+        if(N.active) start_navigation(true);
+    } else if(step == 2) {
+        for(int i = 0; i < 60 && N.navigating; i++) sim_step();
+    }
 }
 
 const bf_screen_def_t scr_map_def = { create, destroy, S_APP_GPS, NULL };

@@ -23,8 +23,9 @@ Geofabrik .osm.pbf ──► osm-clip.py (região)    bfgps ──► /run/bigfo
 | Ferramenta de teste/medição | `src/ui/biggps/bgview.c` | C | feito |
 | Construtor de rotas (CH) | `tools/big-gps/builder/bgroute-build.cpp` | C++ (RoutingKit) | feito |
 | Consulta de rotas | `src/ui/biggps/bgroute.c` | C | feito |
-| Navegação, voz, busca | `src/ui/biggps/`, `src/ui/` | C | a fazer |
-| Tela no shell | `src/ui/screens/scr_map.c` | C (LVGL 9) | mapa feito; rota a fazer |
+| Navegação (manobras, acompanhamento, recálculo) | `src/ui/biggps/bgnav.c`, `bgrouter.c` | C | feito |
+| Voz, busca | `src/ui/biggps/`, `src/ui/` | C | a fazer |
+| Tela no shell | `src/ui/screens/scr_map.c` | C (LVGL 9) | mapa, destino, rota e navegação |
 
 O código do aparelho (`src/ui/biggps/`) não depende do LVGL: devolve um buffer RGB565 e uma
 lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no aparelho.

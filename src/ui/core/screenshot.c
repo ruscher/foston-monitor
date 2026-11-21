@@ -222,6 +222,9 @@ int screenshot_run(const char *dir)
                     fclose(gf);
                 }
                 go(SCR_MAP, 0); pump(3000); shot("42-biggps-mapa");
+                scr_map_demo(0); pump(4000); shot("42b-biggps-rota");
+                scr_map_demo(1); pump(2500); shot("42c-biggps-navegacao");
+                scr_map_demo(2); pump(2500); shot("42d-biggps-navegacao-adiante");
                 go(SCR_HOME, 0); pump(100);
             }
             unsetenv("BIGFOSTON_GPS_STATUS");

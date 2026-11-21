@@ -56,6 +56,8 @@ uint32_t bgr_arc_way(bgr_pack_t *p, uint32_t arc);
 uint32_t bgr_arc_len_dm(bgr_pack_t *p, uint32_t arc);
 uint32_t bgr_arc_time_ds(bgr_pack_t *p, uint32_t arc);
 void bgr_node_xy(bgr_pack_t *p, uint32_t node, uint32_t *x, uint32_t *y);
+/* arcs leaving node u are [bgr_node_first_out(u), bgr_node_first_out(u + 1)) */
+uint32_t bgr_node_first_out(bgr_pack_t *p, uint32_t node);
 /* Arc geometry from tail to head (tail and head included); returns the point count
  * (up to max, xy as x,y pairs). */
 int bgr_arc_points(bgr_pack_t *p, uint32_t arc, uint32_t *xy, int max);

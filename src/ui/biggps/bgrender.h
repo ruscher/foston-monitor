@@ -37,6 +37,11 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s,
 
 uint16_t bgr_background(int night);
 
+/* Draw a polyline given in world coordinates over a rendered view (the route): casing of
+ * width cw16, then the line of width w16 (1/16 px); cw16 = 0 draws no casing. */
+void bgr_draw_polyline(const bgr_view_t *v, rast_surface_t *s, const uint32_t *xy, int n,
+                       int w16, uint16_t color, int cw16, uint16_t casing);
+
 /* Conversions (double math: call per GPS fix or per touch, not per vertex). */
 void bgr_lonlat_to_world(double lon, double lat, uint32_t *x, uint32_t *y);
 void bgr_world_to_lonlat(uint32_t x, uint32_t y, double *lon, double *lat);
