@@ -47,6 +47,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | Bateria e carregador | **FUNCIONANDO** | carga por software (algoritmo do CE) ligada por padrão; carregador de tomada: 16 min em corrente constante sem falhas (21/11/2026); USB do PC: recusa (VCHG cai abaixo de 4,35 V sob carga), com histerese; ícone com raio e verde na carga completa | [battery-charger.md](battery-charger.md) |
 | USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (High-Speed) | `ssh root@192.168.7.2` (login 0,55 s; antes 5,9 s pela espera de DNS reverso); TCP 3,7 MB/s PC→FOSTON, 6,2 MB/s FOSTON→PC (21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
+| USB ao ligar sem cabo | **FUNCIONANDO** | sem cabo no boot o CE deixa o bloco USB desligado; o glue o liga como o CE (conferido 21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
 | GPS (MT3328) | **NÃO IMPLEMENTADO** | protocolo binário *host-based*; a posição sai da biblioteca proprietária do CE | [uart.md](uart.md) |
@@ -94,6 +95,5 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | USB com o aparelho ligado sem cabo: conferir no aparelho a correção (o glue liga o bloco USB como o CE quando o encontra desligado) | conectar ao PC a qualquer momento | baixo: log de boot no cartão (`BigFoston/logs/boot.log`) |
-| 2 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
-| 3 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |
+| 1 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
+| 2 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

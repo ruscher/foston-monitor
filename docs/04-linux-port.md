@@ -129,8 +129,10 @@ Limitações atuais: PIO (sem o DMA Inventra); tirar e recolocar o cabo funciona
 falhava** (21/11/2026: nenhum evento USB no PC): sem cabo no boot, o CE deixa o bloco USB
 desligado (PHY `0x600` b7 / `0x60C` b8, clock e PMU `0x80061358` b0). O glue agora lê
 esses bits no probe e, se estiverem desligados, liga o bloco com a sequência do
-`usbfn.dll`/`bus.dll` (sem a detecção de carregador); com cabo no boot nada é escrito
-— **falta conferir no aparelho**. O MAC visto pelo PC é fixo (`g_cdc.host_addr=02:46:53:37:30:01`)
+`usbfn.dll`/`bus.dll` (sem a detecção de carregador); com cabo no boot nada é escrito.
+**Conferido em 21/11/2026:** boot sem cabo, `USB block: phy 9c406000 00004844 … pmu 00000000`
+→ ligado → `phy 9c486080 10004944 … pmu 00000001` (os mesmos valores de um boot com
+cabo); o cabo ligado aos 53 s levantou a rede USB em High-Speed. O MAC visto pelo PC é fixo (`g_cdc.host_addr=02:46:53:37:30:01`)
 e a conexão `bigfoston` do NetworkManager o usa, em qualquer porta USB (conferido em
 21/11/2026). O log do kernel fica no cartão em `BigFoston/logs/boot.log` (aos 45 s e aos
 3 min; conferido). Com cabo no boot o probe registra o bloco ligado
