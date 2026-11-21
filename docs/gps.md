@@ -1,6 +1,6 @@
 # GPS (MT3328) no BigFoston
 
-Estado: **não implementado — estudo de viabilidade concluído (21/11/2026)**, plano abaixo.
+Estado: **em andamento** — M1/M2 concluídos (o `gps.dll` roda no Linux); M3 (hardware) bloqueado: o MT3328 não responde ao boot do DSP no Linux (21/11/2026). Detalhes no fim.
 
 ## Como o GPS funciona no aparelho
 
@@ -58,3 +58,33 @@ Cuidados de ABI: `printf` do CE recebe doubles sem alinhamento de 8 bytes (preci
 
 Ferramentas e saídas da análise (desmontagem, imports, strings) ficaram em
 `scratchpad/re-gps/` da sessão de 21/11/2026; os endereços acima permitem refazer.
+
+## Andamento (21/11/2026)
+
+**M1/M2 (sem hardware):** `src/gps/bfgps` carrega o `gps.dll` (imagem BFX1 feita por
+`tools/bigfoston/gps-extract.py` do backup da NAND, guardada só no cartão do próprio
+aparelho), resolve os 140 imports e roda o motor: `GPS_HWInit: GPS_Reset=64;
+GPS_Standby=63`, tabela `GIO1:`, threads, filas, registro, VCOM e o boot do DSP em
+38400/921600.
+
+**No Windows CE o GPS funciona:** `src/wince/gpsopen` (abre `COM1:` e grava o NMEA no
+cartão) recebeu 36 928 bytes de `$GPGGA/$GPGSA/$GPGSV/$GPRMC/$GPVTG` em 150 s (dentro de
+casa, partida a frio: 0 satélites).
+
+**M3 no Linux (`bfgps --hw -s`): o chip não responde.** O `gps.dll` manda, a cada tentativa,
+pacotes binários `04 24 … 0d 0a` em 38400 e em 921600 depois do reset (GPIO 64) e só chega
+um `00` (o *break* do próprio reset); nunca há resposta, então o firmware do DSP nunca é
+enviado.
+
+| Hipótese | Resultado |
+|---|---|
+| UART em modo 16x com `RATE_FIX`=1 deixado pelo CE | corrigido: o `8250_mt3351` programa como o `uart.dll` (HIGHSPEED 3, amostras, `RATE_FIX`); continua sem resposta |
+| ordem reset/standby | conferida no OAL (`nk.exe` 0x8C04A0D0): `{64, 63}` |
+| RTS/DTR | aplicados como o DCB do `gps.dll` (DTR 0, RTS 1); sem mudança |
+| pinmux da UART1 (`uart.dll`) | o `uart.dll` não mexe em pinos; `0x80001000–0x80001703` (pinmux e clocks) iguais no CE e no Linux |
+| alimentação (PMU `0x8006136C`) | igual; o `gps.dll` desliga e religa no mesmo milissegundo (sem efeito real) |
+| GPIO 30/33 saída no CE, entrada no Linux; bloco `0x800027x0` | diferença real, mas o `gps.dll` não usa esses pinos; continuam assim no CE com o GPS parado — provavelmente outro driver |
+
+**Próximo teste:** provar se a transmissão do Linux chega ao chip — com o GPS ligado pelo
+CE (`gpsopen`), iniciar o Linux, ouvir a 921600 (o DSP carregado transmite medidas) e
+enviar um dos pacotes do `gps.dll` ao DSP em execução, sem reset.
