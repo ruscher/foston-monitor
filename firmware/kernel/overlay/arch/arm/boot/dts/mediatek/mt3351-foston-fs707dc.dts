@@ -105,8 +105,14 @@
 		 */
 		touchscreen@80034000 {
 			compatible = "mediatek,mt3351-ts";
-			/* ADC (touch and battery aux mode), PMU charger status word (read only) */
-			reg = <0x80034000 0x100>, <0x80061420 0x4>;
+			/*
+			 * ADC (touch and battery aux mode); PMU charger status word;
+			 * PMU charger words 0x80061378..0x8006142b (CE Battdrvr.dll,
+			 * not 0x80061374 = SD power); 0x8002c018 (read only, bit7
+			 * must be set to charge)
+			 */
+			reg = <0x80034000 0x100>, <0x80061420 0x4>,
+			      <0x80061378 0xb4>, <0x8002c018 0x4>;
 			touchscreen-inverted-x;
 			touchscreen-inverted-y;
 		};
@@ -145,7 +151,7 @@
 		audio@8004b000 {
 			compatible = "foston,fs707dc-audio";
 			reg = <0x8004b000 0x210>, <0x80061100 0x110>,
-			      <0x80001300 0x50>, <0x80002000 0x400>;
+			      <0x80001300 0x50>, <0x80002000 0x500>;	/* GPIO up to DIN (+0x400) */
 			reg-names = "dma", "analog", "pdn", "gpio";
 		};
 

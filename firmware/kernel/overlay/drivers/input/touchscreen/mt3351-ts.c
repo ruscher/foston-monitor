@@ -34,6 +34,7 @@
  * Linux does not (yet), see docs.
  */
 #include <linux/bitops.h>
+#include <linux/delay.h>
 #include <linux/input.h>
 #include <linux/input/touchscreen.h>
 #include <linux/io.h>
@@ -43,7 +44,9 @@
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
+#include <linux/reboot.h>
 #include <linux/sort.h>
+#include <linux/workqueue.h>
 
 #define MT3351_TS_CHAN		0x3c
 #define MT3351_TS_CTRL		0x40
@@ -63,11 +66,42 @@
 #define MT3351_AUX_START	0x04
 #define MT3351_AUX_STA		0x0c
 #define MT3351_AUX_BAT		0x28
+#define MT3351_AUX_ISENSE	0x2c
+#define MT3351_AUX_VCHG		0x30
+#define MT3351_CHR_FAULT	BIT(1)
+#define MT3351_CHR_NOBAT	BIT(2)
 #define MT3351_CHR_PRESENT	BIT(3)
+#define MT3351_CHR_CV		BIT(4)
+#define MT3351_CHR_S1001	BIT(12)
+#define MT3351_CHR_PRE		BIT(13)
 #define MT3351_CHR_CHARGING	BIT(14)
+#define MT3351_CHR_INVALID	BIT(15)
+
+/* charger words, offsets from 0x80061378 (CE Battdrvr.dll, docs/battery-charger.md) */
+#define CHR_CON		0x00	/* bit1 charge on, [8:5] current code; CE Init 0xA00 (CV 4.2 V) */
+#define CHR_LED		0x8c	/* 0x80061404: bit0 charging, bit4 full, bit8 */
+#define CHR_410		0x98	/* 0x80061410: CE sets bits 6, 7 every cycle */
+#define CHR_WDT		0x9c	/* 0x80061414: 0xa250 then 0xa257 re-arms the charge watchdog */
+#define CHR_KEY		0xa0	/* 0x80061418: 0xaf26 before each change of CHR_CON */
+#define CHR_STA		0xa8	/* 0x80061420 */
+#define CHR_FLT		0xb0	/* 0x80061428: [1:0] 2 = watchdog timeout, 3 = temperature; bit2 RTC */
+#define CHR_WIN		0xb4
+#define CHR_KEY_VAL	0xaf26
+#define CHR_ON		BIT(1)
+#define CHR_CUR		GENMASK(8, 5)
+#define CHR_PERIOD_S	10
 
 #define MT3351_TS_MAX		1023
 #define MT3351_TS_SAMPLES	5
+
+/* Charging is done by software, as Windows CE does; off until enabled. */
+static bool charge;
+module_param(charge, bool, 0644);
+MODULE_PARM_DESC(charge, "charge the battery (Windows CE Battdrvr.dll algorithm)");
+
+static unsigned int charge_current = 0x80;
+module_param(charge_current, uint, 0644);
+MODULE_PARM_DESC(charge_current, "CC current code written to [8:5] (0x80, 0xa0 or 0xe0 as CE; default the lowest)");
 
 static unsigned int poll_ms = 10;
 module_param(poll_ms, uint, 0444);
@@ -97,6 +131,16 @@ struct mt3351_ts {
 	struct power_supply *bat, *ac;
 	unsigned long bat_jiffies;
 	int bat_mv;
+	/* charger */
+	struct device *dev;
+	void __iomem *pmu;		/* 0x80061378..0x8006142b */
+	void __iomem *c018;		/* 0x8002c018, read only: bit7 must be 1 to charge */
+	struct delayed_work chg_work;
+	bool chg_on, chg_full, chg_locked;
+	int chg_state;			/* 0 idle, CE states 0x1000..0x1003 */
+	unsigned int pre_s, cv_s, total_s;
+	int vbat, visense, vchg, low_count;
+	int last_log;
 };
 
 static bool mt3351_ts_pen(struct mt3351_ts *ts)
@@ -244,6 +288,204 @@ static int mt3351_bat_capacity(int mv)
 	return 10;
 }
 
+/* ---- charger ---- */
+
+/* VBAT, VISENSE (both x 5600/1023) and VCHG (x 14000/1023), averaged over the
+ * samples taken while the charger status is valid (CE 0x3bb3264) */
+static bool mt3351_chg_adc(struct mt3351_ts *ts)
+{
+	unsigned int n = 0, b = 0, i = 0, c = 0, k;
+	u32 sta;
+
+	mutex_lock(&ts->lock);
+	for (k = 0; k < MT3351_TS_SAMPLES; k++) {
+		writel(0, ts->base + MT3351_AUX_START);
+		writel(0x1ff, ts->base + MT3351_AUX_START);
+		if (readl_poll_timeout(ts->base + MT3351_AUX_STA, sta, !(sta & 1), 10, 10000))
+			break;
+		if (readl(ts->chr) & MT3351_CHR_INVALID)
+			continue;
+		b += readl(ts->base + MT3351_AUX_BAT) & MT3351_TS_MAX;
+		i += readl(ts->base + MT3351_AUX_ISENSE) & MT3351_TS_MAX;
+		c += readl(ts->base + MT3351_AUX_VCHG) & MT3351_TS_MAX;
+		n++;
+	}
+	mutex_unlock(&ts->lock);
+	if (!n)
+		return false;
+	ts->vbat = b * 5600 / (1023 * n);
+	ts->visense = i * 5600 / (1023 * n);
+	ts->vchg = c * 14000 / (1023 * n);
+	return true;
+}
+
+static void mt3351_chg_con(struct mt3351_ts *ts, u32 clear, u32 set)
+{
+	u32 v = readl(ts->pmu + CHR_CON);
+
+	writel(CHR_KEY_VAL, ts->pmu + CHR_KEY);
+	writel((v & ~clear) | set, ts->pmu + CHR_CON);
+}
+
+static void mt3351_chg_led(struct mt3351_ts *ts, u32 set)
+{
+	u32 v = readl(ts->pmu + CHR_LED);
+
+	writel((v & ~(BIT(0) | BIT(4) | BIT(8))) | set, ts->pmu + CHR_LED);
+}
+
+/* stop charging: CE 0x3bb4070 / 0x3bb4104 */
+static void mt3351_chg_stop(struct mt3351_ts *ts, bool full)
+{
+	mt3351_chg_con(ts, CHR_ON, 0);
+	writel(0xa250, ts->pmu + CHR_WDT);
+	mt3351_chg_led(ts, full ? BIT(4) : 0);
+	ts->chg_on = false;
+	ts->chg_state = 0;
+}
+
+static void mt3351_chg_kick(struct mt3351_ts *ts)
+{
+	writel(0xa250, ts->pmu + CHR_WDT);
+	udelay(100);
+	writel(0xa257, ts->pmu + CHR_WDT);
+}
+
+/* CE 0x3bb3910: switch the charger on for a moment and read the phase */
+static int mt3351_chg_probe_state(struct mt3351_ts *ts)
+{
+	u32 sta;
+
+	mt3351_chg_con(ts, 0, CHR_ON);
+	udelay(100);
+	sta = readl(ts->chr);
+	mt3351_chg_con(ts, CHR_ON, 0);
+	if (sta & MT3351_CHR_PRE)
+		return 0x1000;
+	if (sta & MT3351_CHR_S1001)
+		return 0x1001;
+	return sta & MT3351_CHR_CV ? 0x1003 : 0x1002;
+}
+
+static void mt3351_chg_log(struct mt3351_ts *ts, int what, const char *msg)
+{
+	if (what == ts->last_log)
+		return;
+	ts->last_log = what;
+	dev_info(ts->dev, "charger: %s (VBAT %d mV, I %d, VCHG %d mV)\n", msg, ts->vbat,
+		 (ts->visense - ts->vbat) * 5, ts->vchg);
+}
+
+static void mt3351_chg_work(struct work_struct *w)
+{
+	struct mt3351_ts *ts = container_of(to_delayed_work(w), struct mt3351_ts, chg_work);
+	u32 sta = readl(ts->chr), flt = readl(ts->pmu + CHR_FLT);
+	unsigned int cur = charge_current;
+	bool was_on = ts->chg_on;
+	int st;
+
+	if (!mt3351_chg_adc(ts))
+		goto again;
+
+	/* on battery: orderly power-off below 3450 mV (+100 as CE), 3 readings in a row */
+	if (!(sta & MT3351_CHR_PRESENT) && ts->vbat > 2000 && ts->vbat + 100 < 3450) {
+		if (++ts->low_count >= 3) {
+			dev_crit(ts->dev, "battery low (%d mV): powering off\n", ts->vbat);
+			orderly_poweroff(true);
+		}
+	} else {
+		ts->low_count = 0;
+	}
+
+	if (!(sta & MT3351_CHR_PRESENT)) {
+		if (ts->chg_on || ts->chg_locked || ts->chg_full)
+			mt3351_chg_stop(ts, false);
+		ts->chg_full = ts->chg_locked = false;
+		ts->pre_s = ts->cv_s = ts->total_s = 0;
+		mt3351_chg_log(ts, 1, "no charger");
+		goto changed;
+	}
+	if (!charge) {
+		if (ts->chg_on)
+			mt3351_chg_stop(ts, false);
+		mt3351_chg_log(ts, 2, "charging disabled");
+		goto changed;
+	}
+	if (ts->chg_locked)
+		goto again;
+	if ((sta & (MT3351_CHR_FAULT | MT3351_CHR_NOBAT | MT3351_CHR_INVALID)) ||
+	    (flt & 3) >= 2 || (flt & BIT(2)) || !(readl(ts->c018) & BIT(7)) ||
+	    ts->vchg <= 4350 || ts->vchg >= 6000) {
+		if (ts->chg_on)
+			mt3351_chg_stop(ts, false);
+		dev_warn(ts->dev, "charger: not charging (status %#x, fault %#x, %#x, VCHG %d mV)\n",
+			 sta, flt, readl(ts->c018), ts->vchg);
+		ts->last_log = 3;
+		goto changed;
+	}
+	if (ts->chg_full) {
+		if (ts->vbat >= 4000)
+			goto again;
+		ts->chg_full = false;			/* recharge */
+		ts->pre_s = ts->cv_s = ts->total_s = 0;
+	}
+
+	writel(readl(ts->pmu + CHR_410) | 0xc0, ts->pmu + CHR_410);
+	st = mt3351_chg_probe_state(ts);
+	if (cur != 0x80 && cur != 0xa0 && cur != 0xe0)
+		cur = 0x80;
+	switch (st) {
+	case 0x1000:				/* pre-charge */
+		ts->pre_s += CHR_PERIOD_S;
+		if (ts->pre_s > 1800) {
+			mt3351_chg_stop(ts, false);
+			ts->chg_locked = true;		/* until the charger is removed */
+			dev_err(ts->dev, "charger: pre-charge longer than 30 min, stopped\n");
+			goto changed;
+		}
+		mt3351_chg_con(ts, 0, CHR_ON);
+		break;
+	case 0x1002:				/* constant current */
+		mt3351_chg_kick(ts);
+		mt3351_chg_con(ts, CHR_ON, 0);
+		writel(0, ts->pmu + CHR_KEY);
+		mt3351_chg_con(ts, CHR_CUR, cur);
+		mt3351_chg_con(ts, 0, CHR_ON);
+		break;
+	default:				/* 0x1001 and constant voltage */
+		mt3351_chg_kick(ts);
+		mt3351_chg_con(ts, 0, CHR_ON);
+		break;
+	}
+	ts->chg_on = true;
+	ts->chg_state = st;
+	mt3351_chg_led(ts, BIT(0));
+	ts->total_s += CHR_PERIOD_S;
+	if (st == 0x1003) {
+		ts->cv_s += CHR_PERIOD_S;
+		/* end of charge: current down to 50 in CV, or 2 h in CV */
+		if ((was_on && (ts->visense - ts->vbat) * 5 <= 50) || ts->cv_s >= 7200) {
+			mt3351_chg_stop(ts, true);
+			ts->chg_full = true;
+			mt3351_chg_log(ts, 4, "full");
+			goto changed;
+		}
+	}
+	if (ts->total_s >= 28800) {			/* 8 h */
+		mt3351_chg_stop(ts, true);
+		ts->chg_full = true;
+		mt3351_chg_log(ts, 5, "8 h limit reached");
+		goto changed;
+	}
+	mt3351_chg_log(ts, st, st == 0x1000 ? "pre-charge" : st == 0x1002 ? "constant current" :
+		       st == 0x1003 ? "constant voltage" : "charging (state 0x1001)");
+changed:
+	if (ts->bat)
+		power_supply_changed(ts->bat);
+again:
+	schedule_delayed_work(&ts->chg_work, CHR_PERIOD_S * HZ);
+}
+
 static const enum power_supply_property mt3351_bat_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_PRESENT,
@@ -265,7 +507,7 @@ static int mt3351_bat_get(struct power_supply *psy, enum power_supply_property p
 			val->intval = POWER_SUPPLY_STATUS_CHARGING;
 		else if (!(chr & MT3351_CHR_PRESENT))
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
-		else if (mt3351_bat_capacity(mt3351_bat_mv(ts)) >= 100)
+		else if (ts->chg_full || mt3351_bat_capacity(mt3351_bat_mv(ts)) >= 100)
 			val->intval = POWER_SUPPLY_STATUS_FULL;
 		else
 			val->intval = POWER_SUPPLY_STATUS_NOT_CHARGING;
@@ -373,11 +615,27 @@ static int mt3351_ts_probe(struct platform_device *pdev)
 		if (ts->chr) {
 			ts->bat = devm_power_supply_register(dev, &mt3351_bat_desc, &cfg);
 			ts->ac = devm_power_supply_register(dev, &mt3351_ac_desc, &cfg);
-			if (IS_ERR(ts->bat) || IS_ERR(ts->ac))
+			if (IS_ERR(ts->bat) || IS_ERR(ts->ac)) {
 				dev_warn(dev, "battery/charger not registered\n");
-			else
+				ts->bat = NULL;
+			} else {
 				dev_info(dev, "battery %d mV, charger status %#x\n",
 					 mt3351_bat_mv(ts), readl(ts->chr));
+			}
+		}
+		/* charger control: optional, both windows are shared pages (not claimed) */
+		r = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+		ts->pmu = r && resource_size(r) >= CHR_WIN ? devm_ioremap(dev, r->start, CHR_WIN) : NULL;
+		r = platform_get_resource(pdev, IORESOURCE_MEM, 3);
+		ts->c018 = r ? devm_ioremap(dev, r->start, 4) : NULL;
+		if (ts->chr && ts->pmu && ts->c018) {
+			ts->dev = dev;
+			INIT_DELAYED_WORK(&ts->chg_work, mt3351_chg_work);
+			platform_set_drvdata(pdev, ts);
+			schedule_delayed_work(&ts->chg_work, 2 * HZ);
+			dev_info(dev, "charger control %s (CON %#x, status %#x, fault %#x)\n",
+				 charge ? "on" : "off", readl(ts->pmu + CHR_CON), readl(ts->chr),
+				 readl(ts->pmu + CHR_FLT));
 		}
 	}
 
@@ -392,8 +650,27 @@ static const struct of_device_id mt3351_ts_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, mt3351_ts_of_match);
 
+/* power-off, reboot, unbind: never leave the charger switched on without the
+ * software that re-arms its watchdog */
+static void mt3351_ts_shutdown(struct platform_device *pdev)
+{
+	struct mt3351_ts *ts = platform_get_drvdata(pdev);
+
+	if (!ts || !ts->pmu)
+		return;
+	cancel_delayed_work_sync(&ts->chg_work);
+	mt3351_chg_stop(ts, false);
+}
+
+static void mt3351_ts_remove(struct platform_device *pdev)
+{
+	mt3351_ts_shutdown(pdev);
+}
+
 static struct platform_driver mt3351_ts_driver = {
 	.probe = mt3351_ts_probe,
+	.remove = mt3351_ts_remove,
+	.shutdown = mt3351_ts_shutdown,
 	.driver = {
 		.name = "mt3351-ts",
 		.of_match_table = mt3351_ts_of_match,

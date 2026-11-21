@@ -15,6 +15,7 @@
  *               PMU shares the page)
  *   0x80001344 / 0x80001324  clock gate clear / set, bits of ids 37 and 43
  *   0x80002000/+0x100/+0x200/+0x300  GPIO 5 (dir, pull-up, pull-down, out)
+ *   0x80002400 bit 12                headphone detect (input level, polled)
  *
  * The period interrupt (IRQ 55) is not used yet: a timer reports periods
  * and the position comes from the DMA's read address (+0x08).
@@ -25,10 +26,13 @@
 #include <linux/io.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
 #include <sound/control.h>
 #include <sound/core.h>
 #include <sound/initval.h>
+#include <sound/jack.h>
 #include <sound/pcm.h>
 #include <sound/tlv.h>
 
@@ -64,13 +68,22 @@
 #define GPIO_PU		0x100
 #define GPIO_PD		0x200
 #define GPIO_OUT	0x300
+#define GPIO_DIN	0x400	/* input level, bank 0 (CE wavedev 0x3c1a4f4) */
 #define AMP_PIN		BIT(5)
+#define HP_PIN		BIT(12)	/* headphone detect (CE: pin 12, EINT6 = IRQ 70) */
+#define CFG204_SPK	BIT(12)	/* 0x11f0 with the speaker, 0x01f0 with headphones */
+#define HP_POLL_MS	200
 
 #define BUF_MAX		(64 * 1024)
 
 static int volume = 5;
 module_param(volume, int, 0444);
 MODULE_PARM_DESC(volume, "initial speaker volume 0..15 (5 sounded right on the device)");
+
+/* CE: level 1 -> "headphones" (inferred from wavedev_drv.dll, see docs/audio.md) */
+static bool hp_active_high = true;
+module_param(hp_active_high, bool, 0444);
+MODULE_PARM_DESC(hp_active_high, "headphone detect pin is high when a plug is in");
 
 struct mt3351_audio {
 	struct device *dev;
@@ -81,6 +94,13 @@ struct mt3351_audio {
 	ktime_t period;
 	bool powered;
 	int volume;
+	struct mutex route;		/* amplifier / 0x204 routing */
+	bool hp;			/* headphones plugged (debounced) */
+	bool hp_raw;
+	int hp_same;
+	bool spk_switch;		/* "Speaker Playback Switch" */
+	struct snd_jack *jack;
+	struct delayed_work hp_work;
 };
 
 static void rmw16(void __iomem *r, u16 clear, u16 set)
@@ -96,6 +116,49 @@ static void rmw32(void __iomem *r, u32 clear, u32 set)
 static void mt3351_set_volume(struct mt3351_audio *a)
 {
 	rmw16(a->ana + ANA_GAIN, 0xff, a->volume | a->volume << 4);
+}
+
+/*
+ * Speaker vs headphones, as the CE headphone thread (0x3c0c2e4): with a plug
+ * in, bit 12 of 0x8004b204 is cleared and the speaker amplifier is off; the
+ * headphones always get the DAC. Nothing in the analog words changes.
+ * Called with a->route held (or before the card exists).
+ */
+static void mt3351_apply_route(struct mt3351_audio *a)
+{
+	bool amp = a->powered && !a->hp && a->spk_switch;
+
+	if (a->powered)
+		rmw16(a->dma + ADMA_CFG204, CFG204_SPK, a->hp ? 0 : CFG204_SPK);
+	rmw32(a->gpio + GPIO_OUT, AMP_PIN, amp ? AMP_PIN : 0);
+}
+
+static bool mt3351_hp_read(struct mt3351_audio *a)
+{
+	bool high = readl(a->gpio + GPIO_DIN) & HP_PIN;
+
+	return high == hp_active_high;
+}
+
+/* polled detection: a change counts after two equal reads (the CE EINT has
+ * a ~62 ms hardware debounce); the IRQ path needs an EINT irqchip */
+static void mt3351_hp_work(struct work_struct *w)
+{
+	struct mt3351_audio *a = container_of(to_delayed_work(w), struct mt3351_audio, hp_work);
+	bool now = mt3351_hp_read(a);
+
+	if (now != a->hp_raw) {
+		a->hp_raw = now;
+		a->hp_same = 0;
+	} else if (now != a->hp && ++a->hp_same >= 1) {
+		mutex_lock(&a->route);
+		a->hp = now;
+		mt3351_apply_route(a);
+		mutex_unlock(&a->route);
+		snd_jack_report(a->jack, now ? SND_JACK_HEADPHONE : 0);
+		dev_info(a->dev, "headphones %s\n", now ? "in" : "out");
+	}
+	schedule_delayed_work(&a->hp_work, msecs_to_jiffies(HP_POLL_MS));
 }
 
 /* CE start sequence (wavedev_drv.dll 0x3c0ea8c, 0x3c0db24), minus the DMA run bit */
@@ -115,11 +178,11 @@ static void mt3351_power_on(struct mt3351_audio *a)
 	rmw16(a->ana + ANA_DRV, 0x1f, 0x1f);
 	rmw16(a->ana + ANA_GAIN, 0x300, 0);		/* unmute */
 	writel(0x5b, a->dma + ADMA_CFG208);
-	writel(0x11f0, a->dma + ADMA_CFG204);
+	writel(a->hp ? 0x01f0 : 0x11f0, a->dma + ADMA_CFG204);	/* CE 0x3c0dba0 */
 	writel(1, a->dma + ADMA_AFE);
 	writel(0, a->dma + ADMA_ALT);
-	rmw32(a->gpio + GPIO_OUT, 0, AMP_PIN);		/* speaker amplifier on */
 	a->powered = true;
+	mt3351_apply_route(a);
 }
 
 static void mt3351_power_off(struct mt3351_audio *a)
@@ -201,7 +264,9 @@ static int mt3351_close(struct snd_pcm_substream *ss)
 	struct mt3351_audio *a = snd_pcm_substream_chip(ss);
 
 	hrtimer_cancel(&a->timer);
+	mutex_lock(&a->route);
 	mt3351_power_off(a);
+	mutex_unlock(&a->route);
 	a->substream = NULL;
 	return 0;
 }
@@ -222,7 +287,9 @@ static int mt3351_prepare(struct snd_pcm_substream *ss)
 	rmw16(a->dma + ADMA_GAIN, 0xffff, 0x1000);
 	writew(rt->rate / 40, a->dma + ADMA_PERIOD);
 	a->period = ns_to_ktime(div_u64((u64)rt->period_size * NSEC_PER_SEC, rt->rate));
+	mutex_lock(&a->route);
 	mt3351_power_on(a);
+	mutex_unlock(&a->route);
 	return 0;
 }
 
@@ -309,6 +376,36 @@ static const struct snd_kcontrol_new mt3351_vol_ctl = {
 	.tlv.p = mt3351_vol_tlv,
 };
 
+static int mt3351_spk_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *uv)
+{
+	struct mt3351_audio *a = snd_kcontrol_chip(kc);
+
+	uv->value.integer.value[0] = a->spk_switch;
+	return 0;
+}
+
+static int mt3351_spk_put(struct snd_kcontrol *kc, struct snd_ctl_elem_value *uv)
+{
+	struct mt3351_audio *a = snd_kcontrol_chip(kc);
+	bool on = uv->value.integer.value[0];
+
+	if (on == a->spk_switch)
+		return 0;
+	mutex_lock(&a->route);
+	a->spk_switch = on;
+	mt3351_apply_route(a);
+	mutex_unlock(&a->route);
+	return 1;
+}
+
+static const struct snd_kcontrol_new mt3351_spk_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "Speaker Playback Switch",
+	.info = snd_ctl_boolean_mono_info,
+	.get = mt3351_spk_get,
+	.put = mt3351_spk_put,
+};
+
 static int mt3351_audio_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -322,6 +419,9 @@ static int mt3351_audio_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	a->dev = dev;
 	a->volume = clamp(volume, 0, 15);
+	a->spk_switch = true;
+	mutex_init(&a->route);
+	INIT_DELAYED_WORK(&a->hp_work, mt3351_hp_work);
 	a->dma = devm_platform_ioremap_resource_byname(pdev, "dma");
 	if (IS_ERR(a->dma))
 		return PTR_ERR(a->dma);
@@ -366,11 +466,22 @@ static int mt3351_audio_probe(struct platform_device *pdev)
 	ret = snd_ctl_add(a->card, snd_ctl_new1(&mt3351_vol_ctl, a));
 	if (ret)
 		return ret;
+	ret = snd_ctl_add(a->card, snd_ctl_new1(&mt3351_spk_ctl, a));
+	if (ret)
+		return ret;
+	/* "Headphone Jack" control + input device (SW_HEADPHONE_INSERT) */
+	ret = snd_jack_new(a->card, "Headphone", SND_JACK_HEADPHONE, &a->jack, true, false);
+	if (ret)
+		return ret;
 	ret = snd_card_register(a->card);
 	if (ret)
 		return ret;
 	platform_set_drvdata(pdev, a);
-	dev_info(dev, "speaker ready, volume %d/15\n", a->volume);
+	a->hp = a->hp_raw = mt3351_hp_read(a);
+	snd_jack_report(a->jack, a->hp ? SND_JACK_HEADPHONE : 0);
+	schedule_delayed_work(&a->hp_work, msecs_to_jiffies(HP_POLL_MS));
+	dev_info(dev, "speaker ready, volume %d/15, headphones %s (pin 12 %s = in)\n", a->volume,
+		 a->hp ? "in" : "out", hp_active_high ? "high" : "low");
 	return 0;
 }
 
@@ -378,8 +489,11 @@ static void mt3351_audio_remove(struct platform_device *pdev)
 {
 	struct mt3351_audio *a = platform_get_drvdata(pdev);
 
+	cancel_delayed_work_sync(&a->hp_work);
 	hrtimer_cancel(&a->timer);
+	mutex_lock(&a->route);
 	mt3351_power_off(a);
+	mutex_unlock(&a->route);
 }
 
 static const struct of_device_id mt3351_audio_of_match[] = {

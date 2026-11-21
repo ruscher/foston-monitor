@@ -86,8 +86,9 @@ add_before "$T/sound/arm/Kconfig" 'config SND_PXA2XX_AC97' 'config SND_MT3351
 	tristate "FOSTON FS-707DC speaker (MediaTek MT3351 audio DMA)"
 	depends on ARCH_MT3351 || COMPILE_TEST
 	select SND_PCM
+	select SND_JACK
 	help
-	  Speaker playback of the FOSTON FS-707DC.
+	  Speaker playback of the FOSTON FS-707DC, with headphone detection.
 '
 add "$T/sound/arm/Makefile" 'obj-$(CONFIG_SND_MT3351)	+= mt3351-audio.o'
 add_before "$T/drivers/tty/serial/8250/Kconfig" 'config SERIAL_8250_MT6577' 'config SERIAL_8250_MT3351
