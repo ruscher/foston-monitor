@@ -1,0 +1,212 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * FOSTON FS-707DC (MediaTek MT3351), BigFoston OS.
+ * Every address here was measured on the device: docs/01-hardware.md.
+ */
+/dts-v1/;
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	model = "FOSTON FS-707DC";
+	compatible = "foston,fs707dc", "mediatek,mt3351";
+	interrupt-parent = <&cirq>;
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	chosen {
+		/* bootargs and the initrd range are filled in by tools/bigfoston/mkboot.py */
+		bootargs = "loglevel=7 rdinit=/init user_debug=31 print_fatal_signals=1 memtest=2";
+	};
+
+	/* 0x03e00000-0x03ffffff is video memory (framebuffer at 0x03e00030) */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x03e00000>,
+		      <0x04000000 0x04000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/*
+		 * Windows CE leaves bus masters running after the hand-over that
+		 * keep writing into its old buffers here: GDMA channel 9 (START
+		 * set, PGMADDR 0x007f3c00, COUNT 0x1f00, port 0x8002e00c, read on
+		 * the device) and something writing at 0x007e8000 (found by
+		 * bftest step 6: /bin/busybox pages corrupted in RAM, which made
+		 * the shell crash). The whole megabyte is kept away from Linux.
+		 */
+		ce-dma-buffers@700000 {
+			reg = <0x00700000 0x100000>;
+			no-map;
+		};
+
+		/* kernel log kept across a reset, read back from Windows CE by bfagent */
+		ramoops@3f00000 {
+			compatible = "ramoops";
+			reg = <0x03f00000 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+		};
+	};
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,arm1176jzf-s";
+			reg = <0>;
+		};
+	};
+
+	framebuffer@3e00030 {
+		compatible = "simple-framebuffer";
+		reg = <0x03e00030 (800 * 480 * 2)>;
+		width = <800>;
+		height = <480>;
+		stride = <(800 * 2)>;
+		format = "r5g6b5";
+	};
+
+	usb_phy: usb-phy {
+		/* the PHY is left powered and configured by Windows CE */
+		compatible = "usb-nop-xceiv";
+		#phy-cells = <0>;
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		cirq: interrupt-controller@80022000 {
+			compatible = "mediatek,mt3351-cirq";
+			reg = <0x80022000 0x200>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+
+		timer@8002a000 {
+			compatible = "mediatek,mt3351-gpt";
+			reg = <0x8002a000 0x100>;
+			interrupts = <39 IRQ_TYPE_LEVEL_HIGH>;
+			/* 468 MHz / 32 as configured by the boot loader, measured */
+			clock-frequency = <14625000>;
+		};
+
+		/*
+		 * Resistive touchscreen ADC (CE touch.dll maps 0x80034000, 100 bytes).
+		 * Raw X falls from left to right and raw Y from top to bottom.
+		 */
+		touchscreen@80034000 {
+			compatible = "mediatek,mt3351-ts";
+			/*
+			 * ADC (touch and battery aux mode); PMU charger status word;
+			 * PMU charger words 0x80061378..0x8006142b (CE Battdrvr.dll,
+			 * not 0x80061374 = SD power); 0x8002c018 (read only, bit7
+			 * must be set to charge)
+			 */
+			reg = <0x80034000 0x100>, <0x80061420 0x4>,
+			      <0x80061378 0xb4>, <0x8002c018 0x4>;
+			touchscreen-inverted-x;
+			touchscreen-inverted-y;
+		};
+
+		/*
+		 * SD slot, MSDC1 (CE sdhc_drv.dll: MemBase 0x8002E000 + 0x1000 * MsdcIndex 1,
+		 * card-detect IRQ 15). CE leaves it powered and clocked from UPLL 48 MHz.
+		 */
+		mmc@8002f000 {
+			compatible = "mediatek,mt3351-msdc";
+			reg = <0x8002f000 0x100>;
+			bus-width = <4>;
+		};
+
+		/*
+		 * Backlight level, one word of the PMU (CE buses.dll BKL: 0..19 at
+		 * 0x80061300 + 0x08). Only this word is mapped: the rest of the PMU
+		 * holds SD power, charger and suspend controls.
+		 */
+		backlight@80061308 {
+			compatible = "foston,fs707dc-backlight";
+			reg = <0x80061308 0x4>;
+		};
+
+		/* watchdog: used only to restart, as the CE OAL does (nk.exe OALIoCtlHalReboot) */
+		watchdog@80003000 {
+			compatible = "mediatek,mt3351-wdt-reboot";
+			reg = <0x80003000 0x20>;
+		};
+
+		/*
+		 * Speaker: audio DMA (CE wavedev_drv.dll, IRQ 55 not used yet), the
+		 * analog words of the PMU page, the clock gates and GPIO 5 (amplifier).
+		 * The shared pages are mapped by the driver without claiming them.
+		 */
+		audio@8004b000 {
+			compatible = "foston,fs707dc-audio";
+			reg = <0x8004b000 0x210>, <0x80061100 0x110>,
+			      <0x80001300 0x50>, <0x80002000 0x500>;	/* GPIO up to DIN (+0x400) */
+			reg-names = "dma", "analog", "pdn", "gpio";
+		};
+
+		/*
+		 * UART1..4 (CE COM2..COM5, uart.dll): 16550, 4-byte stride, 29.25 MHz
+		 * (468 MHz / 16, same source as the GPT). UART1 = GPS (MT3328),
+		 * UART2 = Bluetooth; CE leaves their receive DMA running (GDMA
+		 * channels 0x10/0x11), stopped by the driver.
+		 */
+		serial@80026000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80026000 0x100>;
+			interrupts = <3 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+			mediatek,ce-rx-dma = <0x80024018>;
+		};
+
+		serial@80027000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80027000 0x100>;
+			interrupts = <4 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+			mediatek,ce-rx-dma = <0x80024118>;
+		};
+
+		serial@80028000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80028000 0x100>;
+			interrupts = <5 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+		};
+
+		serial@80029000 {
+			compatible = "mediatek,mt3351-uart";
+			reg = <0x80029000 0x100>;
+			interrupts = <6 IRQ_TYPE_LEVEL_HIGH>;
+			clock-frequency = <29250000>;
+		};
+
+		/* Mentor MUSBHDRC (EPINFO 0x44, RAMINFO 0x4a read on the device); CE: MemBase, Irq 8 */
+		usb@80100000 {
+			compatible = "mediatek,mt3351-musb";
+			/*
+			 * MUSB + PHY (0x600..0x61b), then, only to power the block on
+			 * when Windows CE left it off (no cable at boot), the words its
+			 * usbfn.dll/bus.dll use: clock gate 0x80001204 bit 7, PDN status
+			 * and clear 0x80001300/0x80001340 bit 1, 0x8006002c bit 15 and
+			 * PMU 0x80061358 bit 0.
+			 */
+			reg = <0x80100000 0x1000>, <0x80001204 0x4>, <0x80001300 0x44>,
+			      <0x8006002c 0x4>, <0x80061358 0x4>;
+			interrupts = <8 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-names = "mc";
+			phys = <&usb_phy>;
+			dr_mode = "peripheral";
+		};
+	};
+};

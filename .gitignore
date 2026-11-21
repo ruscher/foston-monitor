@@ -8,3 +8,12 @@ pkg/
 lab/state/
 lab/settings.json
 __pycache__/
+# Build trees (Buildroot output 11 GB, program build dirs) - regenerated from source
+firmware/build/
+src/*/build/
+src/*/*/build/
+src/baremetal/*/build/
+# LVGL is downloaded and verified by src/ui/tools/fetch_lvgl.sh
+src/ui/third_party/lvgl/
+# nanosvg is downloaded and verified by src/ui/tools/fetch_nanosvg.sh
+src/ui/third_party/nanosvg/

@@ -1,0 +1,8 @@
+Fontes usadas para gerar src/ui/assets/fonts/*.c (via tools/make_fonts.sh):
+
+- Montserrat-Medium.ttf — SIL Open Font License 1.1 (Julieta Ulanovsky et al.).
+  Copiada de lvgl v9.2.2 scripts/built_in_font/.
+- FontAwesome5-Solid+Brands+Regular.woff — Font Awesome Free 5: fontes sob
+  SIL OFL 1.1, ícones sob CC BY 4.0 (https://fontawesome.com/license/free).
+  Copiada de lvgl v9.2.2 scripts/built_in_font/.
+- DejaVuSansMono.ttf — licença Bitstream Vera / DejaVu (livre).

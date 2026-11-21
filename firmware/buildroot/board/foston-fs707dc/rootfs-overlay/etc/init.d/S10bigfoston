@@ -1,0 +1,23 @@
+#!/bin/sh
+# BigFoston OS bring-up report: written to the kernel log, which the
+# framebuffer console of the board shows (no serial port, no input yet).
+case "$1" in
+start)
+    echo 30 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
+    (
+        say() { echo "bigfoston: $*" > /dev/kmsg; }
+        say "userland up: BusyBox $(busybox | head -n1 | cut -d' ' -f2), $(uname -srm)"
+        say "cpu: $(grep -m1 -E 'model name|Processor' /proc/cpuinfo | cut -d: -f2)"
+        say "mem: $(grep -E 'MemTotal|MemFree' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
+        say "root: $(df -h / | tail -n1 | tr -s ' ')"
+        n=0
+        while :; do
+            sleep 10
+            n=$((n + 10))
+            udc=$(cat /sys/class/udc/*/state 2>/dev/null)
+            usbirq=$(grep -m1 musb /proc/interrupts | tr -s ' ' | cut -d' ' -f3)
+            say "alive ${n}s load $(cut -d' ' -f1 /proc/loadavg) | usb ${udc:-none} irqs ${usbirq:-0}"
+        done
+    ) &
+    ;;
+esac

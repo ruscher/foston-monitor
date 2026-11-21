@@ -1,0 +1,24 @@
+--- a/src/drivers/display/fb/lv_linux_fbdev.c
++++ b/src/drivers/display/fb/lv_linux_fbdev.c
+@@ -183,12 +183,19 @@
+     /* Figure out the size of the screen in bytes*/
+     dsc->screensize =  dsc->finfo.smem_len;/*finfo.line_length * vinfo.yres;*/
+ 
+-    /* Map the device to memory*/
+-    dsc->fbp = (char *)mmap(0, dsc->screensize, PROT_READ | PROT_WRITE, MAP_SHARED, dsc->fbfd, 0);
++    /* Map the device to memory.
++     * BigFoston: the FS-707DC framebuffer starts 0x30 bytes into its page and
++     * mmap() of /dev/fb0 maps from the page start, so step over that offset. */
++    size_t page_off = 0;
++#if !LV_LINUX_FBDEV_BSD
++    page_off = dsc->finfo.smem_start & (unsigned long)(sysconf(_SC_PAGESIZE) - 1);
++#endif
++    dsc->fbp = (char *)mmap(0, dsc->screensize + page_off, PROT_READ | PROT_WRITE, MAP_SHARED, dsc->fbfd, 0);
+     if((intptr_t)dsc->fbp == -1) {
+         perror("Error: failed to map framebuffer device to memory");
+         return;
+     }
++    dsc->fbp += page_off;
+ 
+     /* Don't initialise the memory to retain what's currently displayed / avoid clearing the screen.
+      * This is important for applications that only draw to a subsection of the full framebuffer.*/

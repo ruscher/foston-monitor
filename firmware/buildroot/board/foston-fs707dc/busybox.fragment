@@ -1,0 +1,5 @@
+# Applets extras do BusyBox para o BigFoston (somados à configuração padrão do Buildroot)
+# ntpd: cliente NTP da "atualização automática" de Ajustes > Data (só cliente; ~10 KB)
+CONFIG_NTPD=y
+# CONFIG_FEATURE_NTPD_SERVER is not set
+# CONFIG_FEATURE_NTPD_CONF is not set

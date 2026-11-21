@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Data e hora
+Name[en]=Date and time
+Name[es]=Fecha y hora
+Comment=date
+Exec=date
+Terminal=true

@@ -1,0 +1,166 @@
+#!/bin/sh
+# bigfoston-sd — monta, ejeta e vigia o cartão SD do FOSTON. Nunca formata.
+#
+#   bigfoston-sd mount    monta (só leitura; com gravação se o cartão traz a marca)
+#   bigfoston-sd eject    grava o que falta e desmonta (o cartão pode sair)
+#   bigfoston-sd lost     desmonta um cartão que saiu sem ser ejetado
+#   bigfoston-sd status   rw | ro | ejected | absent
+#   bigfoston-sd watch    laço: monta o cartão que entra, limpa o que sai
+#
+# Gravação só no cartão que traz BigFoston/linux-rw com o número de série DELE
+# ("serial=0x...", criado depois do teste tools/bigfoston/sd-write-test.sh);
+# então a pasta de dados do shell (/data/bigfoston) fica em BigFoston/data.
+# Um cartão "sujo" (energia cortada) passa pelo fsck.fat antes de gravar.
+DEV=/dev/mmcblk0p1
+MNT=/mnt/sd
+DATA=/data/bigfoston
+PARAM=/sys/module/mt3351_msdc/parameters/readonly
+DRV=/sys/bus/platform/drivers/mt3351-msdc
+LOCK=/run/bigfoston-sd.lock
+EJECTED=/run/bigfoston-sd-ejected
+RO_OPTS=ro,noatime,iocharset=iso8859-1,utf8
+RW_OPTS=rw,noatime,flush,iocharset=iso8859-1,utf8,errors=remount-ro
+
+log() { echo "sdcard: $*" > /dev/kmsg; echo "$*"; }
+
+lock() {
+    n=0
+    until mkdir "$LOCK" 2>/dev/null; do
+        n=$((n + 1)); [ $n -gt 60 ] && return 1; sleep 0.5
+    done
+    trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+}
+
+mounted() { grep -q " $MNT " /proc/mounts; }
+
+wait_dev() {
+    n=0
+    while [ ! -b "$DEV" ] && [ $n -lt "$1" ]; do sleep 0.5; n=$((n + 1)); done
+    [ -b "$DEV" ]
+}
+
+# o driver só aplica "readonly" ao (re)iniciar o cartão: desliga e religa o host
+set_readonly() {
+    want=N; [ "$1" = 1 ] && want=Y                   # parâmetro booleano: o kernel mostra Y/N
+    [ "$(cat "$PARAM" 2>/dev/null)" = "$want" ] && return 0
+    echo "$1" > "$PARAM" || return 1
+    for d in "$DRV"/*.*; do
+        [ -e "$d" ] || continue
+        name=$(basename "$d")
+        echo "$name" > "$DRV/unbind" && echo "$name" > "$DRV/bind"
+    done
+    sleep 1
+    wait_dev 20
+}
+
+# FAT32 "dirty" (setor de boot 0x41, bit 0): ligado pelo Linux enquanto monta
+# com gravação, desligado ao desmontar direito
+fat_dirty() {
+    [ "$(( $(dd if="$DEV" bs=1 skip=65 count=1 2>/dev/null | hexdump -e '1/1 "%u"') & 1 ))" = 1 ]
+}
+
+check_fat() {
+    rm -f /tmp/fsck-sd.log
+    command -v fsck.fat >/dev/null || return 0
+    fat_dirty || return 0
+    log "cartão marcado como não desmontado; verificando (fsck.fat -a)"
+    fsck.fat -a -w "$DEV" > /tmp/fsck-sd.log 2>&1
+    log "fsck.fat terminou com código $? (0 = sem erros, 1 = corrigido)"
+    return 0
+}
+
+do_mount() {
+    mounted && { log "já montado"; return 0; }
+    wait_dev "${1:-2}" || { log "sem cartão"; return 1; }
+    rm -f "$EJECTED"
+    mkdir -p "$MNT"
+    mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT" || { log "não foi possível montar $DEV"; return 1; }
+    serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null)
+    if [ -n "$serial" ] && grep -qx "serial=$serial" "$MNT/BigFoston/linux-rw" 2>/dev/null; then
+        umount "$MNT"
+        if set_readonly 0 && [ "$(cat /sys/block/mmcblk0/ro 2>/dev/null)" = 0 ] && check_fat &&
+           mount -t vfat -o "$RW_OPTS" "$DEV" "$MNT"; then
+            [ -f /tmp/fsck-sd.log ] && cp /tmp/fsck-sd.log "$MNT/BigFoston/fsck-ultimo.log"
+            mkdir -p "$MNT/BigFoston/data" "$DATA"
+            # primeira vez: leva para o cartão o que já estiver na RAM
+            if [ -z "$(ls -A "$MNT/BigFoston/data")" ] && [ -n "$(ls -A "$DATA")" ]; then
+                cp -r "$DATA"/. "$MNT/BigFoston/data/" && sync
+            fi
+            mount --bind "$MNT/BigFoston/data" "$DATA"
+            log "$DEV em $MNT (gravação liberada, cartão $serial); dados em $DATA"
+        else
+            set_readonly 1
+            mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT"
+            log "falha ao liberar a gravação; $DEV em $MNT (ro)"
+        fi
+    else
+        # cartão sem a marca: o driver volta a recusar gravações antes de montar de novo
+        if [ "$(cat /sys/block/mmcblk0/ro 2>/dev/null)" = 0 ]; then
+            umount "$MNT"
+            set_readonly 1
+            mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT" || { log "não foi possível montar $DEV"; return 1; }
+        fi
+        log "$DEV em $MNT (ro)"
+    fi
+}
+
+do_umount() {
+    sync
+    if grep -q " $DATA " /proc/mounts; then umount "$DATA" || return 1; fi
+    if mounted; then umount "$MNT" || return 1; fi
+    return 0
+}
+
+case "$1" in
+mount)
+    lock || exit 1
+    do_mount "${2:-10}"
+    ;;
+eject)
+    lock || exit 1
+    if do_umount; then
+        touch "$EJECTED"
+        log "cartão ejetado: pode remover"
+    else
+        log "ocupado: $(fuser -m "$MNT" 2>/dev/null)"
+        exit 2
+    fi
+    ;;
+lost)
+    lock || exit 1
+    umount -l "$DATA" 2>/dev/null
+    umount -l "$MNT" 2>/dev/null
+    log "cartão removido sem ejetar"
+    ;;
+status)
+    if mounted; then
+        grep " $MNT " /proc/mounts | grep -q " rw," && echo rw || echo ro
+    elif [ -b "$DEV" ] && [ -f "$EJECTED" ]; then echo ejected
+    else echo absent
+    fi
+    ;;
+watch)
+    # 1 s por volta, só lê /proc e /dev; espera enquanto outra operação trava
+    # Ao inserir, os contatos trepidam e o cartão leva ~1 s para iniciar: só
+    # monta depois de vê-lo presente em duas voltas seguidas.
+    seen=0
+    while :; do
+        sleep 1
+        [ -d "$LOCK" ] && continue
+        if [ ! -b "$DEV" ]; then
+            seen=0
+            rm -f "$EJECTED"
+            mounted && "$0" lost >/dev/null
+        elif ! mounted && [ ! -f "$EJECTED" ]; then
+            seen=$((seen + 1))
+            [ $seen -ge 2 ] && { "$0" mount 4 >/dev/null; seen=0; }
+        else
+            seen=0
+        fi
+    done
+    ;;
+*)
+    echo "uso: $0 mount|eject|lost|status|watch" >&2
+    exit 2
+    ;;
+esac

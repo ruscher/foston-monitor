@@ -1,0 +1,5 @@
+config BR2_PACKAGE_BIGFOSTON_BIGSCREEN
+	bool "bigfoston-bigscreen"
+	help
+	  Big Screen Monitor Display client (FSP v1 over a serial
+	  device, drawing into /dev/fb0, touch from evdev).

@@ -1,0 +1,7 @@
+build/
+# arquivos gerados em tempo de execução pelo simulador
+data/settings.conf
+data/history.txt
+data/favorites.txt
+data/pointercal
+data/lang/

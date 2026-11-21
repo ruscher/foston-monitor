@@ -1,0 +1,2 @@
+# unprivileged user the shell's Run app executes commands as (login disabled)
+bigfoston -1 bigfoston -1 * /home/bigfoston /bin/sh - BigFoston Run

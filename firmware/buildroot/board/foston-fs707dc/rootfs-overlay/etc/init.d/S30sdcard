@@ -1,0 +1,19 @@
+#!/bin/sh
+# Cartão SD: monta no boot e deixa o observador (montar o cartão que entra,
+# limpar o que sai) rodando. A lógica fica em /usr/sbin/bigfoston-sd.
+PIDFILE=/run/bigfoston-sdwatch.pid
+case "$1" in
+start)
+    echo 50 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
+    /usr/sbin/bigfoston-sd mount 10
+    /usr/sbin/bigfoston-sd watch > /dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    ;;
+stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
+    sync
+    umount /data/bigfoston 2>/dev/null
+    umount /mnt/sd 2>/dev/null
+    ;;
+esac

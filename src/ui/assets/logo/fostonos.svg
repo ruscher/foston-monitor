@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="title desc">
+  <title id="title">FOSTONOS</title>
+  <desc id="desc">Logotipo vetorial FOSTONOS. Ícone azul-marinho de cantos arredondados, símbolo orbital FOSTON em verde, vermelho e violeta; FOSTON branco e OS branco em negrito.</desc>
+  <defs>
+    <radialGradient id="background" cx="51%" cy="48%" r="73%">
+      <stop offset="0" stop-color="#0a226a"/>
+      <stop offset="0.59" stop-color="#071c56"/>
+      <stop offset="1" stop-color="#03102e"/>
+    </radialGradient>
+    <linearGradient id="swooshGreen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#26dda8"/>
+      <stop offset="0.55" stop-color="#6bed48"/>
+      <stop offset="1" stop-color="#d6f346"/>
+    </linearGradient>
+    <linearGradient id="swooshRed" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ec2476"/>
+      <stop offset="0.48" stop-color="#fd4542"/>
+      <stop offset="0.82" stop-color="#ff831f"/>
+      <stop offset="1" stop-color="#ffc02e"/>
+    </linearGradient>
+    <radialGradient id="sphere" cx="62%" cy="24%" r="75%">
+      <stop offset="0" stop-color="#fffaff"/>
+      <stop offset="0.18" stop-color="#d6cef9"/>
+      <stop offset="0.45" stop-color="#9e92f0"/>
+      <stop offset="0.74" stop-color="#6952d7"/>
+      <stop offset="1" stop-color="#4823b7"/>
+    </radialGradient>
+    <radialGradient id="reflection" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="white" stop-opacity=".42"/>
+      <stop offset="1" stop-color="white" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="176" fill="url(#background)"/>
+
+  <!-- Símbolo FOSTON: duas órbitas vetoriais e a esfera central -->
+  <path fill="url(#swooshGreen)" d="M240 402 C395 297 570 230 709 232 C793 229 842 248 850 281 C858 319 819 356 759 380 C791 346 793 322 747 304 C682 277 548 293 406 350 C339 379 288 400 240 402 Z"/>
+  <path fill="url(#swooshRed)" d="M782 522 C700 575 597 616 491 631 C388 646 324 638 299 616 C267 587 273 553 294 527 C231 559 194 605 205 652 C216 701 303 724 391 715 C542 705 688 624 782 522 Z"/>
+  <circle cx="515" cy="497" r="91" fill="url(#sphere)"/>
+  <ellipse cx="545" cy="461" rx="63" ry="52" fill="url(#reflection)"/>
+
+  <!-- Letras convertidas em contornos: totalmente vetorial, sem dependência de fonte instalada -->
+  <g fill="#f6f7ff" aria-label="FOSTONOS">
+      <path d="M38 39V742Q38 759 49.5 770.0Q61 781 77 781H546Q563 781 574.0 770.0Q585 759 585 743Q585 727 574.0 716.5Q563 706 546 706H116V430H429Q446 430 457.0 419.5Q468 409 468 392Q468 376 457.0 365.0Q446 354 429 354H116V39Q116 23 105.0 11.5Q94 0 77 0Q61 0 49.5 11.5Q38 23 38 39Z" transform="translate(177.337 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M62 391Q62 505 113.5 596.0Q165 687 256.0 739.0Q347 791 461 791Q574 791 665.5 739.0Q757 687 808.5 596.0Q860 505 860 391Q860 277 808.5 185.5Q757 94 665.5 42.0Q574 -10 461 -10Q347 -10 256.0 42.0Q165 94 113.5 185.5Q62 277 62 391ZM783 391Q783 482 741.0 556.5Q699 631 625.5 674.0Q552 717 461 717Q369 717 295.5 674.0Q222 631 180.0 556.5Q138 482 138 391Q138 299 180.0 224.5Q222 150 295.5 107.0Q369 64 461 64Q552 64 625.5 107.0Q699 150 741.0 224.5Q783 299 783 391Z" transform="translate(244.212 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M66 140Q62 147 62 156Q62 170 72.5 179.5Q83 189 101 189Q113 189 123.5 182.5Q134 176 139 164Q162 119 215.5 91.5Q269 64 340 64Q422 64 472.0 103.5Q522 143 522 214Q522 277 475.5 320.0Q429 363 336 375Q220 389 153.5 447.5Q87 506 87 591Q87 651 119.5 696.5Q152 742 209.5 766.5Q267 791 340 791Q419 791 479.0 756.0Q539 721 573 665Q580 654 580 641Q580 622 562 611Q554 607 544 607Q533 607 523.5 612.5Q514 618 508 628Q452 716 339 717Q258 717 211.0 683.0Q164 649 164 586Q164 469 353 444Q477 426 538.0 368.0Q599 310 599 215Q599 145 565.0 94.0Q531 43 472.0 16.5Q413 -10 340 -10Q245 -10 171.5 30.5Q98 71 66 140Z" transform="translate(342.759 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M640 745Q640 730 630.0 720.0Q620 710 604 710H366V39Q366 23 355.0 11.5Q344 0 327 0Q311 0 299.5 11.5Q288 23 288 39V710H51Q35 710 25.0 720.0Q15 730 15 745Q15 761 25.0 771.0Q35 781 51 781H604Q620 781 630.0 771.0Q640 761 640 745Z" transform="translate(413.593 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M62 391Q62 505 113.5 596.0Q165 687 256.0 739.0Q347 791 461 791Q574 791 665.5 739.0Q757 687 808.5 596.0Q860 505 860 391Q860 277 808.5 185.5Q757 94 665.5 42.0Q574 -10 461 -10Q347 -10 256.0 42.0Q165 94 113.5 185.5Q62 277 62 391ZM783 391Q783 482 741.0 556.5Q699 631 625.5 674.0Q552 717 461 717Q369 717 295.5 674.0Q222 631 180.0 556.5Q138 482 138 391Q138 299 180.0 224.5Q222 150 295.5 107.0Q369 64 461 64Q552 64 625.5 107.0Q699 150 741.0 224.5Q783 299 783 391Z" transform="translate(483.678 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M100 39V742Q100 759 111.0 770.0Q122 781 139 781Q157 781 169 767L647 139V742Q647 759 658.5 770.0Q670 781 686 781Q703 781 714.0 770.0Q725 759 725 742V39Q725 23 714.0 11.5Q703 0 686 0Q666 0 657 13L178 641V39Q178 23 167.0 11.5Q156 0 139 0Q122 0 111.0 11.0Q100 22 100 39Z" transform="translate(582.225 841.000) scale(0.107000 -0.107000)"/>
+      <path d="M64 391Q64 507 114.0 598.0Q164 689 254.5 740.0Q345 791 461 791Q576 791 666.5 740.0Q757 689 807.5 598.0Q858 507 858 391Q858 275 807.5 183.5Q757 92 667.0 41.0Q577 -10 461 -10Q345 -10 254.5 41.0Q164 92 114.0 183.5Q64 275 64 391ZM758 391Q758 477 720.0 547.0Q682 617 614.5 657.0Q547 697 461 697Q375 697 307.5 657.0Q240 617 202.0 547.0Q164 477 164 391Q164 305 202.0 235.0Q240 165 308.0 124.5Q376 84 461 84Q546 84 614.0 124.5Q682 165 720.0 235.0Q758 305 758 391Z" transform="translate(674.500 841.000) scale(0.107000 -0.107000)" stroke="#f6f7ff" stroke-width="44" stroke-linejoin="round"/>
+      <path d="M62 149Q57 161 57 169Q57 184 68.0 195.5Q79 207 98 211Q101 212 108 212Q124 212 138.5 202.5Q153 193 160 177Q178 138 231.0 111.0Q284 84 348 84Q423 84 475.0 118.5Q527 153 527 213Q527 270 483.0 310.5Q439 351 349 360Q225 372 154.0 432.5Q83 493 83 584Q83 648 119.5 694.5Q156 741 219.5 765.5Q283 790 362 790Q448 790 507.0 755.0Q566 720 607 655Q619 636 619 619Q619 597 599 583Q588 576 573 576Q558 576 545.0 583.5Q532 591 525 604Q498 649 457.5 672.5Q417 696 355 696Q279 696 232.0 666.5Q185 637 185 581Q185 529 227.0 494.0Q269 459 377 448Q497 436 563.0 375.5Q629 315 629 216Q629 144 590.0 92.5Q551 41 486.5 15.5Q422 -10 348 -10Q251 -10 171.5 34.0Q92 78 62 149Z" transform="translate(773.047 841.000) scale(0.107000 -0.107000)" stroke="#f6f7ff" stroke-width="44" stroke-linejoin="round"/>
+  </g>
+</svg>

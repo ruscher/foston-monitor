@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mensagens do kernel
+Name[en]=Kernel messages
+Name[es]=Mensajes del kernel
+Comment=dmesg (últimas linhas)
+Exec=dmesg
+Terminal=true

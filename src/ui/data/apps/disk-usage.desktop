@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Uso do disco
+Name[en]=Disk usage
+Name[es]=Uso del disco
+Comment=df -h
+Exec=df -h
+Terminal=true

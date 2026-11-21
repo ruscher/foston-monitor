@@ -1,0 +1,14 @@
+BigFoston: TJpgDec com redução na decodificação (JD_USE_SCALE)
+usada pelas miniaturas da Galeria (src/ui/core/cover.c, até 1/4)
+
+--- a/src/libs/tjpgd/tjpgdcnf.h	2026-11-21 12:10:34.789087103 -0300
++++ b/src/libs/tjpgd/tjpgdcnf.h	2026-11-21 12:10:34.790789990 -0300
+@@ -12,7 +12,7 @@
+ /  2: Grayscale (8-bit/pix)
+ */
+ 
+-#define JD_USE_SCALE    0
++#define JD_USE_SCALE    1   /* BigFoston: miniaturas da Galeria decodificadas em 1/2 ou 1/4 (core/cover.c) */
+ /* Switches output descaling feature.
+ /  0: Disable
+ /  1: Enable

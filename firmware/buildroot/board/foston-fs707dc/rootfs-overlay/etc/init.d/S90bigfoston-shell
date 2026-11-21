@@ -1,0 +1,35 @@
+#!/bin/sh
+# Starts the BigFoston graphical shell on /dev/fb0 and restarts it if it
+# exits or crashes. Skipped when the kernel command line has "nogui"; the
+# kernel text console then stays on the screen. SSH is not affected.
+PIDFILE=/var/run/bigfoston-shell.pid
+LOG=/var/log/bigfoston-shell.log
+case "$1" in
+start)
+    grep -qw nogui /proc/cmdline && { echo "bigfoston-shell: nogui"; exit 0; }
+    [ -c /dev/fb0 ] || { echo "bigfoston-shell: no /dev/fb0" > /dev/kmsg; exit 0; }
+    echo 100 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
+    echo "bigfoston: interface iniciando em $(cut -d' ' -f1 /proc/uptime) s" > /dev/kmsg
+    mkdir -p /data/bigfoston
+    . /etc/profile.d/tz.sh
+    (
+        n=0
+        while :; do
+            BIGFOSTON_DATA=/data/bigfoston /usr/bin/bigfoston-shell >> "$LOG" 2>&1
+            rc=$?
+            n=$((n + 1))
+            echo "bigfoston-shell: saiu ($rc), reinicio $n" > /dev/kmsg
+            sleep 2
+        done
+    ) &
+    echo $! > "$PIDFILE"
+    ;;
+stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    killall bigfoston-shell 2>/dev/null
+    rm -f "$PIDFILE"
+    ;;
+restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+esac

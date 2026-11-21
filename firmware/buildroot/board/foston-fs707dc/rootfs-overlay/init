@@ -1,0 +1,17 @@
+#!/bin/sh
+# BigFoston OS bring-up /init: every step goes to the kernel log, which the
+# framebuffer console shows (there is no tty console and no input yet).
+/bin/mount -t devtmpfs devtmpfs /dev
+k() { echo "bigfoston-init: $*" > /dev/kmsg; }
+k "devtmpfs mounted, pid $$"
+/bin/mount -t proc proc /proc && k "proc mounted"
+/bin/mount -t sysfs sysfs /sys && k "sysfs mounted"
+k "$(uname -a)"
+k "$(grep -m1 -i -E 'model name|processor' /proc/cpuinfo)"
+k "$(grep MemTotal /proc/meminfo) $(grep MemFree /proc/meminfo)"
+k "sleep 1 test..."
+sleep 1 && k "sleep 1 ok"
+k "gpt irqs: $(grep mt3351-gpt /proc/interrupts | tr -s ' ')"
+k "starting BusyBox init"
+exec 0</dev/null 1>/dev/kmsg 2>/dev/kmsg
+exec /sbin/init "$@"

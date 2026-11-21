@@ -1,0 +1,41 @@
+# Registro mínimo do Windows CE para o gps.dll (valores do registro do aparelho,
+# backup/2026-11-19-survey/registry-HKLM.txt). Os caminhos \ResidentFlash\ e
+# \Temp\ são convertidos pela camada de arquivos (pasta de dados do bfgps).
+# Formato: [Chave] e linhas "nome"=dword:HEX ou "nome"="texto".
+
+# o gerenciador de dispositivos do CE chama COM_Init com esta chave ativa
+[Drivers\Active\99]
+"Key"="Drivers\BuiltIn\GPS"
+"Name"="COM1:"
+
+[Drivers\BuiltIn\GPS]
+"Prefix"="COM"
+"Dll"="gps.dll"
+"Index"=dword:00000001
+"Order"=dword:00000064
+"FriendlyName"="GPS Driver"
+"BEE"=dword:00000001
+"FileLog"=dword:00000000
+"DebugLog"=dword:00000000
+"NMEALog"=dword:00000001
+"VCOM"=dword:00000001
+"FileLogSerial"=dword:00000001
+"STOPSupport"=dword:00000000
+"InitStartEventName"="MTK_GPS_START_INITIALIZATION_EVENT"
+"InitStartTimeout"=dword:00000000
+"InitSuccessEventName"="MTK_GPS_INITIALIZATION_SUCCESS_EVENT"
+"SuspendSTOP"=dword:00000000
+"ClockType"=dword:00000003
+"WriteFileLogAsCOMOpen"=dword:00000001
+"FlushFileLogEverySecond"=dword:00000000
+"MonitorWatchdog"=dword:00000000
+"MonitorTimer"=dword:0000ea60
+"BEE_PATH"="\ResidentFlash\"
+"NV_FILE_NAME"="\ResidentFlash\mtkgps.dat"
+"DEBUG_LOG_FILE_NAME"="\Temp\gpsdebug"
+
+# porta física: COM2: = UART1 (0x80026000) = /dev/ttyS0
+[Drivers\BuiltIn\Uart1]
+"Prefix"="COM"
+"Dll"="uart.dll"
+"Index"=dword:00000002
