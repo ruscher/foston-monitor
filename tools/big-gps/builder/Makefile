@@ -6,7 +6,7 @@ CXXFLAGS += -std=c++17 -Wall -Wextra -I$(DEPS)/src-libosmium/include -I$(DEPS)/s
 LDLIBS = -lz -lpthread
 
 all: bgmap-build
-bgmap-build: bgmap-build.cpp ../../../src/biggps/bgmap_format.h
+bgmap-build: bgmap-build.cpp ../../../src/ui/biggps/bgmap_format.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
 clean:
 	rm -f bgmap-build

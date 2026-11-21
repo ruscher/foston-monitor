@@ -1,8 +1,8 @@
 # Big GPS — construtor de mapas (PC)
 
 Código: [tools/big-gps/builder/bgmap-build.cpp](../../tools/big-gps/builder/bgmap-build.cpp).
-Formato: [src/biggps/bgmap_format.h](../../src/biggps/bgmap_format.h). Tabela de zoom mínimo
-por tipo, comum ao construtor e ao aparelho: [src/biggps/bgkinds.h](../../src/biggps/bgkinds.h).
+Formato: [src/ui/biggps/bgmap_format.h](../../src/ui/biggps/bgmap_format.h). Tabela de zoom mínimo
+por tipo, comum ao construtor e ao aparelho: [src/ui/biggps/bgkinds.h](../../src/ui/biggps/bgkinds.h).
 
 ## Dependências (só no PC)
 
@@ -20,8 +20,13 @@ As bibliotecas ficam em `firmware/build/src-libosmium` e `firmware/build/src-pro
 git clone --depth 1 --branch v2.20.0 https://github.com/osmcode/libosmium.git firmware/build/src-libosmium
 git clone --depth 1 --branch v1.7.1 https://github.com/mapbox/protozero.git firmware/build/src-protozero
 make -C tools/big-gps/builder
-tools/big-gps/builder/bgmap-build df.osm.pbf df.bgm
+tools/big-gps/builder/bgmap-build df.osm.pbf df.bgm --bbox=-48.30,-16.06,-47.30,-15.49
 ```
+
+`--bbox` recorta a geometria à região e grava a caixa no cabeçalho (a interface usa o
+centro dela quando não há GPS nem última posição). É necessário em extratos regionais:
+o recorte do OSM completa as relações (divisas, rios) com membros muito distantes —
+sem ele, a caixa do DF ia de 61,6° O a 45,9° O.
 
 ## O que faz
 
@@ -43,8 +48,8 @@ tools/big-gps/builder/bgmap-build df.osm.pbf df.bgm
 | Etapa | Resultado |
 |---|---|
 | Recorte do Centro-Oeste para o DF (pyosmium) | 6 min, `df.osm.pbf` 61 MB |
-| `bgmap-build` no DF | 5 s, 738 MB de pico, 972 678 feições coletadas |
-| Pacote `df.bgm` | 30 465 292 bytes |
-| Nível z5 / z8 / z11 / z14 | 6 / 74 / 952 / 10 404 tiles |
+| `bgmap-build` no DF (`--bbox` do DF) | 6 s, 972 678 feições coletadas, 969 237 dentro da caixa |
+| Pacote `df.bgm` | 29 168 374 bytes |
+| Nível z5 / z8 / z11 / z14 | 1 / 2 / 24 / 1 315 tiles |
 
 O Brasil inteiro será medido na fase de dados nacionais ([13-dados-brasil.md](13-dados-brasil.md)).

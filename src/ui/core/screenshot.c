@@ -212,6 +212,18 @@ int screenshot_run(const char *dir)
                 fclose(gf);
             }
             go(SCR_GPS, 0); pump(1300); shot("38b-gps-procurando");
+            /* Big GPS: só com um mapa em $BIGFOSTON_BIGGPS (o DF de docs/big-gps) */
+            if(getenv("BIGFOSTON_BIGGPS")) {
+                gf = fopen(gp, "w");
+                if(gf) {
+                    fprintf(gf, "updated=0\nepochs=300\ntime=150010.000\ndate=211126\nvalid=1\nmode=3\nquality=1\n"
+                                "lat=-15.793900\nlon=-47.882800\nalt=1100.0\nspeed_kmh=38.0\ncourse=62.0\nhdop=0.8\n"
+                                "used=9\nview=12\nsats=2:62:40:44\n");
+                    fclose(gf);
+                }
+                go(SCR_MAP, 0); pump(3000); shot("42-biggps-mapa");
+                go(SCR_HOME, 0); pump(100);
+            }
             unsetenv("BIGFOSTON_GPS_STATUS");
         }
     }

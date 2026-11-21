@@ -17,16 +17,16 @@ Geofabrik .osm.pbf ──► osm-clip.py (região)    bfgps ──► /run/bigfo
 |---|---|---|---|
 | Recorte de regiões | `tools/big-gps/osm-clip.py` | Python (pyosmium) | feito |
 | Construtor de mapas | `tools/big-gps/builder/` | C++17 (libosmium) | feito (v1) |
-| Leitor do pacote + cache | `src/biggps/bgmap.c` | C | feito |
-| Rasterizador inteiro | `src/biggps/raster.c` | C | feito |
-| Renderizador (estilos, camadas, rótulos) | `src/biggps/bgrender.c` | C | feito |
-| Ferramenta de teste/medição | `src/biggps/bgview.c` | C | feito |
+| Leitor do pacote + cache | `src/ui/biggps/bgmap.c` | C | feito |
+| Rasterizador inteiro | `src/ui/biggps/raster.c` | C | feito |
+| Renderizador (estilos, camadas, rótulos) | `src/ui/biggps/bgrender.c` | C | feito |
+| Ferramenta de teste/medição | `src/ui/biggps/bgview.c` | C | feito |
 | Construtor de rotas (CH) | `tools/big-gps/` | C++ (RoutingKit) | a fazer |
-| Consulta de rotas | `src/biggps/` | C | a fazer |
-| Navegação, voz, busca | `src/biggps/`, `src/ui/` | C | a fazer |
+| Consulta de rotas | `src/ui/biggps/` | C | a fazer |
+| Navegação, voz, busca | `src/ui/biggps/`, `src/ui/` | C | a fazer |
 | Tela no shell | `src/ui/screens/` | C (LVGL 9) | a fazer |
 
-O código do aparelho (`src/biggps/`) não depende do LVGL: devolve um buffer RGB565 e uma
+O código do aparelho (`src/ui/biggps/`) não depende do LVGL: devolve um buffer RGB565 e uma
 lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no aparelho.
 
 ## Cartão SD
@@ -42,7 +42,7 @@ lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no 
 
 ## Formato do mapa (`.bgm`, versão 1)
 
-Descrito em [src/biggps/bgmap_format.h](../../src/biggps/bgmap_format.h): coordenadas Web
+Descrito em [src/ui/biggps/bgmap_format.h](../../src/ui/biggps/bgmap_format.h): coordenadas Web
 Mercator de 32 bits; tiles na grade padrão nos zooms 5, 8, 11 e 14, 8192 unidades por tile
 com margem de 256; índice ordenado por nível (busca binária); nomes por tile; feições
 ordenadas pela ordem de desenho; geometria em deltas zigzag-varint; atribuição ODbL dentro

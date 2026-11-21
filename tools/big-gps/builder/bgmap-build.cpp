@@ -1,10 +1,13 @@
 // bgmap-build.cpp - Big GPS map builder (runs on the PC).
 //
-//   bgmap-build IN.osm.pbf OUT.bgm
+//   bgmap-build IN.osm.pbf OUT.bgm [--bbox MINLON,MINLAT,MAXLON,MAXLAT]
+//
+// --bbox keeps only what is inside the box (geometry is clipped to it) and records the box
+// in the header; use it for regional extracts, whose relations reach far outside.
 //
 // Reads OpenStreetMap data with libosmium, keeps what the Big GPS map draws (roads, water,
 // land use, buildings, places), projects to 32-bit Web Mercator, simplifies per data level,
-// clips into slippy tiles and writes the .bgm pack described in src/biggps/bgmap_format.h.
+// clips into slippy tiles and writes the .bgm pack described in src/ui/biggps/bgmap_format.h.
 // All the heavy work (projection, multipolygons, simplification, clipping) happens here so
 // the device (ARM1176 without FPU) only decodes integers.
 //
@@ -31,8 +34,8 @@
 #include <vector>
 
 extern "C" {
-#include "../../../src/biggps/bgmap_format.h"
-#include "../../../src/biggps/bgkinds.h"
+#include "../../../src/ui/biggps/bgmap_format.h"
+#include "../../../src/ui/biggps/bgkinds.h"
 }
 
 namespace {
@@ -400,8 +403,21 @@ std::string encode_tile(Tile &t)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) {
-        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgm\n", argv[0]);
+    Box clip{0, 0, 0, 0};
+    bool have_clip = false;
+    const char *bbox_arg = argc == 5 && !std::strcmp(argv[3], "--bbox") ? argv[4]
+                         : argc == 4 && !std::strncmp(argv[3], "--bbox=", 7) ? argv[3] + 7 : nullptr;
+    if (bbox_arg) {
+        double a, b, c, d;
+        if (std::sscanf(bbox_arg, "%lf,%lf,%lf,%lf", &a, &b, &c, &d) != 4 || a >= c || b >= d) {
+            std::fprintf(stderr, "--bbox inválido: %s\n", bbox_arg);
+            return 2;
+        }
+        Pt p0 = project(a, d), p1 = project(c, b);     // north-west, south-east
+        clip = {p0.x, p0.y, p1.x, p1.y};
+        have_clip = true;
+    } else if (argc != 3) {
+        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgm [--bbox MINLON,MINLAT,MAXLON,MAXLAT]\n", argv[0]);
         return 2;
     }
     osmium::io::File input{argv[1]};
@@ -437,6 +453,31 @@ int main(int argc, char **argv)
         rd.close();
     }
     std::fprintf(stderr, "%zu feições coletadas em %ld s\n", feats.size(), (long)(time(nullptr) - t0));
+
+    if (have_clip) {
+        std::vector<Feat> kept;
+        for (auto &f : feats) {
+            int g = f.flags & BGM_F_GEOM;
+            if (g == BGM_F_POINT) {
+                const Pt &p = f.rings[0][0];
+                if (p.x >= clip.x0 && p.x <= clip.x1 && p.y >= clip.y0 && p.y <= clip.y1) kept.push_back(std::move(f));
+            } else if (g == BGM_F_LINE) {
+                for (auto &piece : clip_line(f.rings[0], clip)) {
+                    Feat c{f.kind, f.flags, f.name, {std::move(piece)}};
+                    kept.push_back(std::move(c));
+                }
+            } else {
+                Feat c{f.kind, f.flags, f.name, {}};
+                for (auto &r : f.rings) {
+                    Ring cr = clip_polygon(r, clip);
+                    if (cr.size() >= 3) c.rings.push_back(std::move(cr));
+                }
+                if (!c.rings.empty()) kept.push_back(std::move(c));
+            }
+        }
+        feats.swap(kept);
+        std::fprintf(stderr, "%zu feições dentro do --bbox\n", feats.size());
+    }
 
     // bounding box
     Box bb{INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN};
@@ -542,6 +583,7 @@ int main(int argc, char **argv)
     hdr.magic = BGM_MAGIC;
     hdr.version = BGM_VERSION;
     hdr.nlevels = NLEVELS;
+    if (have_clip) bb = clip;
     hdr.bbox[0] = (uint32_t)bb.x0; hdr.bbox[1] = (uint32_t)bb.y0; hdr.bbox[2] = (uint32_t)bb.x1; hdr.bbox[3] = (uint32_t)bb.y1;
     hdr.created = (uint32_t)time(nullptr);
     std::fseek(out, 0, SEEK_SET);

@@ -1,8 +1,8 @@
 # Big GPS — renderização do mapa
 
-Código: [src/biggps/raster.c](../../src/biggps/raster.c) (rasterizador),
-[src/biggps/bgrender.c](../../src/biggps/bgrender.c) (estilos, camadas, rótulos),
-[src/biggps/bgview.c](../../src/biggps/bgview.c) (ferramenta de teste e medição).
+Código: [src/ui/biggps/raster.c](../../src/ui/biggps/raster.c) (rasterizador),
+[src/ui/biggps/bgrender.c](../../src/ui/biggps/bgrender.c) (estilos, camadas, rótulos),
+[src/ui/biggps/bgview.c](../../src/ui/biggps/bgview.c) (ferramenta de teste e medição).
 
 ## Como funciona
 

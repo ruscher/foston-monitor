@@ -3,7 +3,7 @@
 #   make CROSS=1              device build with the Buildroot toolchain
 # SPDX-License-Identifier: GPL-3.0-or-later
 ifdef CROSS
-CC = ../../firmware/build/out/host/bin/arm-buildroot-linux-musleabi-gcc
+CC = ../../../firmware/build/out/host/bin/arm-buildroot-linux-musleabi-gcc
 OUT = build/arm
 LDFLAGS += -static
 else
