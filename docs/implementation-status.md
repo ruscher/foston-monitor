@@ -94,7 +94,6 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 |---|---|---|---|
 | 1 | Carga da bateria: teste com carregador de tomada e ligar por padrão | usar o Linux por horas | médio: algoritmo pronto, falta a validação |
 | 2 | Reconexão do cabo USB: confirmar com mais uso e isolar a causa | uso diário com o PC | baixo: contadores em `/sys/module/mt3351/parameters/stats` |
-| 4 | Ejetar e montar o SD pela interface | uso do SD pelo usuário | baixo |
 | 5 | USB High-Speed e reconexão | atualizações mais rápidas | médio |
 | 6 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
 | 7 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

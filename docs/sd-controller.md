@@ -114,10 +114,25 @@ bit 0) e, se o cartão não foi desmontado (energia cortada no carro), roda
 `fsck.fat -a` antes de liberar a gravação; o relatório fica em
 `BigFoston/fsck-ultimo.log`. Testado: corrigiu o cartão em 6 s após a falha acima.
 
+## Ejetar e trocar o cartão (21/11/2026)
+
+`/usr/sbin/bigfoston-sd` concentra a lógica (o `S30sdcard` só a chama no boot):
+`mount`, `eject` (sync + desmonta; o cartão pode sair), `lost` (desmonta um cartão
+que saiu sem ejetar), `status` e `watch`. O observador (`watch`, iniciado no boot)
+monta o cartão que entra — só depois de vê-lo presente em duas voltas seguidas, porque
+ao inserir os contatos trepidam e o cartão leva ~1 s para iniciar — e limpa o que sai;
+depois de ejetar não remonta enquanto o cartão continua no slot. Uma trava
+(`/run/bigfoston-sd.lock`) impede que montagem e observador ajam juntos (liberar a
+gravação reinicia o cartão). Um cartão sem a marca devolve o driver ao modo só leitura.
+
+No app Arquivos, a linha "Cartão SD" tem **Ejetar** (ou **Montar**, se ejetado e ainda
+no slot) e se atualiza sozinha a cada segundo (estado lido de `/proc/mounts` e `/dev`,
+sem processo). Ejetar para a música que estiver tocando. Testado no aparelho: ejetar,
+tirar, recolocar e montar sozinho com gravação.
+
 ## Pendente
 
 - **Interrupção de detecção** (IRQ 15). Não se sabe como reconhecê-la, então o driver consulta o slot periodicamente.
 - **DMA.** O canal periférico com master = 1 está documentado no `dmadrv.dll`.
-- **Montagem automática** e **ejeção segura** pela interface.
 - **Queda de energia** no meio de uma gravação: o FAT pode ficar inconsistente
   (`errors=remount-ro` protege o resto da sessão); conferir com `fsck.vfat` no PC.

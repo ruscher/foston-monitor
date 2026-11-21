@@ -18,6 +18,8 @@
 #include "../widgets/dialog.h"
 #include "../core/fileops.h"
 #include "../core/osd.h"
+#include "../core/sdctl.h"
+#include "../core/player.h"
 #include "../assets/icons/bf_icons.h"
 #include <dirent.h>
 #include <stdio.h>
@@ -258,6 +260,10 @@ static void rebuild(void);
 static void go_place(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if(i == 0) {                                /* cartão ausente ou ejetado: nada a abrir */
+        sd_state_t sd = sdctl_status();
+        if(sd == SD_ABSENT || sd == SD_EJECTED || sd == SD_MOUNTING) return;
+    }
     snprintf(cwd, sizeof cwd, "%s", places[i].path ? places[i].path : data_dir());
     rebuild();
 }
@@ -348,6 +354,62 @@ static void space_line(char *out, size_t n, const char *path)
     fmt_size(tot, sizeof tot, (long long)v.f_blocks * v.f_frsize);
     snprintf(out, n, "%s %s %s%s", fr, tr(S_FILES_FREE_OF), tot,
              (v.f_flag & ST_RDONLY) ? tr(S_FILES_RO) : "");
+}
+
+/* ================================================================ cartão SD */
+
+static lv_timer_t *sd_timer, *sd_watch;
+static sd_state_t sd_shown = SD_UNKNOWN;     /* estado desenhado na lista de locais */
+
+/* na lista de locais: o cartão entrou, saiu ou terminou de montar? redesenha */
+static void sd_watch_cb(lv_timer_t *t)
+{
+    (void)t;
+    if(cwd[0] || !root || sdctl_busy()) return;
+    if(sdctl_status() != sd_shown) rebuild();
+}
+
+static void sd_tick(lv_timer_t *t)
+{
+    (void)t;
+    int rc;
+    char msg[256];
+    if(!sdctl_done(&rc, msg, sizeof msg)) return;
+    lv_timer_delete(sd_timer);
+    sd_timer = NULL;
+    sd_state_t sd = sdctl_status();
+    if(sd == SD_EJECTED) osd_show(&bf_icon_sdcard, 0x2ec27e, tr(S_FILES_SD_REMOVE_OK), tr(S_FILES_SD_REMOVE_SUB));
+    else if(sd == SD_RW || sd == SD_RO) osd_show(&bf_icon_sdcard, 0xe0a40c, tr(S_FILES_SD_MOUNTED), msg);
+    else osd_show(&bf_icon_sdcard, 0xe5484d, tr(rc == 2 ? S_FILES_SD_BUSY : S_FILES_FAILED), msg);
+    if(root && !cwd[0]) rebuild();
+}
+
+static void sd_click(lv_event_t *e)
+{
+    bool eject = (bool)(intptr_t)lv_event_get_user_data(e);
+    lv_indev_wait_release(lv_indev_active());   /* o toque não abre a linha também */
+    if(sdctl_busy()) return;
+    if(eject && player_state() != PL_STOPPED) player_stop();   /* música do cartão: solta o arquivo */
+    if(!sdctl_start(eject)) return;
+    osd_show(&bf_icon_sdcard, 0xe0a40c, tr(eject ? S_FILES_SD_EJECTING : S_FILES_SD_MOUNTING), NULL);
+    if(!sd_timer) sd_timer = lv_timer_create(sd_tick, 200, NULL);
+}
+
+/* botão Ejetar (cartão montado) ou Montar (ejetado e ainda no slot), na linha do SD */
+static void sd_button(lv_obj_t *row, sd_state_t sd)
+{
+    if(sd == SD_ABSENT || sd == SD_MOUNTING) return;
+    bool eject = sd == SD_RW || sd == SD_RO;
+    lv_obj_t *b = bf_button(row, eject ? LV_SYMBOL_EJECT : LV_SYMBOL_UPLOAD,
+                            tr(eject ? S_FILES_SD_EJECT : S_FILES_SD_MOUNT), eject ? 0 : 1);
+    lv_obj_set_size(b, LV_SIZE_CONTENT, 40);
+    lv_obj_align(b, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(b, sd_click, LV_EVENT_CLICKED, (void *)(intptr_t)eject);
+    /* o espaço livre passa para a esquerda do botão */
+    lv_obj_t *right = lv_obj_get_child(row, 2);
+    if(right) lv_obj_align_to(right, b, LV_ALIGN_OUT_LEFT_MID, -BF_SP_M, 0);
+    lv_obj_t *name = lv_obj_get_child(row, 1);
+    if(name) bf_label_ellipsis(name, 260);
 }
 
 /* ================================================================ gravação */
@@ -652,12 +714,19 @@ static void rebuild(void)
     lv_obj_set_style_pad_row(list, 2, 0);
 
     if(!cwd[0]) {
+        sd_state_t sd = sdctl_status();
+        sd_shown = sd;
         for(int i = 0; i < (int)(sizeof places / sizeof places[0]); i++) {
             const char *pp = places[i].path ? places[i].path : data_dir();
             char sp[96];
-            space_line(sp, sizeof sp, pp);
-            row_button(list, places[i].sym, lv_color_hex(C_FILES), tr(places[i].name),
-                       sp[0] ? sp : tr(S_FILES_ABSENT), go_place, i, false);
+            bool is_sd = i == 0;
+            if(is_sd && (sd == SD_ABSENT || sd == SD_EJECTED || sd == SD_MOUNTING))   /* /mnt/sd vazio: não é o cartão */
+                snprintf(sp, sizeof sp, "%s", tr(sd == SD_EJECTED ? S_FILES_SD_EJECTED :
+                                                  sd == SD_MOUNTING ? S_FILES_SD_MOUNTING : S_FILES_ABSENT));
+            else space_line(sp, sizeof sp, pp);
+            lv_obj_t *row = row_button(list, places[i].sym, lv_color_hex(C_FILES), tr(places[i].name),
+                                       sp[0] ? sp : tr(S_FILES_ABSENT), go_place, i, false);
+            if(is_sd && sd != SD_UNKNOWN) sd_button(row, sd);
         }
         return;
     }
@@ -686,6 +755,7 @@ static void create(lv_obj_t *parent, int arg)
     if(fs.state != FO_IDLE && fs.state != FO_RUNNING) fo_reset();   /* terminou fora da tela */
     if(fs.state == FO_RUNNING && !op_timer)                  /* ainda copiando: aviso no fim */
         op_timer = lv_timer_create(op_tick, 200, NULL);
+    if(sdctl_available() && !sd_watch) sd_watch = lv_timer_create(sd_watch_cb, 1000, NULL);
     root = bf_plain(parent);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_pad_all(root, BF_SP_S, 0);
@@ -697,6 +767,8 @@ static void create(lv_obj_t *parent, int arg)
 
 static void destroy(void)
 {
+    if(sd_timer) { lv_timer_delete(sd_timer); sd_timer = NULL; }   /* o resultado sai no próximo create */
+    if(sd_watch) { lv_timer_delete(sd_watch); sd_watch = NULL; }
     name_close();
     if(op_timer) {                       /* a operação continua; o aviso vem por OSD na volta */
         lv_timer_delete(op_timer);

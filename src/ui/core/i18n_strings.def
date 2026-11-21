@@ -389,3 +389,14 @@ X(S_FILES_CUT_DONE,   "files.cut_done", "Pronto para mover", "Ready to move", "L
 X(S_FILES_CANCELLED,  "files.cancelled", "Cancelado", "Cancelled", "Cancelado")
 X(S_FILES_FAILED,     "files.failed", "Não foi possível", "Could not do it", "No fue posible")
 X(S_FILES_CLIP_GONE,  "files.clip_gone", "O item copiado não existe mais", "The copied item no longer exists", "El elemento copiado ya no existe")
+
+/* ---- Arquivos: cartão SD ---- */
+X(S_FILES_SD_EJECT,     "files.sd_eject", "Ejetar", "Eject", "Expulsar")
+X(S_FILES_SD_MOUNT,     "files.sd_mount", "Montar", "Mount", "Montar")
+X(S_FILES_SD_EJECTING,  "files.sd_ejecting", "Ejetando o cartão…", "Ejecting the card…", "Expulsando la tarjeta…")
+X(S_FILES_SD_MOUNTING,  "files.sd_mounting", "Montando o cartão…", "Mounting the card…", "Montando la tarjeta…")
+X(S_FILES_SD_REMOVE_OK, "files.sd_remove_ok", "Pode remover o cartão", "You can remove the card", "Puede retirar la tarjeta")
+X(S_FILES_SD_REMOVE_SUB, "files.sd_remove_sub", "Tudo foi gravado antes de desmontar", "Everything was written before unmounting", "Todo se grabó antes de desmontar")
+X(S_FILES_SD_MOUNTED,   "files.sd_mounted", "Cartão montado", "Card mounted", "Tarjeta montada")
+X(S_FILES_SD_BUSY,      "files.sd_busy", "Cartão em uso: feche o que estiver aberto nele", "Card in use: close what is open on it", "Tarjeta en uso: cierre lo que esté abierto")
+X(S_FILES_SD_EJECTED,   "files.sd_ejected", "Ejetado: pode remover", "Ejected: you can remove it", "Expulsada: puede retirarla")

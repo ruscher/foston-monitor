@@ -1,85 +1,19 @@
 #!/bin/sh
-# Monta o cartão SD em /mnt/sd. Nunca formata.
-#
-# Somente leitura, a não ser que o cartão traga BigFoston/linux-rw com o número
-# de série DESTE cartão ("serial=0x..."), arquivo criado depois que o cartão
-# passou no teste de gravação (tools/bigfoston/sd-write-test.sh). Assim um
-# cartão desgastado, ou uma cópia da marca em outro cartão, nunca é gravado.
-# Com gravação liberada, a pasta de dados do shell (/data/bigfoston: ajustes,
-# calibração, livros) passa a ficar no cartão, em BigFoston/data.
-DEV=/dev/mmcblk0p1
-MNT=/mnt/sd
-DATA=/data/bigfoston
-PARAM=/sys/module/mt3351_msdc/parameters/readonly
-DRV=/sys/bus/platform/drivers/mt3351-msdc
-RO_OPTS=ro,noatime,iocharset=iso8859-1,utf8
-RW_OPTS=rw,noatime,flush,iocharset=iso8859-1,utf8,errors=remount-ro
-
-# FAT32 "dirty" (boot sector 0x41, bit 0): set by Linux while mounted with
-# writes and cleared on a clean unmount; set at boot = power was cut (car) or
-# the card was not unmounted. Then fsck.fat repairs it before any write.
-fat_dirty() {
-    [ "$(( $(dd if="$DEV" bs=1 skip=65 count=1 2>/dev/null | hexdump -e '1/1 "%u"') & 1 ))" = 1 ]
-}
-
-check_fat() {
-    command -v fsck.fat >/dev/null || return 0
-    fat_dirty || return 0
-    echo "sdcard: cartão marcado como não desmontado; verificando (fsck.fat -a)" > /dev/kmsg
-    fsck.fat -a -w "$DEV" > /tmp/fsck-sd.log 2>&1
-    rc=$?
-    echo "sdcard: fsck.fat terminou com código $rc (0 = sem erros, 1 = corrigido)" > /dev/kmsg
-    return 0
-}
-
-wait_dev() {
-    n=0
-    while [ ! -b "$DEV" ] && [ $n -lt "$1" ]; do sleep 0.5; n=$((n + 1)); done
-    [ -b "$DEV" ]
-}
-
-# o driver só aplica "readonly" ao (re)iniciar o cartão: desliga e religa o host
-enable_writes() {
-    echo 0 > "$PARAM" || return 1
-    for d in "$DRV"/*.*; do
-        [ -e "$d" ] || continue
-        name=$(basename "$d")
-        echo "$name" > "$DRV/unbind" && echo "$name" > "$DRV/bind"
-    done
-    sleep 1
-    wait_dev 20 && [ "$(cat /sys/block/mmcblk0/ro 2>/dev/null)" = 0 ]
-}
-
+# Cartão SD: monta no boot e deixa o observador (montar o cartão que entra,
+# limpar o que sai) rodando. A lógica fica em /usr/sbin/bigfoston-sd.
+PIDFILE=/run/bigfoston-sdwatch.pid
 case "$1" in
 start)
     echo 50 > /sys/module/mt3351_bootcon/parameters/progress 2>/dev/null
-    mkdir -p "$MNT"
-    wait_dev 10 || { echo "sdcard: sem cartão"; exit 0; }
-    mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT" || exit 0
-    serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null)
-    if [ -n "$serial" ] && grep -qx "serial=$serial" "$MNT/BigFoston/linux-rw" 2>/dev/null; then
-        umount "$MNT"
-        if enable_writes && check_fat && mount -t vfat -o "$RW_OPTS" "$DEV" "$MNT"; then
-            [ -f /tmp/fsck-sd.log ] && cp /tmp/fsck-sd.log "$MNT/BigFoston/fsck-ultimo.log"
-            mkdir -p "$MNT/BigFoston/data" "$DATA"
-            # primeira vez: leva para o cartão o que já estiver na RAM
-            if [ -z "$(ls -A "$MNT/BigFoston/data")" ] && [ -n "$(ls -A "$DATA")" ]; then
-                cp -r "$DATA"/. "$MNT/BigFoston/data/" && sync
-            fi
-            mount --bind "$MNT/BigFoston/data" "$DATA"
-            echo "sdcard: $DEV em $MNT (gravação liberada, cartão $serial); dados em $DATA"
-        else
-            echo 1 > "$PARAM"
-            wait_dev 20 && mount -t vfat -o "$RO_OPTS" "$DEV" "$MNT"
-            echo "sdcard: falha ao liberar a gravação; $DEV em $MNT (ro)"
-        fi
-    else
-        echo "sdcard: $DEV em $MNT (ro)"
-    fi
+    /usr/sbin/bigfoston-sd mount 10
+    /usr/sbin/bigfoston-sd watch > /dev/null 2>&1 &
+    echo $! > "$PIDFILE"
     ;;
 stop)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    rm -f "$PIDFILE"
     sync
-    umount "$DATA" 2>/dev/null
-    umount "$MNT" 2>/dev/null
+    umount /data/bigfoston 2>/dev/null
+    umount /mnt/sd 2>/dev/null
     ;;
 esac
