@@ -35,7 +35,11 @@ Nada aqui está aprovado para uso no trânsito real.
 | [08-navegacao.md](08-navegacao.md) | uso, manobras, acompanhamento, avisos, testes |
 | [09-voz.md](09-voz.md) | eSpeak NG: escolha medida, funcionamento, dados no cartão |
 | [10-busca.md](10-busca.md) | índice, normalização, ordenação, favoritos, medições |
+| [11-interface.md](11-interface.md) | a tela do mapa, destino, navegação, busca, relógio |
+| [13-dados-brasil.md](13-dados-brasil.md) | construção dos dados nacionais, tamanhos, tempos |
+| [15-testes.md](15-testes.md) | conferências, robustez (arquivos corrompidos, sanitizadores) |
+| [16-licencas.md](16-licencas.md) | auditoria de licenças de código, dados, voz e fontes |
+| [17-instalacao-sd.md](17-instalacao-sd.md) | gerar os dados e instalar no cartão |
 
-Os demais documentos (roteamento, navegação, voz, busca, interface, dados do Brasil,
-desempenho, testes, licenças, instalação, uso, problemas conhecidos, relatório de entrega)
-são escritos quando a fase correspondente for feita, com as medições reais.
+Faltam: desempenho consolidado, problemas conhecidos e o relatório de entrega (escritos
+ao fim, com as medições finais).
