@@ -923,9 +923,7 @@ static void build_shelf(void)
     lv_obj_set_style_pad_all(grid, BF_SP_M, 0);
     lv_obj_set_style_pad_column(grid, BF_SP_M, 0);
     lv_obj_set_style_pad_row(grid, BF_SP_M, 0);
-    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(grid, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(grid, LV_SCROLLBAR_MODE_AUTO);
+    bf_scrollable(grid);
 
     static const uint32_t hues[] = { 0x8b5e3c, 0x2a6fd0, 0x2e8b57, 0x9b6ad6, 0xc0392b, 0x16a085, 0xd35400, 0x34495e };
     for(int i = 0; i < n_shelf; i++) {

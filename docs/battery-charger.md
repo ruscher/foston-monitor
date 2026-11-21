@@ -103,6 +103,19 @@ USB do PC a carga começou (VCHG 4496 mV), a VCHG caiu a 4305 mV, parou **uma ve
 esperando 4450 mV ("VCHG fell to 4305 mV while charging; waiting for 4450 mV"); estado
 `Not charging`, e a interface mostra "ligado, sem carregar" (nível cinza com raio).
 
+## Aviso de carregador em loop (21/11/2026)
+
+Na USB do PC, a interface anunciava "Carregador conectado/desconectado" a cada poucos
+minutos sem mexer no cabo. O bit de presença do status da PMU (`0x80061420` bit 3) oscila
+quando a VCHG fica perto de 4,4 V: o log mostrava `no charger` com **VCHG 4401–4505 mV**.
+Cada queda também zerava a histerese e a carga recomeçava.
+
+- Driver: presença = bit de status **ou** VCHG > 2500 mV (sem carregador ~0,3 V, com
+  carregador > 4,1 V), medido no ciclo de 10 s; o `online` do `power_supply` usa o bit para
+  responder rápido ao conectar e a VCHG contra a oscilação.
+- Interface (`core/devwatch.c`): uma mudança do carregador ou do USB só é anunciada depois
+  de ~2 s estável (3 leituras de 700 ms).
+
 ## Em aberto
 
 - Corrente em mA de cada código e período real do watchdog (medir no aparelho).

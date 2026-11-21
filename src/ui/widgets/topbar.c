@@ -1,6 +1,7 @@
 /* topbar.c — barra superior: logotipo, título da tela, ícones de status, relógio. */
 #include "topbar.h"
 #include "battery.h"
+#include "volpop.h"
 #include "../core/theme.h"
 #include "../core/status.h"
 #include "../core/settings.h"
@@ -13,6 +14,13 @@
 
 static lv_obj_t *bar, *spacer, *title_lbl, *sep_lbl, *clock_lbl, *date_lbl, *sim_badge;
 static lv_obj_t *ic_gps, *ic_net, *ic_bt, *ic_usb, *ic_vol, *ic_bat, *bat_pct;
+
+static void vol_click(lv_event_t *e)
+{
+    lv_area_t a;
+    lv_obj_get_coords(lv_event_get_target(e), &a);
+    volpop_open((a.x1 + a.x2) / 2, a.y2 + 10);
+}
 
 static void set_text_if(lv_obj_t *l, const char *t)
 {
@@ -85,6 +93,10 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     ic_bt  = icon(icons, LV_SYMBOL_BLUETOOTH);
     ic_usb = icon(icons, LV_SYMBOL_USB);
     ic_vol = icon(icons, LV_SYMBOL_VOLUME_MAX);
+    /* toque no ícone de som: controle de volume, em qualquer tela */
+    lv_obj_add_flag(ic_vol, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(ic_vol, 14);
+    lv_obj_add_event_cb(ic_vol, vol_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *batbox = bf_plain(icons);
     lv_obj_set_size(batbox, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(batbox, LV_FLEX_FLOW_ROW);
@@ -166,8 +178,7 @@ void topbar_update(void)
     icon_state(ic_usb, s->usb, p->text);
 
     bf_tri_t vol_st = s->volume_pct < 0 ? BF_UNKNOWN : BF_YES;
-    set_text_if(ic_vol, s->muted == BF_YES ? LV_SYMBOL_MUTE :
-                (s->volume_pct >= 0 && s->volume_pct < 50 ? LV_SYMBOL_VOLUME_MID : LV_SYMBOL_VOLUME_MAX));
+    set_text_if(ic_vol, s->volume_pct >= 0 ? volpop_symbol(s->volume_pct) : LV_SYMBOL_VOLUME_MAX);
     icon_state(ic_vol, vol_st, p->text);
 
     /* Bateria: nunca inventar porcentagem; o raio e o verde ficam no ícone. */

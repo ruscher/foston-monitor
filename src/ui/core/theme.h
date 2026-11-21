@@ -104,10 +104,13 @@ extern lv_style_t bf_st_btn;      /* botão neutro */
 extern lv_style_t bf_st_btn_pr;   /* botão neutro pressionado */
 extern lv_style_t bf_st_btn_primary;
 extern lv_style_t bf_st_btn_danger;
+extern lv_style_t bf_st_scrollbar;  /* barra de rolagem visível */
 extern lv_style_t bf_st_plain;    /* contêiner transparente sem borda/padding */
 
 /* Helpers */
 lv_obj_t *bf_plain(lv_obj_t *parent);                       /* contêiner neutro */
+/* rolagem vertical com barra visível (listas, páginas, painéis) */
+void bf_scrollable(lv_obj_t *o);
 lv_obj_t *bf_card(lv_obj_t *parent);
 lv_obj_t *bf_label(lv_obj_t *parent, const char *txt, const lv_font_t *font, lv_color_t color);
 lv_obj_t *bf_button(lv_obj_t *parent, const char *symbol, const char *txt, int kind); /* kind: 0 neutro, 1 primário, 2 perigo */

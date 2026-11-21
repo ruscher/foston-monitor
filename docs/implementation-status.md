@@ -68,6 +68,8 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | Luz posterior, volume, bateria, língua (pt/en/es), calibração, reset, SSH (leitura) | **FUNCIONANDO** | |
 | Big Screen (painel do PC) | **FUNCIONANDO** | FSP por TCP na rede USB, 36 quadros/s | 
 | Avisos de dispositivos (fone, carregador, USB, SD) | **FUNCIONANDO** | |
+| Galeria (JPEG, PNG, GIF, BMP, SVG) | **FUNCIONANDO** | miniaturas numa thread com cache no cartão; visualizador com zoom, ◀ ▶ e GIF animado | [apps.md](apps.md) |
+| Controle de volume (barra superior e Multimídia) | **FUNCIONANDO** (simulador; ícone no aparelho) | barra vertical, mudo | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | GPS, GpsInfo, TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
 
 ## Ferramentas no PC

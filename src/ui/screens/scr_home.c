@@ -10,6 +10,7 @@
 #include "../core/status.h"
 #include "../core/clock.h"
 #include "../core/player.h"
+#include "../core/cover.h"
 #include "../widgets/tile.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
@@ -37,6 +38,7 @@ static const app_t apps[] = {
     { &bf_icon_bigscreen,  S_APP_BIGSCREEN,  0x2a6fd0, SCR_BIGSCREEN, 0 },
     { &bf_icon_monitor,    S_APP_MONITOR,    0x26a269, SCR_MONITOR, 0 },
     { &bf_icon_settings,   S_APP_SETTINGS,   0x6c7383, SCR_SETTINGS, 0 },
+    { &bf_icon_gallery,    S_APP_GALLERY,    0xd6409f, SCR_GALLERY, 0 },
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8
@@ -179,10 +181,20 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
 
 static lv_timer_t *panel_timer;
 static lv_obj_t *clk_lbl, *ampm_lbl, *date_lbl, *bat_icon, *bat_lbl, *song_lbl, *artist_lbl, *bar, *play_lbl;
+static lv_obj_t *pos_lbl, *len_lbl, *thumb_img, *thumb_note;
+static lv_image_dsc_t thumb;        /* capa reduzida (jpeg_fit) */
+static int thumb_for = -2;          /* faixa cuja capa está no cartão */
 
 static void set_text_if(lv_obj_t *l, const char *t)
 {
     if(l && strcmp(lv_label_get_text(l), t)) lv_label_set_text(l, t);
+}
+
+static void fmt_ms(char *out, size_t n, int ms)
+{
+    int sec = ms < 0 ? 0 : ms / 1000;
+    if(sec >= 3600) snprintf(out, n, "%d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60);
+    else snprintf(out, n, "%d:%02d", sec / 60, sec % 60);
 }
 
 static void panel_tick(lv_timer_t *t)
@@ -217,21 +229,47 @@ static void panel_tick(lv_timer_t *t)
     else snprintf(b, sizeof b, "—%s%s", bst[0] ? "  " : "", bst);
     set_text_if(bat_lbl, b);
 
-    /* tocando agora */
+    /* tocando agora: capa, título (tag ou nome do arquivo), artista — álbum, tempos */
     pl_state_t st = player_state();
-    if(st == PL_STOPPED) {
+    char title[160], sub[200];
+    int idx = -1;
+    if(st != PL_STOPPED && music_now(title, sizeof title, sub, sizeof sub, &idx)) {
+        set_text_if(song_lbl, title);
+        set_text_if(artist_lbl, sub);
+        int len = player_len_ms(), pos = player_pos_ms();
+        int v = len > 0 ? (int)((long long)pos * 1000 / len) : 0;
+        if(lv_bar_get_value(bar) != v) lv_bar_set_value(bar, v, LV_ANIM_OFF);
+        fmt_ms(b, sizeof b, pos);
+        set_text_if(pos_lbl, b);
+        if(len > 0) fmt_ms(b, sizeof b, len);
+        set_text_if(len_lbl, len > 0 ? b : "--:--");
+    }
+    else {
         set_text_if(song_lbl, tr(music_has_queue() ? S_HOME_STOPPED : S_HOME_NOTHING));
         set_text_if(artist_lbl, tr(S_HOME_OPEN_HINT));
         lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+        set_text_if(pos_lbl, "");
+        set_text_if(len_lbl, "");
+        idx = -1;
     }
-    else {
-        pl_tags_t tg;
-        player_tags(&tg);
-        set_text_if(song_lbl, tg.title[0] ? tg.title : tr(S_APP_MULTIMEDIA));
-        set_text_if(artist_lbl, tg.artist);
-        int len = player_len_ms();
-        int v = len > 0 ? (int)((long long)player_pos_ms() * 1000 / len) : 0;
-        if(lv_bar_get_value(bar) != v) lv_bar_set_value(bar, v, LV_ANIM_OFF);
+    if(idx != thumb_for) {                  /* troca de faixa: capa nova */
+        thumb_for = idx;
+        const uint8_t *d;
+        size_t n;
+        const char *mime;
+        lv_obj_add_flag(thumb_img, LV_OBJ_FLAG_HIDDEN);   /* antes de liberar o buffer */
+        jpeg_free(&thumb);
+        bool ok = idx >= 0 && player_cover(&d, &n, &mime) && jpeg_fit(d, n, 60, 60, &thumb);
+        if(ok) {
+            lv_image_set_src(thumb_img, &thumb);
+            lv_obj_invalidate(thumb_img);
+            lv_obj_remove_flag(thumb_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(thumb_note, LV_OBJ_FLAG_HIDDEN);
+        }
+        else {
+            lv_obj_add_flag(thumb_img, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(thumb_note, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     set_text_if(play_lbl, st == PL_PLAYING ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
 }
@@ -261,8 +299,8 @@ static lv_obj_t *panel_card(lv_obj_t *parent, int w, int h)
 static lv_obj_t *media_btn(lv_obj_t *parent, const char *sym, int cmd, bool primary)
 {
     lv_obj_t *b = bf_button(parent, sym, NULL, primary ? 1 : 0);
-    lv_obj_set_size(b, primary ? 84 : 72, 64);
-    lv_obj_set_style_radius(b, 32, 0);
+    lv_obj_set_size(b, primary ? 80 : 68, 48);
+    lv_obj_set_style_radius(b, 24, 0);
     lv_obj_add_event_cb(b, media_click, LV_EVENT_CLICKED, (void *)(intptr_t)cmd);
     return lv_obj_get_child(b, 0);
 }
@@ -349,18 +387,49 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_set_style_pad_row(c, 6, 0);
     lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(c, open_music, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *h = bf_label(c, tr(S_HOME_NOW_PLAYING), BF_FONT_S, p->text_dim);
-    (void)h;
-    song_lbl = bf_label(c, "", BF_FONT_M, p->text);
-    bf_label_ellipsis(song_lbl, LV_PCT(100));
-    artist_lbl = bf_label(c, "", BF_FONT_S, p->text_dim);
-    bf_label_ellipsis(artist_lbl, LV_PCT(100));
+    lv_obj_t *head = bf_plain(c);
+    lv_obj_set_size(head, LV_PCT(100), 62);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(head, BF_SP_S, 0);
+    lv_obj_t *cv = lv_obj_create(head);             /* capa (ou nota musical) */
+    lv_obj_remove_style_all(cv);
+    lv_obj_set_size(cv, 60, 60);
+    lv_obj_set_style_radius(cv, BF_RADIUS_S, 0);
+    lv_obj_set_style_clip_corner(cv, true, 0);
+    lv_obj_set_style_bg_color(cv, lv_color_hex(0xf07a72), 0);
+    lv_obj_set_style_bg_grad_color(cv, lv_color_hex(0x8a2c26), 0);
+    lv_obj_set_style_bg_grad_dir(cv, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(cv, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(cv, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    thumb_note = bf_label(cv, LV_SYMBOL_AUDIO, BF_FONT_M, lv_color_white());
+    lv_obj_center(thumb_note);
+    thumb_img = lv_image_create(cv);
+    lv_obj_center(thumb_img);
+    lv_obj_add_flag(thumb_img, LV_OBJ_FLAG_HIDDEN);
+    thumb_for = -2;
+    lv_obj_t *tc = bf_plain(head);
+    lv_obj_set_height(tc, LV_PCT(100));
+    lv_obj_set_flex_grow(tc, 1);
+    lv_obj_set_flex_flow(tc, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(tc, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    bf_label(tc, tr(S_HOME_NOW_PLAYING), BF_FONT_S, p->text_dim);
+    song_lbl = bf_label(tc, "", BF_FONT_M, p->text);
+    bf_label_ellipsis(song_lbl, 256);
+    artist_lbl = bf_label(tc, "", BF_FONT_S, p->text_dim);
+    bf_label_ellipsis(artist_lbl, 256);
     bar = lv_bar_create(c);
     lv_obj_set_size(bar, LV_PCT(100), 6);
     lv_bar_set_range(bar, 0, 1000);
     lv_obj_set_style_bg_color(bar, p->text_dim, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(bar, LV_OPA_30, LV_PART_MAIN);
     lv_obj_set_style_bg_color(bar, p->accent, LV_PART_INDICATOR);
+    lv_obj_t *tr_ = bf_plain(c);                   /* decorrido · total */
+    lv_obj_set_size(tr_, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_margin_top(tr_, -4, 0);
+    pos_lbl = bf_label(tr_, "", BF_FONT_S, p->text_dim);
+    lv_obj_align(pos_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+    len_lbl = bf_label(tr_, "", BF_FONT_S, p->text_dim);
+    lv_obj_align(len_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_t *ctl = bf_plain(c);
     lv_obj_set_size(ctl, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(ctl, LV_FLEX_FLOW_ROW);
@@ -404,6 +473,9 @@ static void destroy(void)
     if(panel_timer) { lv_timer_delete(panel_timer); panel_timer = NULL; }
     tv = NULL;
     clk_lbl = ampm_lbl = date_lbl = bat_icon = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;
+    pos_lbl = len_lbl = thumb_img = thumb_note = NULL;
+    jpeg_free(&thumb);
+    thumb_for = -2;
 }
 
 const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, NULL };

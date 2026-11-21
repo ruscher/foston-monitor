@@ -51,7 +51,7 @@ static void usage(const char *argv0)
            "  --lang pt|en|es    língua (não salva)\n"
            "  --theme dark|light|auto  modo (não salvo)\n"
            "  --data DIR         pasta de dados (= BIGFOSTON_DATA)\n"
-           "  --open bigscreen   abre direto no app Big Screen\n"
+           "  --open TELA        abre direto: bigscreen, gallery, music, files, settings\n"
            "  --help\n", argv0);
 }
 
@@ -111,7 +111,7 @@ int main(int argc, char **argv)
         else if(!strcmp(argv[i], "--lang") && i + 1 < argc) lang = argv[++i];
         else if(!strcmp(argv[i], "--theme") && i + 1 < argc) theme = argv[++i];
         else if(!strcmp(argv[i], "--data") && i + 1 < argc) data = argv[++i];
-        else if(!strcmp(argv[i], "--open") && i + 1 < argc && !strcmp(argv[i + 1], "bigscreen")) open_app = argv[++i];
+        else if(!strcmp(argv[i], "--open") && i + 1 < argc) open_app = argv[++i];
         else { usage(argv[0]); return strcmp(argv[i], "--help") ? 2 : 0; }
     }
 
@@ -162,7 +162,16 @@ int main(int argc, char **argv)
     if(!disp) { fprintf(stderr, "bigfoston: falha ao abrir o display\n"); return 1; }
 
     app_init(disp);
-    if(open_app) nav_go(SCR_BIGSCREEN, 0);
+    if(open_app) {
+        static const struct { const char *name; bf_screen_t scr; } apps[] = {
+            { "bigscreen", SCR_BIGSCREEN }, { "gallery", SCR_GALLERY }, { "music", SCR_MUSIC },
+            { "files", SCR_FILES }, { "settings", SCR_SETTINGS },
+        };
+        size_t k = 0;
+        while(k < sizeof apps / sizeof apps[0] && strcmp(apps[k].name, open_app)) k++;
+        if(k < sizeof apps / sizeof apps[0]) nav_go(apps[k].scr, 0);
+        else fprintf(stderr, "--open: tela desconhecida: %s\n", open_app);
+    }
     app_apply_hw_settings();
 
     for(;;) {

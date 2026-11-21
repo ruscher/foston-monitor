@@ -12,9 +12,7 @@ lv_obj_t *page_create(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(pg, BF_SP_L, 0);
     lv_obj_set_flex_flow(pg, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(pg, BF_SP_M, 0);
-    lv_obj_add_flag(pg, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(pg, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(pg, LV_SCROLLBAR_MODE_AUTO);
+    bf_scrollable(pg);
     return pg;
 }
 

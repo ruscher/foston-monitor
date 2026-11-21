@@ -146,6 +146,7 @@ struct mt3351_ts {
 	int chg_state;			/* 0 idle, CE states 0x1000..0x1003 */
 	unsigned int pre_s, cv_s, total_s;
 	int vbat, visense, vchg, low_count;
+	bool ext;			/* charger present: status bit or VCHG (see mt3351_chg_work) */
 	int last_log;
 };
 
@@ -393,8 +394,17 @@ static void mt3351_chg_work(struct work_struct *w)
 	if (!mt3351_chg_adc(ts))
 		goto again;
 
+	/*
+	 * Charger presence: the PMU status bit flickers on a PC's USB port (VCHG
+	 * near 4.4 V: "no charger" logged with VCHG 4401-4505 mV, 21/11/2026),
+	 * which made the interface announce the charger every few minutes and
+	 * reset the hysteresis. VCHG itself reads ~0.3 V without a charger and
+	 * >4.1 V with one: present if either says so.
+	 */
+	ts->ext = (sta & MT3351_CHR_PRESENT) || ts->vchg > 2500;
+
 	/* on battery: orderly power-off below 3450 mV (+100 as CE), 3 readings in a row */
-	if (!(sta & MT3351_CHR_PRESENT) && ts->vbat > 2000 && ts->vbat + 100 < 3450) {
+	if (!ts->ext && ts->vbat > 2000 && ts->vbat + 100 < 3450) {
 		if (++ts->low_count >= 3) {
 			dev_crit(ts->dev, "battery low (%d mV): powering off\n", ts->vbat);
 			orderly_poweroff(true);
@@ -403,7 +413,7 @@ static void mt3351_chg_work(struct work_struct *w)
 		ts->low_count = 0;
 	}
 
-	if (!(sta & MT3351_CHR_PRESENT)) {
+	if (!ts->ext) {
 		if (ts->chg_on || ts->chg_locked || ts->chg_full)
 			mt3351_chg_stop(ts, false);
 		ts->chg_full = ts->chg_locked = ts->chg_weak = false;
@@ -529,7 +539,7 @@ static int mt3351_bat_get(struct power_supply *psy, enum power_supply_property p
 	case POWER_SUPPLY_PROP_STATUS:
 		if (chr & MT3351_CHR_CHARGING)
 			val->intval = POWER_SUPPLY_STATUS_CHARGING;
-		else if (!(chr & MT3351_CHR_PRESENT))
+		else if (!(chr & MT3351_CHR_PRESENT) && !ts->ext)
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		/* Full only when the charge algorithm ended it: on a weak source (a
 		 * PC's USB port) the reading reaches "100%" without a full charge */
@@ -578,7 +588,8 @@ static int mt3351_ac_get(struct power_supply *psy, enum power_supply_property ps
 
 	if (psp != POWER_SUPPLY_PROP_ONLINE)
 		return -EINVAL;
-	val->intval = !!(readl(ts->chr) & MT3351_CHR_PRESENT);
+	/* the bit for a fast "plugged in", the 10 s VCHG reading against its flicker */
+	val->intval = (readl(ts->chr) & MT3351_CHR_PRESENT) || ts->ext;
 	return 0;
 }
 

@@ -3,12 +3,13 @@
 #define BF_SCREENS_H
 
 #include "../core/nav.h"
+#include <stddef.h>
 
 extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, scr_run_def,
        scr_monitor_def, scr_calibrate_def, scr_backlight_def, scr_volume_def,
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
        scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def,
-       scr_appearance_def, scr_bigscreen_def;
+       scr_appearance_def, scr_bigscreen_def, scr_gallery_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {
@@ -26,11 +27,14 @@ void scr_home_show_page(int page);
 void scr_run_demo_keyboard(void);
 void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
+void scr_gallery_demo(int step); /* 0 espera as miniaturas, 1 abre a 1ª, 2 fecha */
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar */
 void music_play_file(const char *path);   /* Arquivos -> Multimídia */
 enum { MUSIC_TOGGLE, MUSIC_PREV, MUSIC_NEXT };
 bool music_has_queue(void);               /* há faixas na fila do Multimídia */
 void music_command(int cmd);              /* MUSIC_*: Painel da Início */
+/* faixa atual: título (tag ou nome do arquivo) e "artista — álbum"; false sem faixa */
+bool music_now(char *title, size_t tn, char *sub, size_t sn, int *idx);
 /* Apps da Início (tabela em scr_home.c; a ordem só cresce no fim, é a dos bits
  * de settings()->home_apps) */
 int         home_app_count(void);

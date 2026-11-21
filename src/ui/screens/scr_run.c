@@ -438,8 +438,7 @@ static void create(lv_obj_t *parent, int arg)
     list = bf_plain(right);
     lv_obj_set_size(list, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    bf_scrollable(list);
 
     /* painel de saída */
     outcard = bf_plain(right);
@@ -467,7 +466,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_bg_opa(out_scroll, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(out_scroll, BF_RADIUS_S, 0);
     lv_obj_set_style_pad_all(out_scroll, BF_SP_S, 0);
-    lv_obj_add_flag(out_scroll, LV_OBJ_FLAG_SCROLLABLE);
+    bf_scrollable(out_scroll);
     out_lbl = bf_label(out_scroll, "", BF_FONT_MONO, p->dark ? lv_color_hex(0xc8f5d0) : p->text);
     lv_obj_set_width(out_lbl, LV_PCT(100));
     lv_label_set_long_mode(out_lbl, LV_LABEL_LONG_WRAP);

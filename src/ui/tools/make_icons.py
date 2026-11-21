@@ -37,6 +37,7 @@ ICONS = [
     ("headphones", 0xF025),  # headphones (aviso de dispositivo)
     ("plug",       0xF1E6),  # plug (carregador)
     ("sdcard",     0xF7C2),  # sd-card
+    ("gallery",    0xF302),  # images
 ]
 
 

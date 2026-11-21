@@ -122,9 +122,19 @@ static void poll_cb(lv_timer_t *t)
     now[D_CHG] = read_int("/sys/class/power_supply/charger/online");
     now[D_USB] = read_usb();
     now[D_SD] = access("/sys/block/mmcblk0", F_OK) == 0 ? 1 : (access("/sys/block", F_OK) == 0 ? 0 : -1);
+    /* uma mudança só vale depois de N leituras iguais (700 ms cada): o bit de
+     * carregador da PMU oscila na USB do PC e o estado do USB passa por
+     * estados intermediários; o fone é imediato */
+    static const int need[D__N] = { 1, 3, 3, 2 };
+    static int cand[D__N] = { -2, -2, -2, -2 }, seen[D__N];
     for(int d = 0; d < D__N; d++) {
-        if(now[d] >= 0 && state[d] >= 0 && now[d] != state[d] && settings()->notify) announce(d, now[d]);
+        if(state[d] == -2 || now[d] < 0) { state[d] = now[d]; cand[d] = -2; continue; }
+        if(now[d] == state[d]) { cand[d] = -2; continue; }
+        if(now[d] != cand[d]) { cand[d] = now[d]; seen[d] = 0; }
+        if(++seen[d] < need[d]) continue;
+        if(state[d] >= 0 && settings()->notify) announce(d, now[d]);
         state[d] = now[d];
+        cand[d] = -2;
     }
 }
 

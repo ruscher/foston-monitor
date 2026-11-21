@@ -7,6 +7,7 @@
 
 static bf_palette_t P;
 
+lv_style_t bf_st_scrollbar;
 lv_style_t bf_st_screen, bf_st_card, bf_st_btn, bf_st_btn_pr, bf_st_btn_primary,
            bf_st_btn_danger, bf_st_plain;
 static bool styles_inited;
@@ -141,7 +142,24 @@ void theme_init(lv_display_t *disp)
     lv_style_set_radius(&bf_st_plain, 0);
     lv_style_set_shadow_width(&bf_st_plain, 0);
 
+    /* barra de rolagem visível (lv_obj_remove_style_all apaga a do tema) */
+    style_reinit(&bf_st_scrollbar);
+    lv_style_set_bg_color(&bf_st_scrollbar, P.text_dim);
+    lv_style_set_bg_opa(&bf_st_scrollbar, LV_OPA_60);
+    lv_style_set_width(&bf_st_scrollbar, 6);
+    lv_style_set_radius(&bf_st_scrollbar, 3);
+    lv_style_set_pad_right(&bf_st_scrollbar, 3);
+    lv_style_set_pad_ver(&bf_st_scrollbar, 6);
+
     styles_inited = true;
+}
+
+void bf_scrollable(lv_obj_t *o)
+{
+    lv_obj_add_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(o, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(o, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_style(o, &bf_st_scrollbar, LV_PART_SCROLLBAR);
 }
 
 lv_obj_t *bf_plain(lv_obj_t *parent)

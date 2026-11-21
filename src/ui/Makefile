@@ -139,6 +139,7 @@ SHOT_DIR ?= ../../docs/images/ui
 screenshots: sim
 	@rm -rf build/shotdata && mkdir -p build/shotdata
 	@cp -r data/apps build/shotdata/apps
+	@python3 tools/make_sample_pictures.py build/shotdata/pictures > /dev/null
 	@printf '$$ df -h /\n$$ free -m\nuname -a\n' > build/shotdata/favorites.txt
 	@printf 'ls -la /data\n$$ dmesg | tail -n 20\ncat /proc/cpuinfo\n' > build/shotdata/history.txt
 	@mkdir -p $(SHOT_DIR) && rm -f $(SHOT_DIR)/*.png

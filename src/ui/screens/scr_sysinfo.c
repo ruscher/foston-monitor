@@ -79,8 +79,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_flex_grow(col, 1);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(col, 2, 0);
-    lv_obj_add_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(col, LV_DIR_VER);
+    bf_scrollable(col);
 
     char user[64], host[64], buf[192], a[32], b[32];
     sysinfo_user(user, sizeof user);

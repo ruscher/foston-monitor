@@ -142,6 +142,7 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 |---|---|
 | ![](images/ui/01-inicio.png) | **Início** — grade 4×2 paginada (deslizar ou setas), indicador de página. |
 | ![](images/ui/01b-inicio-painel.png) | **Início, modo Painel** — relógio grande (fonte só de algarismos, 72 px), data, bateria, "Tocando agora" com anterior/tocar/próximo e até 6 atalhos. |
+| ![](images/ui/01h-inicio-painel-tocando.png) | **Painel tocando** — capa, título (tag ou nome do arquivo), artista — álbum, tempo decorrido/total. |
 | ![](images/ui/01c-inicio-quiosque.png) | **Início, modo Quiosque** — só os apps escolhidos; o Terminal sai da barra e Ajustes abre segurando o botão por 2 s. |
 | ![](images/ui/02-inicio-pagina-2.png) | **Início, página 2** — Big Screen, Monitor, Ajustes. |
 | ![](images/ui/03-ajustes.png) | **Ajustes** — 14 itens em 2 colunas; itens sem driver mostram "indisponível". |
@@ -169,10 +170,20 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 | ![](images/ui/18-reset-settings.png) | **Reset Settings** — explica o que muda; confirmação obrigatória. |
 | ![](images/ui/19-ssh.png) | **SSH** — estado real da porta 22 e endereço. |
 | ![](images/ui/20-avancado.png) | **Avançado** — pasta de dados, fonte de status, pastas de apps. |
-| ![](images/ui/21-multimidia.png) | **Multimídia** — página "em desenvolvimento" + "não disponível neste hardware". |
+| ![](images/ui/21-multimidia.png) | **Multimídia** sem MP3 — diz onde procura (cartão SD e `music/` da pasta de dados). |
+| ![](images/ui/21b-multimidia-tocando.png) | **Multimídia** tocando — capa, título, artista, formato, espectro, progresso; botões de volume, fila, informações e tela cheia. |
+| ![](images/ui/21c-multimidia-lista.png) | **Lista de reprodução** — rola com barra; a faixa atual em destaque. |
+| ![](images/ui/21d-multimidia-tela-cheia.png) | **Tela cheia** — capa grande, título, artista, álbum · ano · gênero · posição na fila, formato, espectro largo, volume próprio. |
+| ![](images/ui/21e-multimidia-opcoes.png) | **Aparência do tocador** — espectro (barras, espelho, LED, linha), cores (coral, tema, arco-íris, fogo, gelo), fundo (cor, cor da capa, papel de parede) e modo claro/escuro, guardados nos ajustes. |
+| ![](images/ui/21f-multimidia-led-fogo.png) | LED com cores "fogo". |
+| ![](images/ui/21g-multimidia-espelho-arco-iris.png) | Espelho, arco-íris e fundo pela cor média da capa. |
+| ![](images/ui/21h-multimidia-linha-claro.png) | Linha, "gelo", modo claro. |
+| ![](images/ui/21i-volume.png) | **Volume** — barra vertical, porcentagem e mudo; abre pelo ícone de som da barra superior (qualquer tela) e pelo Multimídia. |
 | ![](images/ui/22-fm-transmitir.png) | **FM Transmitir** — chip FM ainda não identificado. |
-| ![](images/ui/23-terminal.png) | **Terminal** — em desenvolvimento, com atalho para o Run em modo terminal. |
-| ![](images/ui/24-livro.png) | **Livro** — só software, em desenvolvimento. |
+| ![](images/ui/23-terminal.png) | **Terminal** — `/bin/sh` num PTY com emulação VT100 e teclado na tela. |
+| ![](images/ui/24-livro.png) | **Livro** sem livros — diz onde procura. |
+| ![](images/ui/37-galeria.png) | **Galeria** — miniaturas de JPEG, PNG, GIF, BMP e SVG do cartão SD e da pasta de dados; recentes ou por nome; rola com barra. |
+| ![](images/ui/37b-galeria-foto.png) | **Visualizador** — zoom, ◀ ▶ e deslizar para trocar de foto; GIF animado. |
 | ![](images/ui/25-dialogo-desligar.png) | **Desligar** — diálogo de confirmação. |
 | ![](images/ui/26-recentes.png) | **Recentes**. |
 | ![](images/ui/30-tema-claro-inicio.png) | **Tema claro** — início. |

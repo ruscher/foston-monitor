@@ -109,6 +109,11 @@ void settings_load(void)
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
         else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "music_shuffle")) cur.music_shuffle = atoi(v) != 0;
+        else if(!strcmp(k, "music_vis"))     cur.music_vis = clampi(atoi(v), 0, 3);
+        else if(!strcmp(k, "music_color"))   cur.music_color = clampi(atoi(v), 0, 4);
+        else if(!strcmp(k, "music_bg"))      cur.music_bg = clampi(atoi(v), 0, 2);
+        else if(!strcmp(k, "music_light"))   cur.music_light = atoi(v) != 0;
+        else if(!strcmp(k, "gallery_sort"))  cur.gallery_sort = atoi(v) != 0;
         else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
@@ -142,6 +147,11 @@ bool settings_save(void)
     fprintf(f, "volume = %d\n", cur.volume);
     fprintf(f, "music_repeat = %d\n", cur.music_repeat);
     fprintf(f, "music_shuffle = %d\n", cur.music_shuffle ? 1 : 0);
+    fprintf(f, "music_vis = %d\n", cur.music_vis);
+    fprintf(f, "music_color = %d\n", cur.music_color);
+    fprintf(f, "music_bg = %d\n", cur.music_bg);
+    fprintf(f, "music_light = %d\n", cur.music_light ? 1 : 0);
+    fprintf(f, "gallery_sort = %d\n", cur.gallery_sort ? 1 : 0);
     fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "show_date = %d\n", cur.show_date);

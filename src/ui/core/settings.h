@@ -29,6 +29,11 @@ typedef struct {
     bool clock_24h;
     int  music_repeat;  /* 0 desligado, 1 todas, 2 uma */
     bool music_shuffle;
+    int  music_vis;     /* tela cheia: espectro 0 barras, 1 espelho, 2 LED, 3 linha */
+    int  music_color;   /* 0 coral, 1 tema, 2 arco-íris, 3 fogo, 4 gelo */
+    int  music_bg;      /* 0 cor do tema, 1 cor da capa, 2 papel de parede */
+    bool music_light;   /* tela cheia em modo claro */
+    bool gallery_sort;  /* Galeria: false recentes primeiro, true por nome */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */

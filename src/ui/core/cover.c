@@ -73,10 +73,16 @@ static bool jpeg_scaled(const uint8_t *data, size_t len, unsigned max_w, unsigne
         }
         if(!s.dw) s.dw = 1;
         if(!s.dh) s.dh = 1;
+        /* o TJpgDec reduz 1/2, 1/4 ou 1/8 enquanto decodifica (JD_USE_SCALE):
+         * a maior redução que ainda cobre o destino, muito mais rápido em fotos grandes */
+        uint8_t sc = 0;            /* até 1/4: o 1/8 (só DC) sai corrompido nesta configuração */
+        while(sc < 2 && (s.w >> (sc + 1)) >= s.dw && (s.h >> (sc + 1)) >= s.dh) sc++;
+        s.w >>= sc;
+        s.h >>= sc;
         s.out = fixed ? fixed : malloc((size_t)s.dw * s.dh * 2);
         if(s.out) {
             memset(s.out, 0, (size_t)s.dw * s.dh * 2);
-            if(jd_decomp(&jd, out_func, 0) == JDR_OK) {
+            if(jd_decomp(&jd, out_func, sc) == JDR_OK) {
                 ok = true;
                 *out = s.out;
                 *ow = s.dw;

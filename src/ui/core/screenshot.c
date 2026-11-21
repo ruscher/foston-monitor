@@ -19,6 +19,7 @@ int screenshot_run(const char *dir)
 #include "settings.h"
 #include "../widgets/imgview.h"
 #include "status.h"
+#include "../widgets/volpop.h"
 #include "theme.h"
 #include "../screens/screens.h"
 #include "../widgets/bottombar.h"
@@ -174,13 +175,27 @@ int screenshot_run(const char *dir)
     go(SCR_ADVANCED, 0);            shot("20-avancado");
     go(SCR_MUSIC, 0);               shot("21-multimidia");
     scr_music_demo(0); pump(2500);  shot("21b-multimidia-tocando");
+    s->home_mode = BF_HOME_PANEL;
+    nav_home(); pump(1200);         shot("01h-inicio-painel-tocando");
+    s->home_mode = BF_HOME_GRID;
+    go(SCR_MUSIC, 0); pump(200);
     scr_music_demo(1); pump(100);   shot("21c-multimidia-lista");
     scr_music_demo(2); pump(800);   shot("21d-multimidia-tela-cheia");
+    scr_music_demo(4); pump(200);   shot("21e-multimidia-opcoes");
+    scr_music_demo(5); pump(800);   shot("21f-multimidia-led-fogo");
+    scr_music_demo(6); pump(800);   shot("21g-multimidia-espelho-arco-iris");
+    scr_music_demo(7); pump(800);   shot("21h-multimidia-linha-claro");
+    volpop_open(560, 120); pump(200); shot("21i-volume");
+    volpop_close();
+    scr_music_demo(8); pump(100);
     scr_music_demo(3); pump(100);
     go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
+    go(SCR_GALLERY, 0);             scr_gallery_demo(0); pump(200); shot("37-galeria");
+    scr_gallery_demo(1); pump(300); shot("37b-galeria-foto");
+    scr_gallery_demo(2); pump(50);
     go(SCR_BOOK, 0);                shot("24-livro");
     {
         char f[600];

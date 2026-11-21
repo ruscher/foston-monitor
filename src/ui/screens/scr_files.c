@@ -15,6 +15,7 @@
 #include "../core/settings.h"
 #include "../core/cover.h"
 #include "../widgets/imgview.h"
+#include "../core/imgload.h"
 #include "../widgets/dialog.h"
 #include "../core/fileops.h"
 #include "../core/osd.h"
@@ -69,13 +70,12 @@ static bool ext_in(const char *n, const char *const *list)
 static kind_t kind_of(const char *n, bool dir)
 {
     static const char *const audio[] = { "mp3", NULL };
-    static const char *const image[] = { "jpg", "jpeg", "svg", NULL };
     static const char *const book[] = { "epub", "pdf", NULL };
     static const char *const text[] = { "txt", "log", "conf", "cfg", "ini", "sh", "desktop", "md",
                                         "csv", "json", "xml", "srt", "nmea", "sha256", "c", "h", NULL };
     if(dir) return K_DIR;
     if(ext_in(n, audio)) return K_AUDIO;
-    if(ext_in(n, image)) return K_IMAGE;
+    if(img_is_image(n)) return K_IMAGE;           /* JPEG, PNG, BMP, GIF, SVG (core/imgload) */
     if(ext_in(n, book)) return K_BOOK;
     if(ext_in(n, text)) return K_TEXT;
     return K_OTHER;
@@ -217,8 +217,7 @@ static void open_text(const char *path, const char *name)
     char *txt = read_file(path, TEXT_MAX, &len, &cut);
     lv_obj_t *body = viewer_frame(name);
     lv_obj_set_style_pad_all(body, BF_SP_M, 0);
-    lv_obj_add_flag(body, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(body, LV_DIR_VER);
+    bf_scrollable(body);
     if(!txt) { bf_label(body, tr(S_FILES_CANT_OPEN), BF_FONT_M, pal()->warning); return; }
     if(memchr(txt, 0, len)) { free(txt); bf_label(body, tr(S_FILES_BINARY), BF_FONT_M, pal()->text_dim); return; }
     sanitize(txt, len);
@@ -679,9 +678,16 @@ static void build_action_bar(void)
     }
 }
 
+static lv_obj_t *list_obj;           /* lista atual (para manter a rolagem) */
+static char list_dir[1024];
+
 static void rebuild(void)
 {
     const bf_palette_t *p = pal();
+    /* refeita na mesma pasta (renomear, apagar, colar): volta ao mesmo ponto */
+    int keep_y = list_obj && !strcmp(list_dir, cwd) ? (int)lv_obj_get_scroll_y(list_obj) : 0;
+    list_obj = NULL;
+    snprintf(list_dir, sizeof list_dir, "%s", cwd);
     lv_obj_clean(root);
 
     /* cabeçalho: subir + caminho + espaço */
@@ -712,6 +718,8 @@ static void rebuild(void)
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_all(list, BF_SP_XS, 0);
     lv_obj_set_style_pad_row(list, 2, 0);
+    bf_scrollable(list);
+    list_obj = list;
 
     if(!cwd[0]) {
         sd_state_t sd = sdctl_status();
@@ -745,6 +753,10 @@ static void rebuild(void)
                    open_entry, i, true);
     }
     if(truncated) bf_label(list, tr(S_FILES_TOO_MANY), BF_FONT_S, p->warning);
+    if(keep_y) {
+        lv_obj_update_layout(list);
+        lv_obj_scroll_to_y(list, keep_y, LV_ANIM_OFF);
+    }
 }
 
 static void create(lv_obj_t *parent, int arg)
@@ -775,6 +787,7 @@ static void destroy(void)
         op_timer = NULL;
     }
     op_bar = op_lbl = NULL;
+    list_obj = NULL;
     viewer_close(NULL);
     imgview_close();
     free_ents();
