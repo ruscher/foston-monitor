@@ -116,6 +116,9 @@ Cada queda também zerava a histerese e a carga recomeçava.
 - Interface (`core/devwatch.c`): uma mudança do carregador ou do USB só é anunciada depois
   de ~2 s estável (3 leituras de 700 ms).
 
+Conferido no aparelho (21/11/2026, cabo do PC, 15 min): **0 avisos** na interface e **0**
+`no charger` no kernel (antes: um a cada ~4,6 min).
+
 ## Em aberto
 
 - Corrente em mA de cada código e período real do watchdog (medir no aparelho).
