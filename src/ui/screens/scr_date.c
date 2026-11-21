@@ -113,6 +113,7 @@ static void main_tick(lv_timer_t *t)
         case CLK_MANUAL: hhmm(when, w, sizeof w); snprintf(b, sizeof b, tr(S_DATE_SRC_MANUAL), w); break;
         case CLK_NTP:    hhmm(when, w, sizeof w);
                          snprintf(b, sizeof b, tr(S_DATE_SRC_NTP), clock_source_detail(), w); break;
+        case CLK_GPS:    hhmm(when, w, sizeof w); snprintf(b, sizeof b, tr(S_DATE_SRC_GPS), w); break;
         default:         snprintf(b, sizeof b, "%s", tr(S_DATE_SRC_UNSET)); break;
     }
     set_text_if(src_lbl, b);
