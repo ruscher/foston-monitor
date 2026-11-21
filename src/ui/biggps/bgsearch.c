@@ -185,49 +185,55 @@ int bgs_query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_res
         a = b + 1;
     }
     if (!nw || max < 1) return 0;
-    /* the word with the fewest entries drives the search */
-    uint32_t best_lo = 0, best_hi = 0;
-    uint64_t best_cnt = UINT64_MAX;
+    /* words in order of fewest entries: the rarest drives the search; a word found only in
+     * the context ("... curitiba") may give nothing, so the next one drives a new round */
+    uint32_t lo[MAXW], hi[MAXW];
+    uint64_t cnt[MAXW];
+    int order[MAXW];
     for (int k = 0; k < nw; k++) {
-        uint32_t lo = bound(ix, words[k], 0), hi = bound(ix, words[k], 1);
-        uint64_t cnt = 0;
-        for (uint32_t i = lo; i < hi && cnt < best_cnt; i++) {
+        lo[k] = bound(ix, words[k], 0);
+        hi[k] = bound(ix, words[k], 1);
+        cnt[k] = 0;
+        for (uint32_t i = lo[k]; i < hi[k] && cnt[k] < 2u * MAXCAND; i++) {
             bgs_token_t t;
             char tw[64];
-            if (!token(ix, i, &t, tw, sizeof tw)) cnt += t.count;
+            if (!token(ix, i, &t, tw, sizeof tw)) cnt[k] += t.count;
         }
-        if (cnt < best_cnt) { best_cnt = cnt; best_lo = lo; best_hi = hi; }
+        order[k] = k;
+        for (int j = k; j > 0 && cnt[order[j - 1]] > cnt[order[j]]; j--) { int t = order[j]; order[j] = order[j - 1]; order[j - 1] = t; }
     }
-    if (!best_cnt) return 0;
     uint32_t *cand = malloc(MAXCAND * sizeof *cand);
-    if (!cand) return 0;
-    int nc = 0;
-    for (uint32_t i = best_lo; i < best_hi && nc < MAXCAND; i++) {
-        bgs_token_t t;
-        char tw[64];
-        if (token(ix, i, &t, tw, sizeof tw) || (uint64_t)t.first + t.count > ix->h.npostings) continue;
-        uint32_t take = t.count;
-        if (take > (uint32_t)(MAXCAND - nc)) take = (uint32_t)(MAXCAND - nc);
-        if (rd(ix, (off_t)ix->h.off_postings + (off_t)t.first * 4, cand + nc, take * 4)) continue;
-        nc += (int)take;
-    }
-    qsort(cand, (size_t)nc, sizeof *cand, cmp_u32);
     double *score = malloc((size_t)max * sizeof *score);
     int nr = 0;
-    for (int i = 0; i < nc && score; i++) {
-        if (i && cand[i] == cand[i - 1]) continue;
-        if (cand[i] >= ix->h.nentries) continue;
-        bgs_entry_t e;
-        if (rd(ix, (off_t)ix->h.off_entries + (off_t)cand[i] * sizeof e, &e, sizeof e)) continue;
-        bgs_result_t r;
-        fill(ix, &e, x, y, &r);
-        char norm[256], full[200];
-        snprintf(full, sizeof full, "%s %s", r.name, r.context);
-        bgs_norm(full, norm, sizeof norm);
-        int exact;
-        if (!all_match(norm, words, nw, &exact)) continue;
-        double s = e.rank + (exact ? 25 : 0) - 15.0 * log2(1.0 + r.dist_m / 1000.0);
-        insert(out, score, &nr, max, &r, s);
+    for (int round = 0; round < nw && nr < max && cand && score; round++) {
+        int k = order[round];
+        if (!cnt[k]) continue;
+        int nc = 0;
+        for (uint32_t i = lo[k]; i < hi[k] && nc < MAXCAND; i++) {
+            bgs_token_t t;
+            char tw[64];
+            if (token(ix, i, &t, tw, sizeof tw) || (uint64_t)t.first + t.count > ix->h.npostings) continue;
+            uint32_t take = t.count;
+            if (take > (uint32_t)(MAXCAND - nc)) take = (uint32_t)(MAXCAND - nc);
+            if (rd(ix, (off_t)ix->h.off_postings + (off_t)t.first * 4, cand + nc, take * 4)) continue;
+            nc += (int)take;
+        }
+        qsort(cand, (size_t)nc, sizeof *cand, cmp_u32);
+        for (int i = 0; i < nc; i++) {
+            if (i && cand[i] == cand[i - 1]) continue;
+            if (cand[i] >= ix->h.nentries) continue;
+            bgs_entry_t e;
+            if (rd(ix, (off_t)ix->h.off_entries + (off_t)cand[i] * sizeof e, &e, sizeof e)) continue;
+            bgs_result_t r;
+            fill(ix, &e, x, y, &r);
+            char norm[256], full[200];
+            snprintf(full, sizeof full, "%s %s", r.name, r.context);
+            bgs_norm(full, norm, sizeof norm);
+            int exact;
+            if (!all_match(norm, words, nw, &exact)) continue;
+            double sc = e.rank + (exact ? 25 : 0) - 15.0 * log2(1.0 + r.dist_m / 1000.0);
+            insert(out, score, &nr, max, &r, sc);
+        }
     }
     free(score);
     free(cand);

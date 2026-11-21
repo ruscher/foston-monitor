@@ -792,9 +792,13 @@ static void end_navigation(void)
 static void end_cb(lv_event_t *e) { (void)e; end_navigation(); }
 static void cancel_cb(lv_event_t *e) { (void)e; end_navigation(); }
 
+static void recent_add(const char *name, uint32_t x, uint32_t y);
+static char dest_title[96];        /* nome do destino escolhido na busca (vazio: ponto marcado) */
+
 static void start_navigation(bool simulate)
 {
     close_sheet();
+    recent_add(dest_title[0] ? dest_title : N.dest_name[0] ? N.dest_name : tr(S_MAP_POINT), N.dx, N.dy);
     N.navigating = 1;
     N.simulate = simulate;
     N.sim_t = 0;
@@ -889,7 +893,6 @@ static void profile_cb(lv_event_t *e)
     route_request(profile, false);
 }
 
-static char dest_title[96];
 static void fav_add(const char *name, uint32_t x, uint32_t y);
 
 static void fav_save_cb(lv_event_t *e)
@@ -1053,26 +1056,57 @@ static lv_obj_t *sv, *sv_ta, *sv_list, *sv_kb;
 static lv_timer_t *sv_timer;
 static bgs_result_t sv_res[MAXRES];
 static int sv_nres;
-static struct { char name[96]; uint32_t x, y; } favs[MAXFAV];
-static int nfav;
+static struct { char name[96]; uint32_t x, y; } favs[MAXFAV], recent[10];
+static int nfav, nrecent;
 
-static void fav_load(void)
+static int list_load(const char *file, void *dst, int max);
+
+static void fav_load(void) { nfav = list_load("biggps-favoritos.txt", favs, MAXFAV); }
+
+/* lista "lat lon nome" de um arquivo da pasta de dados */
+static int list_load(const char *file, void *dst, int max)
 {
+    struct { char name[96]; uint32_t x, y; } *out = dst;
     char path[512], line[200];
-    data_path(path, sizeof path, "biggps-favoritos.txt");
-    nfav = 0;
+    data_path(path, sizeof path, file);
+    int n = 0;
     FILE *f = fopen(path, "r");
-    if(!f) return;
-    while(nfav < MAXFAV && fgets(line, sizeof line, f)) {
+    if(!f) return 0;
+    while(n < max && fgets(line, sizeof line, f)) {
         double lat, lon;
         int off = 0;
         if(sscanf(line, "%lf %lf %n", &lat, &lon, &off) < 2 || !off || fabs(lat) > 85 || fabs(lon) > 180) continue;
         char *nm = line + off;
         nm[strcspn(nm, "\r\n")] = 0;
         if(!*nm) continue;
-        snprintf(favs[nfav].name, sizeof favs[nfav].name, "%s", nm);
-        bgr_lonlat_to_world(lon, lat, &favs[nfav].x, &favs[nfav].y);
-        nfav++;
+        snprintf(out[n].name, sizeof out[n].name, "%s", nm);
+        bgr_lonlat_to_world(lon, lat, &out[n].x, &out[n].y);
+        n++;
+    }
+    fclose(f);
+    return n;
+}
+
+/* destinos recentes: o mais novo primeiro, sem repetir, no máximo 10 */
+static void recent_add(const char *name, uint32_t x, uint32_t y)
+{
+    nrecent = list_load("biggps-recentes.txt", recent, 10);
+    char path[512];
+    data_path(path, sizeof path, "biggps-recentes.txt");
+    FILE *f = fopen(path, "w");
+    if(!f) return;
+    double lon, lat;
+    bgr_world_to_lonlat(x, y, &lon, &lat);
+    char clean[96];
+    snprintf(clean, sizeof clean, "%s", name);
+    clean[strcspn(clean, "\r\n")] = 0;
+    fprintf(f, "%.7f %.7f %s\n", lat, lon, clean);
+    int written = 1;
+    for(int i = 0; i < nrecent && written < 10; i++) {
+        if(!strcmp(recent[i].name, clean)) continue;
+        bgr_world_to_lonlat(recent[i].x, recent[i].y, &lon, &lat);
+        fprintf(f, "%.7f %.7f %s\n", lat, lon, recent[i].name);
+        written++;
     }
     fclose(f);
 }
@@ -1118,7 +1152,10 @@ static void go_to(uint32_t x, uint32_t y, const char *name)
 static void res_cb(lv_event_t *e)
 {
     int i = (int)(intptr_t)lv_event_get_user_data(e);
-    if(i >= 1000) {                                             /* favorito */
+    if(i >= 2000) {                                             /* recente */
+        i -= 2000;
+        if(i < nrecent) go_to(recent[i].x, recent[i].y, recent[i].name);
+    } else if(i >= 1000) {                                      /* favorito */
         i -= 1000;
         if(i < nfav) go_to(favs[i].x, favs[i].y, favs[i].name);
     } else if(i < sv_nres) {
@@ -1206,6 +1243,9 @@ static void show_home(void)
     fav_load();
     if(nfav) bf_label(sv_list, tr(S_MAP_FAVORITES), BF_FONT_S, pal()->text_dim);
     for(int i = 0; i < nfav; i++) list_row(LV_SYMBOL_SAVE, favs[i].name, NULL, UINT32_MAX, 1000 + i);
+    nrecent = list_load("biggps-recentes.txt", recent, 10);
+    if(nrecent) bf_label(sv_list, tr(S_MAP_RECENT), BF_FONT_S, pal()->text_dim);
+    for(int i = 0; i < nrecent; i++) list_row(LV_SYMBOL_LOOP, recent[i].name, NULL, UINT32_MAX, 2000 + i);
 }
 
 static void sv_query(lv_timer_t *t)
