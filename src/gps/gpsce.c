@@ -27,6 +27,7 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <termios.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
@@ -1127,7 +1128,18 @@ static uint64_t h_SetCommState(u32 *a)
     t.c_cc[VTIME] = 0;
     cfsetispeed(&t, sp);
     cfsetospeed(&t, sp);
-    return R(tcsetattr(h->fd, TCSADRAIN, &t) == 0);
+    int ok = tcsetattr(h->fd, TCSADRAIN, &t) == 0;
+    /* RTS/DTR como o DCB pede (o Linux liga os dois ao abrir): fDtrControl
+     * bits 4-5, fRtsControl bits 12-13 (0 desligado, 1 ligado, 2/3 controle) */
+    u32 fl = dcb[2];
+    int dtr = (fl >> 4) & 3, rts = (fl >> 12) & 3, bits = 0;
+    ioctl(h->fd, TIOCMGET, &bits);
+    if(dtr == 1) bits |= TIOCM_DTR; else bits &= ~TIOCM_DTR;
+    if(rts == 1) bits |= TIOCM_RTS; else bits &= ~TIOCM_RTS;
+    ioctl(h->fd, TIOCMSET, &bits);
+    if(strace_) logf_("serial: DCB flags %#x (DTR %d, RTS %d, bytesize %u, paridade %u, stop %u)", fl, dtr, rts,
+                      ((uint8_t *)dcb)[18], ((uint8_t *)dcb)[19], ((uint8_t *)dcb)[20]);
+    return R(ok);
 }
 
 /* ReadFile da serial: espera até o tempo total do CE e devolve o que houver */
