@@ -289,7 +289,16 @@ int main(int argc, char **argv)
     }
     std::fprintf(stderr, "grafo expandido: %zu arestas (%u retornos e %u conversões proibidas removidos)\n", ex_head.size(), uturns, banned);
 
-    ContractionHierarchy ch = ContractionHierarchy::build(m, ex_tail, ex_head, ex_w,
+    /* bicycle and foot have no turn restrictions: hierarchy over nodes and arcs (much smaller) */
+    const bool node_mode = profile == BGR_BIKE || profile == BGR_FOOT;
+    const unsigned cn = node_mode ? n : m;              // CH nodes
+    if (node_mode) {
+        ex_tail = tail;
+        ex_head.assign(g.head.begin(), g.head.end());
+        ex_w = time_ds;
+        std::fprintf(stderr, "modo por nós: CH sobre %u nós e %u arcos\n", n, m);
+    }
+    ContractionHierarchy ch = ContractionHierarchy::build(cn, ex_tail, ex_head, ex_w,
         [](const std::string &s) { (void)s; });
     std::fprintf(stderr, "CH: %zu arcos para frente, %zu para trás (%ld s)\n", ch.forward.head.size(), ch.backward.head.size(), (long)(time(nullptr) - t0));
     // the section table uses 32-bit offsets: the whole file must stay below 4 GB (FAT32 too)
@@ -299,19 +308,19 @@ int main(int argc, char **argv)
     uint32_t ch_arcs[2] = {0, 0};
     // CH node ids: the lower part keeps the spatial order of the arcs, the top of the
     // hierarchy goes to the end in rank order (BGR_TOP_PERMILLE, default 20 = 2 %)
-    std::vector<unsigned> ch_id(m), ch_node(m);          // arc -> id, id -> arc
+    std::vector<unsigned> ch_id(cn), ch_node(cn);        // CH input node -> id, id -> node
     {
         const char *e = getenv("BGR_TOP_PERMILLE");
         unsigned permille = e ? (unsigned)atoi(e) : 20;
-        unsigned top = (unsigned)((uint64_t)m * permille / 1000);
-        std::vector<unsigned> ids(m);
-        for (unsigned a = 0; a < m; a++) ids[a] = a;
+        unsigned top = (unsigned)((uint64_t)cn * permille / 1000);
+        std::vector<unsigned> ids(cn);
+        for (unsigned a = 0; a < cn; a++) ids[a] = a;
         std::stable_sort(ids.begin(), ids.end(), [&](unsigned a, unsigned b) {
-            bool ta = ch.rank[a] >= m - top, tb = ch.rank[b] >= m - top;
+            bool ta = ch.rank[a] >= cn - top, tb = ch.rank[b] >= cn - top;
             if (ta != tb) return tb;
             return ta ? ch.rank[a] < ch.rank[b] : a < b;
         });
-        for (unsigned i = 0; i < m; i++) { ch_node[i] = ids[i]; ch_id[ids[i]] = i; }
+        for (unsigned i = 0; i < cn; i++) { ch_node[i] = ids[i]; ch_id[ids[i]] = i; }
     }
     {
         ContractionHierarchy::Side *side[2] = {&ch.forward, &ch.backward};
@@ -320,8 +329,8 @@ int main(int argc, char **argv)
         for (int sd = 0; sd < 2; sd++) {
             ContractionHierarchy::Side &S = *side[sd];
             amap[sd].assign(S.head.size(), 0);
-            out[sd].first_out.assign(m + 1, 0);
-            for (unsigned id = 0; id < m; id++) {
+            out[sd].first_out.assign(cn + 1, 0);
+            for (unsigned id = 0; id < cn; id++) {
                 unsigned r = ch.rank[ch_node[id]];
                 for (unsigned arc = S.first_out[r]; arc < S.first_out[r + 1]; arc++) {
                     amap[sd][arc] = (unsigned)out[sd].head.size();
@@ -334,18 +343,18 @@ int main(int argc, char **argv)
         /* format 2: varint blocks; shortcuts keep only their middle node (the CH node that
          * owns the shortcut's backward part) */
         std::vector<unsigned> owner_b(ch.backward.head.size());
-        for (unsigned r = 0; r < m; r++)
+        for (unsigned r = 0; r < cn; r++)
             for (unsigned arc = ch.backward.first_out[r]; arc < ch.backward.first_out[r + 1]; arc++) owner_b[arc] = ch_id[ch.order[r]];
         for (int sd = 0; sd < 2; sd++) {
             ContractionHierarchy::Side &S = *side[sd];
             size_t na = S.head.size();
             std::vector<uint32_t> &first = sd ? chb_first : chf_first;
             std::string &data = sd ? chb_data : chf_data;
-            first.assign(m + 1, 0);
+            first.assign(cn + 1, 0);
             /* entries in the order of out[sd] (already per new id); aux from the old arc */
             std::vector<unsigned> old_of_new(na);
             for (size_t arc = 0; arc < na; arc++) old_of_new[amap[sd][arc]] = (unsigned)arc;
-            for (unsigned id = 0; id < m; id++) {
+            for (unsigned id = 0; id < cn; id++) {
                 first[id] = (uint32_t)data.size();
                 for (unsigned na_ = out[sd].first_out[id]; na_ < out[sd].first_out[id + 1]; na_++) {
                     unsigned arc = old_of_new[na_];
@@ -356,7 +365,7 @@ int main(int argc, char **argv)
                     else put_zz32(data, (int64_t)owner_b[S.shortcut_first_arc[arc]] - id);   // middle node
                 }
             }
-            first[m] = (uint32_t)data.size();
+            first[cn] = (uint32_t)data.size();
             if (data.size() > 0xFFFFFFF0ull) { std::fprintf(stderr, "CH grande demais\n"); return 1; }
         }
         ch_arcs[0] = (uint32_t)ch.forward.head.size();
@@ -366,17 +375,18 @@ int main(int argc, char **argv)
     }
 
     // largest strongly connected component of the expanded graph: only its arcs are snappable
-    std::vector<unsigned> ex_first(m + 1, 0);
+    std::vector<unsigned> ex_first(cn + 1, 0);
     for (unsigned e = 0; e < ex_tail.size(); e++) ex_first[ex_tail[e] + 1]++;
-    for (unsigned a = 0; a < m; a++) ex_first[a + 1] += ex_first[a];
-    std::vector<bool> in_big = compute_largest_strongly_connected_component(ex_first, ex_head);   // ex_tail is sorted
+    for (unsigned a = 0; a < cn; a++) ex_first[a + 1] += ex_first[a];
+    std::vector<bool> big_ch = compute_largest_strongly_connected_component(ex_first, ex_head);   // ex_tail is sorted
+    std::vector<bool> in_big(m);
+    for (unsigned a = 0; a < m; a++) in_big[a] = node_mode ? big_ch[tail[a]] && big_ch[g.head[a]] : big_ch[a];
     std::fprintf(stderr, "maior componente: %ld de %u arcos\n", (long)std::count(in_big.begin(), in_big.end(), true), m);
-
     if (tests) {
         FILE *tf = std::fopen(tests, "w");
         if (!tf) { std::perror(tests); return 1; }
-        std::vector<unsigned> big_arcs;
-        for (unsigned a = 0; a < m; a++) if (in_big[a]) big_arcs.push_back(a);
+        std::vector<unsigned> big_arcs;                  // CH input nodes of the big component
+        for (unsigned a = 0; a < cn; a++) if (big_ch[a]) big_arcs.push_back(a);
         std::mt19937 rng(20261121);
         Dijkstra dij(ex_first, ex_tail, ex_head);
         for (int q = 0; q < 300; q++) {
@@ -482,14 +492,16 @@ int main(int argc, char **argv)
     vec(BGR_S_GEOM_FIRST, geom_first); vec(BGR_S_GEOM_X, gx); vec(BGR_S_GEOM_Y, gy);
     vec(BGR_S_WAY_NAME, way_name); vec(BGR_S_WAY_REF, way_ref); vec(BGR_S_WAY_INFO, way_info);
     sec(BGR_S_STRINGS, strings.data(), strings.size());
-    uvec(BGR_S_EX_HEAD, ex_head);
+    if (node_mode) sec(BGR_S_EX_HEAD, nullptr, 0);
+    else uvec(BGR_S_EX_HEAD, ex_head);
     uvec(BGR_S_CH_ID, ch_id);
     vec(BGR_S_CHF_FIRST, chf_first); sec(BGR_S_CHF_DATA, chf_data.data(), chf_data.size());
     vec(BGR_S_CHB_FIRST, chb_first); sec(BGR_S_CHB_DATA, chb_data.data(), chb_data.size());
     vec(BGR_S_GRID_CELLS, grid_cells); vec(BGR_S_GRID_ARCS, grid_arcs);
     h.magic = BGR_MAGIC; h.version = BGR_VERSION; h.profile = (uint32_t)profile;
     h.nodes = n; h.arcs = m; h.ways = (uint32_t)ways.size(); h.geom = (uint32_t)gx.size();
-    h.ex_edges = (uint32_t)ex_head.size(); h.ch_fwd = ch_arcs[0]; h.ch_bwd = ch_arcs[1];
+    h.ex_edges = node_mode ? 0 : (uint32_t)ex_head.size(); h.ch_fwd = ch_arcs[0]; h.ch_bwd = ch_arcs[1];
+    h.flags = node_mode ? BGR_F_NODE : 0;
     h.grid_x0 = x0; h.grid_y0 = y0; h.grid_shift = shift; h.grid_w = gw; h.grid_h = gh;
     h.created = (uint32_t)time(nullptr);
     std::fseek(out, 0, SEEK_SET);

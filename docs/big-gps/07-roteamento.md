@@ -18,6 +18,11 @@ ferramenta [src/ui/biggps/bgroute-cli.c](../../src/ui/biggps/bgroute-cli.c).
   meio da via exceto em rua sem saída (a pé, sempre permitido). Peso = custo da conversão +
   tempo de b. Custos (carro/moto): esquerda 8 s (13 s se fechada), direita 3 s (8 s se
   fechada), retorno 30 s; bicicleta: esquerda 3 s, direita 1 s, retorno 10 s.
+- **Bicicleta e a pé sem expansão** (modo por nós, `BGR_F_NODE`): sem proibições nem custo
+  de conversão, a CH vai direto sobre os nós e arcos da via — no DF bicicleta 47,2 → 30,5 MB
+  e a pé 55,1 → 31,3 MB, construção em 20 s em vez de 49 s; 0 diferenças contra Dijkstra.
+  A origem entra pela ponta do arco (com o resto dele) e o destino pela origem do arco (mais
+  a fração percorrida).
 - **Contraction Hierarchies** (RoutingKit) sobre o grafo expandido; no aparelho, Dijkstra
   bidirecional só "para cima", com tabela hash dos nós visitados (a memória acompanha a
   busca, não o tamanho do grafo) e desempacotamento dos atalhos com pilha explícita.
@@ -55,8 +60,8 @@ No aparelho, a mesma conferência do carro: **300 consultas, 0 diferentes** (for
 |---|---|---|---|---|---|---|
 | carro | 155 622 | 357 074 | 664 356 | 967 299 + 966 961 | 37,4 MB (formato 2) | 30 s |
 | moto | 155 643 | 357 100 | 664 393 | 968 061 + 967 235 | 37,5 MB | 32 s |
-| bicicleta | 183 187 | 444 023 | 860 221 | 1 372 725 + 1 372 224 | 47,2 MB | 49 s |
-| a pé | 179 208 | 478 342 | 1 425 538 | 1 771 828 + 1 770 407 | 55,1 MB | 51 s |
+| bicicleta (modo por nós) | 183 187 | 444 023 | — | — | 30,5 MB | 20 s |
+| a pé (modo por nós) | 179 208 | 478 342 | — | — | 31,3 MB | 20 s |
 
 Rota de teste Rodoviária do Plano Piloto → Taguatinga Centro: carro 23,11 km / 21 min 24 s
 (N1, S1, EPIG, EPTG…), bicicleta 22,65 km / 89 min, a pé 21,77 km / 262 min.

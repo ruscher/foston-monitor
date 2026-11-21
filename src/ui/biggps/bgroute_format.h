@@ -6,7 +6,7 @@
  *   - routing nodes (intersections and way ends) with 32-bit Web Mercator coordinates;
  *   - arcs u->v (one per direction of travel) with way, length, travel time and the
  *     geometry between u and v (modelling nodes, in the direction of the arc);
- *   - a turn-expanded graph: its nodes are the arcs; an edge a->b exists when b leaves the
+ *   - (car, motorcycle) a turn-expanded graph: its nodes are the arcs; an edge a->b exists when b leaves the
  *     head of a and the turn is allowed (OSM turn restrictions, no U-turn except at dead
  *     ends); its weight is turn cost + travel time of b.  This keeps turn restrictions
  *     and turn costs inside a plain node-based contraction hierarchy;
@@ -30,6 +30,11 @@
 #define BGR_VERSION 2
 
 enum { BGR_CAR = 0, BGR_MOTO, BGR_BIKE, BGR_FOOT, BGR_PROFILES };
+
+/* BGR_F_NODE: the hierarchy is over the routing nodes and the original arcs (no turn
+ * expansion: profiles without turn restrictions or turn costs — bicycle, foot); CH_ID is
+ * indexed by node, EX_HEAD is empty and an original CH arc stores the arc id itself. */
+enum { BGR_F_NODE = 1 };
 
 enum {
     BGR_S_NODE_X, BGR_S_NODE_Y,                /* u32[nodes] */
@@ -79,7 +84,8 @@ typedef struct {
     uint32_t grid_shift;                       /* cell = 1 << grid_shift world units */
     uint32_t grid_w, grid_h;
     uint32_t created, data_date;
-    uint32_t reserved[7];
+    uint32_t flags;                            /* BGR_F_* */
+    uint32_t reserved[6];
     bgr_sec_t sec[BGR_NSEC];
 } bgr_header_t;
 

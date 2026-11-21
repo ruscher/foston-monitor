@@ -87,6 +87,10 @@ static uint32_t rd(bgr_pack_t *p, int sec, uint32_t i)
 
 static uint32_t count(const bgr_pack_t *p, int sec) { return p->h.sec[sec].len / 4; }
 
+static int node_mode(const bgr_pack_t *p) { return (p->h.flags & BGR_F_NODE) != 0; }
+/* CH nodes: routing nodes (node mode) or arcs (turn-expanded graph) */
+static uint32_t ch_nodes(const bgr_pack_t *p) { return node_mode(p) ? p->h.nodes : p->h.arcs; }
+
 void bgr_cache_stats(bgr_pack_t *p, unsigned *pages, unsigned *misses)
 {
     unsigned n = 0;
@@ -119,8 +123,8 @@ bgr_pack_t *bgr_open(const char *path, char *err, size_t errlen)
         || count(p, BGR_S_ARC_TAIL) != h->arcs || count(p, BGR_S_ARC_HEAD) != h->arcs || count(p, BGR_S_ARC_WAY) != h->arcs || count(p, BGR_S_ARC_LEN) != h->arcs
         || count(p, BGR_S_ARC_TIME) != h->arcs || count(p, BGR_S_GEOM_FIRST) != h->arcs + 1 || count(p, BGR_S_GEOM_X) != h->geom
         || count(p, BGR_S_GEOM_Y) != h->geom || count(p, BGR_S_WAY_NAME) != h->ways || count(p, BGR_S_WAY_REF) != h->ways
-        || count(p, BGR_S_WAY_INFO) != h->ways || count(p, BGR_S_EX_HEAD) != h->ex_edges || count(p, BGR_S_CH_ID) != h->arcs
-        || count(p, BGR_S_CHF_FIRST) != h->arcs + 1 || count(p, BGR_S_CHB_FIRST) != h->arcs + 1
+        || count(p, BGR_S_WAY_INFO) != h->ways || count(p, BGR_S_EX_HEAD) != h->ex_edges || count(p, BGR_S_CH_ID) != ch_nodes(p)
+        || count(p, BGR_S_CHF_FIRST) != ch_nodes(p) + 1 || count(p, BGR_S_CHB_FIRST) != ch_nodes(p) + 1
         || count(p, BGR_S_GRID_CELLS) < 2 || (count(p, BGR_S_GRID_CELLS) & 1) || h->grid_shift < 8 || h->grid_shift > 24) {
         snprintf(err, errlen, "%s: tamanhos inconsistentes", path);
         goto fail;
@@ -382,7 +386,7 @@ typedef struct {
 static int blk_open(bgr_pack_t *p, int side, uint32_t node, blk_t *b)
 {
     int sf = side ? BGR_S_CHB_FIRST : BGR_S_CHF_FIRST, sd = side ? BGR_S_CHB_DATA : BGR_S_CHF_DATA;
-    if (node >= p->h.arcs) return -1;
+    if (node >= ch_nodes(p)) return -1;
     uint32_t f0 = rd(p, sf, node), f1 = rd(p, sf, node + 1), len = p->h.sec[sd].len;
     if (f0 > f1 || f1 > len) return -1;
     b->p = p;
@@ -450,8 +454,9 @@ static uint32_t search(bgr_pack_t *p, vtab_t *vt, heap_t hp[2], const uint32_t *
         if (blk_open(p, side, it.node, &b)) continue;
         uint32_t y, w, aux;
         int orig;
+        uint32_t ncn = ch_nodes(p);
         while (blk_next(&b, it.node, &y, &w, &orig, &aux)) {
-            if (y >= p->h.arcs) continue;
+            if (y >= ncn) continue;
             uint64_t nd = (uint64_t)it.k + w;
             if (nd >= INF) continue;
             st->relaxed++;
@@ -523,17 +528,25 @@ int bgr_route(bgr_pack_t *p, const bgr_snap_t *src, int nsrc, const bgr_snap_t *
     uint32_t t0 = now_us();
     if (nsrc < 1 || ndst < 1 || nsrc > 8 || ndst > 8) return -1;
     uint32_t sr[8], si[8], tr[8], ti[8], C = 0;
+    int nm = node_mode(p);
     for (int i = 0; i < nsrc; i++) {
-        sr[i] = rd(p, BGR_S_CH_ID, src[i].arc);
+        /* expanded: start at the arc's node; node mode: at its head (rest of the arc first) */
+        sr[i] = rd(p, BGR_S_CH_ID, nm ? bgr_arc_head(p, src[i].arc) : src[i].arc);
         si[i] = part(bgr_arc_time_ds(p, src[i].arc), 65536 - src[i].frac);
     }
     for (int i = 0; i < ndst; i++) {
+        if (nm) {                                       /* reach the arc's tail, then drive frac of it */
+            tr[i] = rd(p, BGR_S_CH_ID, bgr_arc_tail(p, dst[i].arc));
+            ti[i] = part(bgr_arc_time_ds(p, dst[i].arc), dst[i].frac);
+            continue;
+        }
         uint32_t rest = part(bgr_arc_time_ds(p, dst[i].arc), 65536 - dst[i].frac);
         if (rest > C) C = rest;
         tr[i] = rd(p, BGR_S_CH_ID, dst[i].arc);
         ti[i] = rest;                                   /* fixed below: C - rest */
     }
-    for (int i = 0; i < ndst; i++) ti[i] = C - ti[i];
+    if (!nm)
+        for (int i = 0; i < ndst; i++) ti[i] = C - ti[i];
 
     /* same arc, target ahead of the source: no search needed */
     uint32_t direct = INF;
@@ -553,7 +566,7 @@ int bgr_route(bgr_pack_t *p, const bgr_snap_t *src, int nsrc, const bgr_snap_t *
     int rc = -1;
     uint32_t chtime = meet != INF && best >= C ? best - C : INF;
     /* a meeting on the source/target arc itself with the target behind is not a route */
-    if (meet != INF) {
+    if (meet != INF && !nm) {
         vis_t *e = vget(&vt, meet, 0);
         if (e && e->pnode[0] == INF && e->pnode[1] == INF) {
             int ok = 0;
@@ -592,10 +605,12 @@ int bgr_route(bgr_pack_t *p, const bgr_snap_t *src, int nsrc, const bgr_snap_t *
         int di_ = -1;
         for (int j = 0; j < ndst; j++) if (tr[j] == x) di_ = j;
         if (bad || di_ < 0 || upush(&path, src[si_].arc)) { free(edges.v); rc = -2; goto done; }
-        for (int i = 0; i < edges.n; i++) {
+        for (int i = 0; i < edges.n && !bad; i++) {
             uint32_t e = edges.v[i];
-            if (e >= p->h.ex_edges || upush(&path, rd(p, BGR_S_EX_HEAD, e))) { bad = 1; break; }
+            if (nm) { if (e >= p->h.arcs || upush(&path, e)) bad = 1; }      /* the arc itself */
+            else if (e >= p->h.ex_edges || upush(&path, rd(p, BGR_S_EX_HEAD, e))) bad = 1;
         }
+        if (nm && !bad && upush(&path, dst[di_].arc)) bad = 1;
         free(edges.v);
         if (bad) { rc = -2; goto done; }
         out->time_ds = chtime;
@@ -638,7 +653,8 @@ uint32_t bgr_arc_distance(bgr_pack_t *p, uint32_t s, uint32_t t, bgr_qstats_t *s
     bgr_qstats_t lst = {0};
     if (!st) st = &lst;
     memset(st, 0, sizeof *st);
-    if (s >= p->h.arcs || t >= p->h.arcs) return INF;
+    /* s, t: arcs (expanded graph) or nodes (node mode), as in bgroute-build --tests */
+    if (s >= ch_nodes(p) || t >= ch_nodes(p)) return INF;
     uint32_t sr = rd(p, BGR_S_CH_ID, s), tr = rd(p, BGR_S_CH_ID, t), z = 0, best;
     vtab_t vt = {0};
     heap_t hp[2] = {{0}, {0}};
