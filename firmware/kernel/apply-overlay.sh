@@ -99,4 +99,9 @@ add_before "$T/drivers/tty/serial/8250/Kconfig" 'config SERIAL_8250_MT6577' 'con
 	  needed after Windows CE hands the SoC over.
 '
 add "$T/drivers/tty/serial/8250/Makefile" 'obj-$(CONFIG_SERIAL_8250_MT3351)	+= 8250_mt3351.o'
+# the boot console draws with the VGA 8x8 font but has no fbcon: let it satisfy
+# FONT_8x8's dependency (otherwise "unmet direct dependencies" at every build)
+grep -q 'STI_CONSOLE || DRM_PANIC || MT3351_BOOTCON' "$T/lib/fonts/Kconfig" ||
+    awk '/^config FONT_8x8$/ { b = 1 } b && /^\tdepends on / { $0 = $0 " || MT3351_BOOTCON"; b = 0 } { print }' \
+        "$T/lib/fonts/Kconfig" > "$T/lib/fonts/Kconfig.tmp" && mv "$T/lib/fonts/Kconfig.tmp" "$T/lib/fonts/Kconfig"
 echo "BigFoston MT3351 support applied to $T"

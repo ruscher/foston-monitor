@@ -15,8 +15,9 @@ abertura do kernel mostra o logotipo FOSTONOS; em 6,2 s a interface LVGL está n
 tela, com toque, som, cartão SD com gravação, rede USB com SSH e relógio certo.
 Ajustes, calibração e livros ficam no cartão SD.
 
-Ficam de fora, por falta de driver: GPS, Bluetooth, TV, transmissor FM, fone e
-microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
+Ficam de fora, por falta de driver: GPS, Bluetooth, TV, transmissor FM e
+microfone. Parciais: carga da bateria pelo Linux (desligada até o teste com
+carregador de tomada) e reiniciar (o aparelho fica desligado).
 
 ## Boot e sistema
 
@@ -44,9 +45,9 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Microfone | **NÃO IMPLEMENTADO** | o CE só grava no caminho de voz do DSP | [audio.md](audio.md) |
 | Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série; gravação sustentada corrigida (576 MB conferidos por MD5, zero erros); reparo automático com `fsck.fat` se o cartão não foi desmontado | [sd-controller.md](sd-controller.md) |
 | Bateria e carregador | **PARCIAL** | leitura completa; carga por software implementada (algoritmo do CE), desligada por padrão; pela USB do PC recusa carregar como o CE (VCHG < 4,35 V); falta testar com carregador de tomada | [battery-charger.md](battery-charger.md) |
-| USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (Full-Speed) | `ssh root@192.168.7.2`, ~190–240 KB/s | [04-linux-port.md](04-linux-port.md) |
+| USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (High-Speed) | `ssh root@192.168.7.2`; TCP 3,7 MB/s PC→FOSTON, 6,2 MB/s FOSTON→PC (21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
-| USB High-Speed | **NÃO IMPLEMENTADO** | o PHY falha em HS depois do CE; Full-Speed | [04-linux-port.md](04-linux-port.md) |
+| USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
 | GPS (MT3328) | **NÃO IMPLEMENTADO** | protocolo binário *host-based*; a posição sai da biblioteca proprietária do CE | [uart.md](uart.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
@@ -94,6 +95,5 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 |---|---|---|---|
 | 1 | Carga da bateria: teste com carregador de tomada e ligar por padrão | usar o Linux por horas | médio: algoritmo pronto, falta a validação |
 | 2 | Reconexão do cabo USB: confirmar com mais uso e isolar a causa | uso diário com o PC | baixo: contadores em `/sys/module/mt3351/parameters/stats` |
-| 5 | USB High-Speed e reconexão | atualizações mais rápidas | médio |
 | 6 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
 | 7 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

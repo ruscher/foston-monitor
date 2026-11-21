@@ -37,6 +37,28 @@ static bool mt3351_trace;
 module_param_named(trace, mt3351_trace, bool, 0444);
 MODULE_PARM_DESC(trace, "print the USB bring-up trace on the console");
 
+/*
+ * High speed (docs/04-linux-port.md, USB), proven on the device on
+ * 21/11/2026 (PC: "new high-speed USB device", 16 MB transfers with equal
+ * SHA-256).  mt3351.hs=0 falls back to full speed.  mt3351.reg70=N writes N
+ * (16 bits) to MUSB offset 0x70 at init and on every bus reset, as Windows
+ * CE's usbfn.dll does (0x0003, function at VA 0x3cd23d0); -1 leaves it.
+ * 0x70 is not documented for this core: it reads back 0x1201 in high speed
+ * under both CE and Linux; whether the write is needed was not isolated.
+ */
+static bool mt3351_hs = true;
+module_param_named(hs, mt3351_hs, bool, 0444);
+MODULE_PARM_DESC(hs, "allow high speed (default on; 0: full speed)");
+static int mt3351_reg70 = 3;
+module_param_named(reg70, mt3351_reg70, int, 0644);
+MODULE_PARM_DESC(reg70, "value written to MUSB offset 0x70 at init and bus reset (-1: leave)");
+
+static void mt3351_set_reg70(struct musb *musb)
+{
+	if (mt3351_reg70 >= 0 && mt3351_reg70 <= 0xffff)
+		musb_writew(musb->mregs, 0x70, mt3351_reg70);
+}
+
 static unsigned int mt3351_irqs, mt3351_empty;
 static struct musb *mt3351_musb;
 static struct delayed_work mt3351_state_work;
@@ -166,6 +188,11 @@ static int mt3351_stats_get(char *buf, const struct kernel_param *kp)
 					   musb_readw(musb->mregs, 0x10 + MUSB_RXCSR));
 		}
 		musb_writeb(musb->mregs, MUSB_INDEX, index);
+		n += sysfs_emit_at(buf, n, "power %02x devctl %02x reg70 %04x reg80 %02x\n",
+				   musb_readb(musb->mregs, MUSB_POWER),
+				   musb_readb(musb->mregs, MUSB_DEVCTL),
+				   musb_readw(musb->mregs, 0x70),
+				   musb_readb(musb->mregs, 0x80));
 		spin_unlock_irqrestore(&musb->lock, flags);
 	}
 	return n;
@@ -204,6 +231,7 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 		mt3351_fifo_check(musb, false);
 		musb_ep_select(musb->mregs, 0);
 		musb_writeb(musb->mregs, MUSB_FADDR, 0);
+		mt3351_set_reg70(musb);
 	}
 	if (mt3351_trace && mt3351_irqs < 40)
 		mt3351_event("I%x/%x/%x ", musb->int_usb, musb->int_tx, musb->int_rx);
@@ -221,10 +249,17 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 }
 
 /*
- * FIFO access one byte at a time (works on every MUSB bus width) with a
- * trace of the first ep0 packets: the PC got a STALL on GET_DESCRIPTOR,
- * so show what the controller actually read from the SETUP packet.
+ * FIFO access one byte at a time (works on every MUSB bus width; CE's
+ * usbfn.dll does the same) with a trace of the first ep0 packets.
+ * Aligned buffers on endpoints 1-4 use 32/16-bit accesses, as musb_core's
+ * default does (raw TCP 21/11/2026: PC->FOSTON 2.7 -> 3.7 MB/s, FOSTON->PC
+ * 3.4 -> 6.2 MB/s, SHA-256 equal); mt3351.fifo32=0 (writable at run time)
+ * goes back to bytes.
  */
+static bool mt3351_fifo32 = true;
+module_param_named(fifo32, mt3351_fifo32, bool, 0644);
+MODULE_PARM_DESC(fifo32, "32/16-bit FIFO access for aligned buffers (default on)");
+
 static unsigned int mt3351_ep0_logged;
 
 static void mt3351_trace_fifo(const char *dir, struct musb_hw_ep *hw_ep, u16 len, const u8 *buf)
@@ -239,9 +274,18 @@ static void mt3351_trace_fifo(const char *dir, struct musb_hw_ep *hw_ep, u16 len
 static void mt3351_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
 {
 	void __iomem *fifo = hw_ep->fifo;
-	u16 i;
+	u16 i = 0;
 
-	for (i = 0; i < len; i++)
+	if (READ_ONCE(mt3351_fifo32) && hw_ep->epnum) {
+		if (!((unsigned long)dst & 3) && len >= 4) {
+			readsl(fifo, dst, len >> 2);
+			i = len & ~3;
+		} else if (!((unsigned long)dst & 1) && len >= 2) {
+			readsw(fifo, dst, len >> 1);
+			i = len & ~1;
+		}
+	}
+	for (; i < len; i++)
 		dst[i] = readb(fifo);
 	mt3351_trace_fifo("rx", hw_ep, len, dst);
 }
@@ -249,9 +293,18 @@ static void mt3351_read_fifo(struct musb_hw_ep *hw_ep, u16 len, u8 *dst)
 static void mt3351_write_fifo(struct musb_hw_ep *hw_ep, u16 len, const u8 *src)
 {
 	void __iomem *fifo = hw_ep->fifo;
-	u16 i;
+	u16 i = 0;
 
-	for (i = 0; i < len; i++)
+	if (READ_ONCE(mt3351_fifo32) && hw_ep->epnum) {
+		if (!((unsigned long)src & 3) && len >= 4) {
+			writesl(fifo, src, len >> 2);
+			i = len & ~3;
+		} else if (!((unsigned long)src & 1) && len >= 2) {
+			writesw(fifo, src, len >> 1);
+			i = len & ~1;
+		}
+	}
+	for (; i < len; i++)
 		writeb(src[i], fifo);
 	mt3351_trace_fifo("tx", hw_ep, len, src);
 }
@@ -268,16 +321,12 @@ static struct musb_fifo_cfg mt3351_fifo_cfg[] = {
 	{ .hw_ep_num = 4, .style = FIFO_RX, .maxpacket = 64, },
 };
 
-static const struct musb_hdrc_config mt3351_musb_config = {
+static struct musb_hdrc_config mt3351_musb_config = {
 	.multipoint	= 0,
 	.num_eps	= 5,	/* ep0 + 4 (EPINFO 0x44) */
 	.ram_bits	= 10,
-	/*
-	 * High speed chirps fine but every transaction then fails on the PC
-	 * (EPROTO, "device descriptor read/64, error -71"): the PHY is not
-	 * tuned for HS after the hand-over from CE.  Full speed for now.
-	 */
-	.maximum_speed	= USB_SPEED_FULL,
+	/* set in probe from mt3351.hs (high speed by default) */
+	.maximum_speed	= USB_SPEED_HIGH,
 	.fifo_cfg	= mt3351_fifo_cfg,
 	.fifo_cfg_size	= ARRAY_SIZE(mt3351_fifo_cfg),
 };
@@ -309,6 +358,10 @@ static int mt3351_musb_init(struct musb *musb)
 	musb_writew(musb->mregs, MUSB_INTRTX, 0xffff);
 	musb_writew(musb->mregs, MUSB_INTRRX, 0xffff);
 	musb_writeb(musb->mregs, MUSB_FADDR, 0);
+	dev_info(dev, "reg70 %04x reg80 %02x, %s speed%s\n",
+		 musb_readw(musb->mregs, 0x70), musb_readb(musb->mregs, 0x80),
+		 mt3351_hs ? "high" : "full", mt3351_reg70 >= 0 ? ", reg70 set" : "");
+	mt3351_set_reg70(musb);
 
 	musb->dyn_fifo = true;
 	musb->isr = mt3351_musb_interrupt;
@@ -359,6 +412,8 @@ static int mt3351_musb_probe(struct platform_device *pdev)
 	struct mt3351_glue *glue;
 	struct platform_device *musb;
 	int ret;
+
+	mt3351_musb_config.maximum_speed = mt3351_hs ? USB_SPEED_HIGH : USB_SPEED_FULL;
 
 	glue = devm_kzalloc(dev, sizeof(*glue), GFP_KERNEL);
 	if (!glue)
