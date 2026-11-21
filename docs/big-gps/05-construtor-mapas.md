@@ -12,6 +12,7 @@ por tipo, comum ao construtor e ao aparelho: [src/ui/biggps/bgkinds.h](../../src
 | protozero | v1.7.1 | BSD-2-Clause | decodificação protobuf (usada pela libosmium) |
 | zlib | do sistema | Zlib | blocos do PBF |
 | pyosmium | 4.3.2 | BSD-2-Clause | recorte de regiões (`tools/big-gps/osm-clip.py`) |
+| RoutingKit | commit 54d49bb (2026-04-13) | BSD-2-Clause | grafo de rotas, restrições, CH (`bgroute-build`) |
 
 As bibliotecas ficam em `firmware/build/src-libosmium` e `firmware/build/src-protozero`
 (clonadas das tags acima; não vão para o aparelho).
@@ -19,8 +20,10 @@ As bibliotecas ficam em `firmware/build/src-libosmium` e `firmware/build/src-pro
 ```sh
 git clone --depth 1 --branch v2.20.0 https://github.com/osmcode/libosmium.git firmware/build/src-libosmium
 git clone --depth 1 --branch v1.7.1 https://github.com/mapbox/protozero.git firmware/build/src-protozero
+git clone https://github.com/RoutingKit/RoutingKit.git firmware/build/src-routingkit
 make -C tools/big-gps/builder
 tools/big-gps/builder/bgmap-build df.osm.pbf df.bgm --bbox=-48.30,-16.06,-47.30,-15.49
+tools/big-gps/builder/bgroute-build df.osm.pbf df-carro.bgr --profile car --tests df-carro.tests
 ```
 
 `--bbox` recorta a geometria à região e grava a caixa no cabeçalho (a interface usa o

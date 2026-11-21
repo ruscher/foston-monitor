@@ -6,7 +6,9 @@ favoritos e recálculo de rota. Usa o GPS que já funciona no Linux (`bfgps`, ve
 [docs/gps.md](../gps.md)) e dados do OpenStreetMap preparados no PC.
 
 **Estado (2026-11-21):** fases 1 e 2 feitas (auditoria e provas de viabilidade). O motor de
-mapas próprio já desenha o DF no aparelho; roteamento, navegação, voz e busca estão por fazer.
+mapas próprio desenha o DF no aparelho (tela do mapa no shell); o roteamento (quatro perfis,
+Contraction Hierarchies) funciona e foi conferido contra Dijkstra; navegação curva a curva,
+voz e busca estão por fazer.
 Nada aqui está aprovado para uso no trânsito real.
 
 ## Princípios
@@ -27,6 +29,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [03-arquitetura.md](03-arquitetura.md) | componentes, fluxo de dados, organização do SD |
 | [05-construtor-mapas.md](05-construtor-mapas.md) | `bgmap-build` no PC |
 | [06-renderizacao.md](06-renderizacao.md) | rasterizador, estilos, medições de quadro |
+| [07-roteamento.md](07-roteamento.md) | grafo, perfis, CH, conferência, medições |
 
 Os demais documentos (roteamento, navegação, voz, busca, interface, dados do Brasil,
 desempenho, testes, licenças, instalação, uso, problemas conhecidos, relatório de entrega)

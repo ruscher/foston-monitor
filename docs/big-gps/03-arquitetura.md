@@ -21,10 +21,10 @@ Geofabrik .osm.pbf ──► osm-clip.py (região)    bfgps ──► /run/bigfo
 | Rasterizador inteiro | `src/ui/biggps/raster.c` | C | feito |
 | Renderizador (estilos, camadas, rótulos) | `src/ui/biggps/bgrender.c` | C | feito |
 | Ferramenta de teste/medição | `src/ui/biggps/bgview.c` | C | feito |
-| Construtor de rotas (CH) | `tools/big-gps/` | C++ (RoutingKit) | a fazer |
-| Consulta de rotas | `src/ui/biggps/` | C | a fazer |
+| Construtor de rotas (CH) | `tools/big-gps/builder/bgroute-build.cpp` | C++ (RoutingKit) | feito |
+| Consulta de rotas | `src/ui/biggps/bgroute.c` | C | feito |
 | Navegação, voz, busca | `src/ui/biggps/`, `src/ui/` | C | a fazer |
-| Tela no shell | `src/ui/screens/` | C (LVGL 9) | a fazer |
+| Tela no shell | `src/ui/screens/scr_map.c` | C (LVGL 9) | mapa feito; rota a fazer |
 
 O código do aparelho (`src/ui/biggps/`) não depende do LVGL: devolve um buffer RGB565 e uma
 lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no aparelho.
@@ -34,7 +34,7 @@ lista de rótulos; a mesma biblioteca compila no PC (simulador e `bgview`) e no 
 ```
 /mnt/sd/BigFoston/big-gps/
   mapas/      pacotes .bgm (um por região ou o Brasil inteiro)
-  rotas/      grafos de roteamento por perfil (a fazer)
+  rotas/      grafos de roteamento por perfil: <região>-carro.bgr, -moto, -bicicleta, -ape
   busca/      índices de nomes e endereços (a fazer)
   voz/        frases e/ou vozes (a fazer)
   dados/      favoritos, histórico, configurações do usuário
