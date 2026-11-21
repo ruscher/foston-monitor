@@ -1,6 +1,6 @@
 # GPS (MT3328) no BigFoston
 
-Estado: **em andamento** — M1/M2 concluídos (o `gps.dll` roda no Linux); M3 (hardware) bloqueado: o MT3328 não responde ao boot do DSP no Linux (21/11/2026). Detalhes no fim.
+Estado: **NMEA funcionando no Linux** (21/11/2026) — M1–M3 concluídos e saída NMEA de 1 Hz (M4) igual à do CE; falta testar com satélites (céu aberto), integrar à interface (tela GPS) e rodar como serviço (M5). Detalhes no fim.
 
 ## Como o GPS funciona no aparelho
 
@@ -94,6 +94,20 @@ não emite mais nada (CPU ~5 %, quase só `Sleep` e mutexes), mesmo com o regist
 CE (`NMEALog`, `FileLogSerial`, `WriteFileLogAsCOMOpen` = 1) e o `mtkgps.dat` original.
 Corrigidos na camada pelo caminho: `PulseEvent` (o pulso não liberava quem esperava) e logs
 do driver sem buffer.
+
+**NMEA de 1 Hz no Linux (mesmo dia).** A análise do `gps.dll` mostrou que o ritmo vem dos
+quadros de medida do DSP: a thread da serial (0x1DF8414) envia uma mensagem por quadro e o
+`mtk_gps_run` (0x1DFF3C8) espera numa fila (`ReadMsgQueue` infinito); o *callback* do motor
+(0x1DF85E8, tipo 0) monta as frases (0x1DF77C0) e escreve no VCOM (0x1DF76D8). Os dois lados
+dessa fila são criados com o nome `L""` (0x1DF8890/0x1DF88B4) e a camada só juntava filas com
+nome não vazio: eram duas filas separadas e o motor esperava para sempre. Corrigido, junto
+com: `WriteMsgQueue` que espera com a fila cheia; VCOM nas duas direções (handle 1 = o
+driver; handles de aplicativo < 0x7530, como o `COM_Read` do `gps.dll` exige); `COM_Open`
+só depois de `MTK_GPS_INITIALIZATION_SUCCESS_EVENT`; VCOM2 descartado.
+
+Resultado no aparelho: `$GPGGA/$GPGSA/$GPGSV/$GPRMC/$GPVTG` a cada segundo (20 de cada em
+20 s), lidos por `COM_Read` como um aplicativo, CPU baixa (carga 0,10). Dentro de casa, 0
+satélites — o mesmo que o CE mostrou no mesmo lugar.
 
 **Teste anterior (já feito):** provar se a transmissão do Linux chega ao chip — com o GPS ligado pelo
 CE (`gpsopen`), iniciar o Linux, ouvir a 921600 (o DSP carregado transmite medidas) e

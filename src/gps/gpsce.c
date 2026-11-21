@@ -106,6 +106,7 @@ typedef struct {
 
 typedef struct msgq {
     char name[96];
+    int named;            /* nome não nulo (mesmo L""): CreateMsgQueue devolve a mesma fila */
     u32 max_msgs, max_size;
     pthread_mutex_t m;
     pthread_cond_t c;
@@ -635,10 +636,14 @@ static uint64_t h_CreateMsgQueue(u32 *a)
     if(a[0]) wstr(name, sizeof name, a[0]);
     u32 *opt = P(a[1]);   /* dwSize, dwFlags, dwMaxMessages, cbMaxMessage, bReadAccess */
     pthread_mutex_lock(&q_lock);
+    /* o gps.dll cria os dois lados da fila do motor com o nome L"" (0x1DF8890):
+     * no CE um nome não nulo, mesmo vazio, liga as duas pontas */
     msgq_t *q = NULL;
-    if(name[0]) for(q = queues; q && strcmp(q->name, name); q = q->next) {}
+    int named = a[0] != 0;
+    if(named) for(q = queues; q && !(q->named && !strcmp(q->name, name)); q = q->next) {}
     if(!q) {
         q = calloc(1, sizeof *q);
+        q->named = named;
         snprintf(q->name, sizeof q->name, "%s", name);
         q->max_msgs = opt[2] ? opt[2] : 64;
         q->max_size = opt[3] ? opt[3] : 256;
@@ -661,8 +666,16 @@ static uint64_t h_WriteMsgQueue(u32 *a)
     if(!h || h->type != H_MSGQ) { last_error = ERROR_INVALID_HANDLE; return 0; }
     msgq_t *q = h->obj;
     u32 n = a[2] > q->max_size ? q->max_size : a[2];
+    u32 ms = a[3];
+    struct timespec ts;
+    if(ms != INFINITE_) abstime(&ts, ms);
+    int r = 0;
     pthread_mutex_lock(&q->m);
-    if(q->count >= q->max_msgs) { pthread_mutex_unlock(&q->m); last_error = 1460; return 0; }  /* cheia */
+    while(q->count >= q->max_msgs && r != ETIMEDOUT) {      /* cheia: espera como o CE */
+        if(ms == 0) { r = ETIMEDOUT; break; }
+        r = ms == INFINITE_ ? pthread_cond_wait(&q->c, &q->m) : pthread_cond_timedwait(&q->c, &q->m, &ts);
+    }
+    if(q->count >= q->max_msgs) { pthread_mutex_unlock(&q->m); last_error = 1460; return 0; }  /* ERROR_TIMEOUT */
     uint8_t *slot = q->buf + ((q->head + q->count) % q->max_msgs) * (4 + q->max_size);
     memcpy(slot, &n, 4);
     memcpy(slot + 4, P(a[1]), n);
@@ -697,6 +710,7 @@ static uint64_t h_ReadMsgQueue(u32 *a)
     memcpy(P(a[1]), slot + 4, n);
     q->head = (q->head + 1) % q->max_msgs;
     q->count--;
+    pthread_cond_broadcast(&q->c);            /* acorda quem espera para escrever */
     pthread_mutex_unlock(&q->m);
     if(a[3]) *(u32 *)P(a[3]) = n;
     if(a[5]) *(u32 *)P(a[5]) = 0;
@@ -1296,37 +1310,62 @@ static uint64_t h_BusIoControl(u32 *a)
 
 static u32 vcom_lib[2];
 
-/* VCOM_Driver do CE: o gps.dll escreve o NMEA (COM_Write) e os aplicativos
- * leem (COM_Read). Aqui a escrita vai para a saída padrão e também para um
- * buffer que o COM_Read devolve. */
-static char vbuf[16384];
-static u32 vlen;
+/* VCOM_Driver do CE, nas duas direções:
+ *   handle 1 (o próprio gps.dll): COM_Write = NMEA para os aplicativos,
+ *            COM_Read = comandos PMTK vindos dos aplicativos (vazio: 0 na hora);
+ *   handles de aplicativo (COM_Open, < 0x7530 como o gps.dll exige):
+ *            COM_Read = NMEA, COM_Write = comandos.
+ * O NMEA também vai para a saída padrão. */
+typedef struct { char b[16384]; u32 n; } vring_t;
+static vring_t v_nmea, v_cmd;
 static pthread_mutex_t vlock = PTHREAD_MUTEX_INITIALIZER;
+static u32 v_next_open = 0x100;
+static void vput(vring_t *r, const void *d, u32 n)
+{
+    if(n > sizeof r->b - r->n) n = (u32)(sizeof r->b - r->n);
+    memcpy(r->b + r->n, d, n);
+    r->n += n;
+}
+static u32 vget(vring_t *r, void *d, u32 n)
+{
+    if(n > r->n) n = r->n;
+    memcpy(d, r->b, n);
+    memmove(r->b, r->b + n, r->n - n);
+    r->n -= n;
+    return n;
+}
 static uint64_t v_Init(u32 *a) { LOGV("VCOM COM_Init(%#x)", a[0]); return R(0x7c0001); }
 static uint64_t v_Deinit(u32 *a) { (void)a; return R(TRUE_); }
-static uint64_t v_Open(u32 *a) { LOGV("VCOM COM_Open(%#x, %#x)", a[0], a[1]); return R(0x7c0002); }
+static uint64_t v_Open(u32 *a)
+{
+    pthread_mutex_lock(&vlock);
+    u32 h = v_next_open++;
+    pthread_mutex_unlock(&vlock);
+    LOGV("VCOM COM_Open(%#x, %#x) = %#x", a[0], a[1], h);
+    return R(h);
+}
 static uint64_t v_Close(u32 *a) { (void)a; return R(TRUE_); }
 static uint64_t v_Write(u32 *a)
 {
-    LOGV("VCOM COM_Write(%#x, %u bytes)", a[0], a[2]);
-    fwrite(P(a[1]), 1, a[2], stdout);
-    fflush(stdout);
     pthread_mutex_lock(&vlock);
-    u32 n = a[2] < sizeof vbuf - vlen ? a[2] : (u32)(sizeof vbuf - vlen);
-    memcpy(vbuf + vlen, P(a[1]), n);
-    vlen += n;
+    if(a[0] == 1) {                    /* gps.dll -> aplicativos: NMEA */
+        fwrite(P(a[1]), 1, a[2], stdout);
+        fflush(stdout);
+        vput(&v_nmea, P(a[1]), a[2]);
+    }
+    else vput(&v_cmd, P(a[1]), a[2]); /* aplicativo -> gps.dll: comandos */
     pthread_mutex_unlock(&vlock);
     return R(a[2]);
 }
+/* VCOM2 (GPS2.dll, COM9: do CE): uma segunda porta para outro aplicativo;
+ * aqui não há ninguém lendo, então as escritas são descartadas */
+static uint64_t v2_Write(u32 *a) { return R(a[2]); }
+static uint64_t v2_Read(u32 *a) { (void)a; return 0; }
 static uint64_t v_Read(u32 *a)
 {
     pthread_mutex_lock(&vlock);
-    u32 n = a[2] < vlen ? a[2] : vlen;
-    memcpy(P(a[1]), vbuf, n);
-    memmove(vbuf, vbuf + n, vlen - n);
-    vlen -= n;
+    u32 n = vget(a[0] == 1 ? &v_cmd : &v_nmea, P(a[1]), a[2]);
     pthread_mutex_unlock(&vlock);
-    if(!n) usleep(100000);
     return R(n);
 }
 static uint64_t v_Seek(u32 *a) { (void)a; return R(0xFFFFFFFFu); }
@@ -1357,7 +1396,10 @@ static uint64_t h_GetProcAddressW(u32 *a)
     };
     for(size_t i = 0; i < sizeof v / sizeof v[0]; i++)
         if(!strcmp(name, v[i].n)) {
-            u32 t = make_thunk(v[i].n, v[i].f);
+            hfn_t f = v[i].f;
+            if(a[0] == vcom_lib[1] && f == v_Write) f = v2_Write;
+            if(a[0] == vcom_lib[1] && f == v_Read) f = v2_Read;
+            u32 t = make_thunk(v[i].n, f);
             LOGV("GetProcAddressW(%#x, %s) = %#x", a[0], name, t);
             return R(t);
         }
@@ -1605,7 +1647,22 @@ int main(int argc, char **argv)
     u32 init = ce_call6(exp_va("COM_Init", exps, nexp), (u32)(uintptr_t)ctx, 0, 0, 0, 0, 0);
     logf_("COM_Init = %#x", init);
     if(!init) return 1;
-    u32 open_h = ce_call6(exp_va("COM_Open", exps, nexp), init, 0xC0000000u, 0, 0, 0, 0);
+    /* COM_Open devolve 0x7530 até o fim da inicialização (gps.dll 0x1DF9CEC):
+     * espera o evento de sucesso e tenta de novo, como um aplicativo */
+    {
+        event_t *ev = named_event("MTK_GPS_INITIALIZATION_SUCCESS_EVENT", 1, 0, 1, NULL);
+        struct timespec dl;
+        abstime(&dl, 30000);
+        pthread_mutex_lock(&ev->m);
+        while(!ev->state && pthread_cond_timedwait(&ev->c, &ev->m, &dl) != ETIMEDOUT) {}
+        pthread_mutex_unlock(&ev->m);
+    }
+    u32 open_h = 0;
+    for(int k = 0; k < 60; k++) {
+        open_h = ce_call6(exp_va("COM_Open", exps, nexp), init, 0xC0000000u, 0, 0, 0, 0);
+        if(open_h && open_h < 0x7530u) break;
+        usleep(500000);
+    }
     logf_("COM_Open = %#x", open_h);
     /* como um aplicativo: lê COM1: (COM_Read do gps.dll) e mostra o NMEA */
     u32 rd = exp_va("COM_Read", exps, nexp);
@@ -1617,7 +1674,7 @@ int main(int argc, char **argv)
         clock_gettime(CLOCK_MONOTONIC, &ts1);
         if(ts1.tv_sec - ts0.tv_sec >= seconds) break;
         u32 n = ce_call6(rd, open_h, (u32)(uintptr_t)app, sizeof app, 0, 0, 0);
-        if(n && n != 0xFFFFFFFFu && n <= sizeof app) {
+        if(n && n != 0xFFFFFFFFu && n <= sizeof app) {      /* 0xFFFFFFFF = erro */
             total += n;
             LOGV("COM_Read: %u bytes", n);
         }
