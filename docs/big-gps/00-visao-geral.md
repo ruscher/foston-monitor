@@ -39,7 +39,10 @@ Nada aqui está aprovado para uso no trânsito real.
 | [13-dados-brasil.md](13-dados-brasil.md) | construção dos dados nacionais, tamanhos, tempos |
 | [15-testes.md](15-testes.md) | conferências, robustez (arquivos corrompidos, sanitizadores) |
 | [16-licencas.md](16-licencas.md) | auditoria de licenças de código, dados, voz e fontes |
+| [14-desempenho.md](14-desempenho.md) | desempenho medido no aparelho |
 | [17-instalacao-sd.md](17-instalacao-sd.md) | gerar os dados e instalar no cartão |
+| [18-uso.md](18-uso.md) | como usar |
+| [19-problemas-conhecidos.md](19-problemas-conhecidos.md) | limitações e o que falta verificar |
+| [21-relatorio-entrega.md](21-relatorio-entrega.md) | relatório de entrega |
 
-Faltam: desempenho consolidado, problemas conhecidos e o relatório de entrega (escritos
-ao fim, com as medições finais).
+
