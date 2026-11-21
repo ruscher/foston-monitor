@@ -14,6 +14,7 @@
 bool       player_available(void) { return false; }
 bool       player_open(const char *p) { (void)p; return false; }
 void       player_toggle(void) {}
+void       player_suspend(bool on) { (void)on; }
 void       player_stop(void) {}
 void       player_seek_ms(int ms) { (void)ms; }
 int        player_pos_ms(void) { return 0; }
@@ -47,6 +48,7 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t thr;
 static bool thr_running;
 static volatile bool quit_req, paused, finished;
+static volatile bool suspend_req;   /* outra parte (voz do Big GPS) precisa do /dev/dsp */
 static volatile int seek_req_ms = -1;
 static volatile int pos_ms, len_ms;
 static int dsp = -1;
@@ -154,6 +156,7 @@ static void *decode_thread(void *arg)
     mpg123_handle *mh = arg;
     static unsigned char buf[4608 * 2];
     long rate = 0;
+    bool suspended = false;
     int ch = 0, enc = 0;
 
     mpg123_getformat(mh, &rate, &ch, &enc);
@@ -164,6 +167,17 @@ static void *decode_thread(void *arg)
             off_t s = mpg123_seek(mh, (off_t)((long long)ms * rate / 1000), SEEK_SET);
             if(dsp >= 0) ioctl(dsp, SNDCTL_DSP_RESET, 0);
             if(s >= 0) pos_ms = (int)((long long)s * 1000 / rate);
+        }
+        if(suspend_req) {                        /* solta o /dev/dsp até player_suspend(false) */
+            if(dsp >= 0) { ioctl(dsp, SNDCTL_DSP_RESET, 0); close(dsp); dsp = -1; suspended = true; }
+            usleep(20000);
+            continue;
+        }
+        if(suspended) {
+            suspended = false;
+            pthread_mutex_lock(&lock);
+            info.audio_out = dsp_open((int)rate, ch);
+            pthread_mutex_unlock(&lock);
         }
         if(paused) {
             usleep(20000);
@@ -302,6 +316,7 @@ bool player_open(const char *path)
 }
 
 void player_toggle(void) { if(thr_running) paused = !paused; }
+void player_suspend(bool on) { suspend_req = on; }
 void player_seek_ms(int ms) { if(thr_running) seek_req_ms = ms < 0 ? 0 : ms; }
 int  player_pos_ms(void) { return pos_ms; }
 int  player_len_ms(void) { return len_ms; }

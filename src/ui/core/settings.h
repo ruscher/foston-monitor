@@ -38,6 +38,7 @@ typedef struct {
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */
     int  book_theme;    /* 0 escuro, 1 sépia, 2 claro */
+    bool nav_voice;     /* Big GPS: instruções faladas */
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };

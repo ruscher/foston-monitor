@@ -1,0 +1,37 @@
+From: BigFoston <noreply@bigfoston>
+Subject: build with a C-only toolchain
+
+The speechPlayer backend is the only C++ code; declare the project as C
+and enable C++ only when that backend is selected.
+
+Upstream: not submitted
+Signed-off-by: ruscher <rruscher@gmail.com>
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a981fc2..49ec0c3 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,6 +4,7 @@ project(espeak-ng
+   VERSION 1.52.0
+   DESCRIPTION "open source speech synthesizer that supports more than hundred languages and accents"
+   HOMEPAGE_URL "https://github.com/espeak-ng/espeak-ng"
++  LANGUAGES C
+ )
+ 
+ include(CTest)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 85ead54..627466b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -2,7 +2,10 @@ add_library(espeak-include INTERFACE)
+ target_include_directories(espeak-include INTERFACE include include/compat)
+ 
+ add_subdirectory(ucd-tools)
+-add_subdirectory(speechPlayer)
++if(USE_SPEECHPLAYER)
++  enable_language(CXX)
++  add_subdirectory(speechPlayer)
++endif()
+ add_subdirectory(libespeak-ng)
+ 
+ add_executable(espeak-ng-bin espeak-ng.c)

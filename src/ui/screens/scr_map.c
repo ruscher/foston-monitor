@@ -13,6 +13,7 @@
 #include "../core/theme.h"
 #include "../core/gpsstat.h"
 #include "../core/settings.h"
+#include "../core/voice.h"
 #include "../biggps/bgmap.h"
 #include "../biggps/bgrender.h"
 #include "../biggps/bgrouter.h"
@@ -198,7 +199,7 @@ static void layout_labels(const lbl_t *l, int n)
 {
     /* áreas dos controles (voltar, coluna da direita, faixas de baixo) não recebem rótulos */
     static const lv_area_t reserved[] = {
-        { 0, 0, 80, 80 }, { MAP_W - 84, 0, MAP_W, 12 + 5 * (BTN + 10) },
+        { 0, 0, 80, 80 }, { MAP_W - 84, 0, MAP_W, 12 + 6 * (BTN + 10) },
         { 0, MAP_H - 52, 300, MAP_H }, { MAP_W - 170, MAP_H - 76, MAP_W, MAP_H },
     };
     nplaced = 0;
@@ -481,10 +482,11 @@ static void fit_route(void)
     request();
 }
 
-/* voz: os textos já são os definitivos; a síntese entra na fase de voz (docs/big-gps) */
+/* voz: eSpeak NG (core/voice), se ligada nos ajustes e instalada no cartão */
 static void say(const char *text)
 {
     fprintf(stderr, "biggps: voz: %s\n", text);
+    if(settings()->nav_voice) voice_say(text);
 }
 
 static const char *spoken_dist(uint32_t dm, char *buf, int n)
@@ -960,6 +962,17 @@ static void rot_cb(lv_event_t *e)
     request();
 }
 
+static lv_obj_t *voice_lbl;
+
+static void voice_cb(lv_event_t *e)
+{
+    (void)e;
+    settings()->nav_voice = !settings()->nav_voice;
+    settings_save();
+    lv_label_set_text(voice_lbl, settings()->nav_voice ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE);
+    if(!settings()->nav_voice) voice_stop();
+}
+
 static void close_cb(lv_event_t *e) { (void)e; nav_back(); }
 static void sats_cb(lv_event_t *e) { (void)e; nav_go(SCR_GPS, 0); }
 
@@ -1093,6 +1106,10 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_align(follow_btn, LV_ALIGN_TOP_RIGHT, -12, 12 + 3 * (BTN + 10));
     b = round_btn(ov, LV_SYMBOL_BARS, sats_cb, 0);
     lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + 4 * (BTN + 10));
+    b = round_btn(ov, settings()->nav_voice ? LV_SYMBOL_VOLUME_MAX : LV_SYMBOL_MUTE, voice_cb, 0);
+    voice_lbl = lv_obj_get_child(b, 0);
+    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + 5 * (BTN + 10));
+    if(!voice_available()) lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);   /* sem motor ou dados de voz */
 
     info_chip = chip(ov);
     lv_obj_align(info_chip, LV_ALIGN_BOTTOM_LEFT, 12, -12);
@@ -1252,6 +1269,7 @@ static void destroy(void)
         R.started = 0;
     }
     bgrt_stop();
+    voice_stop();
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
     memset(&N, 0, sizeof N);
@@ -1263,6 +1281,7 @@ static void destroy(void)
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
+    voice_lbl = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;
     have_shown = 0;
     nplaced = 0;

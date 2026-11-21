@@ -1,0 +1,10 @@
+config BR2_PACKAGE_BIGFOSTON_ESPEAK_NG
+	bool "bigfoston-espeak-ng"
+	depends on BR2_USE_WCHAR
+	help
+	  eSpeak NG speech synthesizer (command line program only) for
+	  the Big GPS spoken directions in Brazilian Portuguese.  The
+	  voice data is not installed: it goes on the SD card
+	  (BigFoston/big-gps/voz/espeak-ng-data, docs/big-gps/09-voz.md).
+
+	  https://github.com/espeak-ng/espeak-ng

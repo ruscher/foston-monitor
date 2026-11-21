@@ -30,6 +30,8 @@ typedef struct {
 bool       player_available(void);
 bool       player_open(const char *path);      /* abre e começa a tocar */
 void       player_toggle(void);                /* pausa/continua */
+/* solta o /dev/dsp (true) e o retoma (false) sem perder a posição: voz do Big GPS */
+void       player_suspend(bool on);
 void       player_stop(void);
 void       player_seek_ms(int ms);             /* posição absoluta */
 int        player_pos_ms(void);

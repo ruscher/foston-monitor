@@ -55,9 +55,8 @@ por heurística ("no Eixo…", "na Avenida…", "pelo/pela").
 
 Para cada manobra, no máximo dois avisos: um antecipado ("Em 300 metros, vire à direita na
 …") a 300 m na cidade, 1 km acima de 50 km/h e 2 km acima de 80 km/h; e um imediato a ~6 s
-(mínimo 30 m), com "e depois …" quando a seguinte vem logo. Os textos já são os finais; a
-síntese de voz é a próxima fase ([docs/big-gps](00-visao-geral.md)) — por enquanto vão para o
-registro do shell (`biggps: voz: …`).
+(mínimo 30 m), com "e depois …" quando a seguinte vem logo. A fala é do eSpeak NG
+([09-voz.md](09-voz.md)); os textos também vão para o registro do shell (`biggps: voz: …`).
 
 ## Testes
 
