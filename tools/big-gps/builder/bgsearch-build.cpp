@@ -96,6 +96,7 @@ uint8_t poi_cat(const osmium::TagList &t)
         if (is(tu, "attraction") || is(tu, "museum") || is(tu, "viewpoint") || is(tu, "zoo") || is(tu, "theme_park")) return BGS_C_ATTRACTION;
     }
     if (l && (is(l, "park") || is(l, "stadium") || is(l, "sports_centre"))) return BGS_C_ATTRACTION;
+    if (is(t["natural"], "beach") || is(t["natural"], "peak") || is(t["natural"], "waterfall")) return BGS_C_ATTRACTION;
     if (is(t["aeroway"], "aerodrome")) return BGS_C_AIRPORT;
     if (is(t["public_transport"], "station") || is(t["railway"], "station")) return BGS_C_BUS;
     if (t["office"] && is(t["office"], "government")) return BGS_C_GOV;
@@ -206,9 +207,12 @@ struct PlaceGrid {
                     if (d < best[p.level]) { best[p.level] = d; bi[p.level] = i; }
                 }
             }
-        if (bi[0] >= 0 && best[0] < 3.0 * 3.0) return places[bi[0]].name;
-        if (bi[1] >= 0 && best[1] < 30.0 * 30.0) return places[bi[1]].name;
-        return {};
+        /* "Bairro, Cidade" (either part may be missing) */
+        std::string hood = bi[0] >= 0 && best[0] < 3.0 * 3.0 ? places[bi[0]].name : std::string();
+        std::string town = bi[1] >= 0 && best[1] < 30.0 * 30.0 ? places[bi[1]].name : std::string();
+        if (hood.empty()) return town;
+        if (town.empty() || town == hood) return hood;
+        return hood + ", " + town;
     }
 };
 
@@ -262,6 +266,8 @@ int main(int argc, char **argv)
     for (auto &e : ents)
         if (e.type == BGS_T_PLACE) {                  /* a place's context is the town around it */
             std::string c = grid.context(e.lon, e.lat);
+            size_t comma = c.find(", ");
+            if (comma != std::string::npos && c.compare(0, comma, e.name) == 0) c = c.substr(comma + 2);
             if (c != e.name) e.context = c;
         }
     std::fprintf(stderr, "%zu entradas (%zu lugares) em %ld s\n", ents.size(), places.size(), (long)(time(nullptr) - t0));

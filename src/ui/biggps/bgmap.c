@@ -12,18 +12,29 @@
 #include <unistd.h>
 
 #define HASH 256
-#define EMPTY_TILE ((bgm_tile_t *)1)
 
 typedef struct {
     int level, tx, ty;
     uint32_t used;
 } empty_t;
 
-struct bgm_pack {
+#define MAXFILES 8
+
+/* One pack may span several files (FAT32 limits a file to 4 GB): their tiles must not
+ * overlap.  Indexes stay on disk (binary search with pread): a national map has hundreds
+ * of thousands of tiles and the device has little RAM. */
+typedef struct {
     int fd;
-    bgm_header_t hdr;
+    off_t size;
+    int nlevels;
     bgm_level_t lv[BGM_MAX_LEVELS];
-    bgm_index_t *idx[BGM_MAX_LEVELS];
+} file_t;
+
+struct bgm_pack {
+    file_t f[MAXFILES];
+    int nf;
+    bgm_header_t hdr;              /* levels: union of the files' zooms; bbox: union */
+    uint8_t zoom[BGM_MAX_LEVELS];
     char *attr;
     uint32_t frame;
     size_t limit, mem;
@@ -56,41 +67,72 @@ static int read_at(int fd, void *buf, size_t n, off_t off)
     return 0;
 }
 
+static int open_file(file_t *f, bgm_header_t *h, const char *path, char *err, size_t errlen)
+{
+    struct stat st;
+    f->fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (f->fd < 0 || fstat(f->fd, &st)) { snprintf(err, errlen, "%s: %s", path, strerror(errno)); return -1; }
+    f->size = st.st_size;
+    if (read_at(f->fd, h, sizeof *h, 0) || h->magic != BGM_MAGIC || h->version != BGM_VERSION
+        || h->nlevels < 1 || h->nlevels > BGM_MAX_LEVELS) {
+        snprintf(err, errlen, "%s: não é um mapa do Big GPS (versão %u)", path, BGM_VERSION);
+        return -1;
+    }
+    f->nlevels = (int)h->nlevels;
+    if (read_at(f->fd, f->lv, h->nlevels * sizeof(bgm_level_t), sizeof *h)) { snprintf(err, errlen, "%s: cabeçalho curto", path); return -1; }
+    for (int l = 0; l < f->nlevels; l++)
+        if ((off_t)f->lv[l].index_off + (off_t)f->lv[l].ntiles * (off_t)sizeof(bgm_index_t) > f->size
+            || (l && f->lv[l].zoom <= f->lv[l - 1].zoom)) {
+            snprintf(err, errlen, "%s: índice inválido", path);
+            return -1;
+        }
+    return 0;
+}
+
+static void add_zoom(bgm_pack_t *p, uint8_t z)
+{
+    unsigned n = p->hdr.nlevels, i = 0;
+    while (i < n && p->zoom[i] < z) i++;
+    if (i < n && p->zoom[i] == z) return;
+    if (n >= BGM_MAX_LEVELS) return;
+    memmove(p->zoom + i + 1, p->zoom + i, n - i);
+    p->zoom[i] = z;
+    p->hdr.nlevels = n + 1;
+}
+
+int bgm_add(bgm_pack_t *p, const char *path, char *err, size_t errlen)
+{
+    if (p->nf >= MAXFILES) { snprintf(err, errlen, "%s: arquivos de mapa demais", path); return -1; }
+    file_t *f = &p->f[p->nf];
+    bgm_header_t h;
+    if (open_file(f, &h, path, err, errlen)) { if (f->fd >= 0) close(f->fd); f->fd = -1; return -1; }
+    if (!p->nf) {
+        p->hdr = h;
+        p->hdr.nlevels = 0;
+        if (h.attr_off < f->size) {
+            size_t n = (size_t)(f->size - h.attr_off);
+            if (n > 1024) n = 1024;
+            p->attr = calloc(1, n + 1);
+            if (p->attr && read_at(f->fd, p->attr, n, h.attr_off)) p->attr[0] = 0;
+        }
+    } else {
+        if (h.bbox[0] < p->hdr.bbox[0]) p->hdr.bbox[0] = h.bbox[0];
+        if (h.bbox[1] < p->hdr.bbox[1]) p->hdr.bbox[1] = h.bbox[1];
+        if (h.bbox[2] > p->hdr.bbox[2]) p->hdr.bbox[2] = h.bbox[2];
+        if (h.bbox[3] > p->hdr.bbox[3]) p->hdr.bbox[3] = h.bbox[3];
+    }
+    for (int l = 0; l < f->nlevels; l++) add_zoom(p, f->lv[l].zoom);
+    p->nf++;
+    return 0;
+}
+
 bgm_pack_t *bgm_open(const char *path, char *err, size_t errlen)
 {
     bgm_pack_t *p = calloc(1, sizeof *p);
-    struct stat st;
     if (!p) { snprintf(err, errlen, "sem memória"); return NULL; }
-    p->fd = open(path, O_RDONLY | O_CLOEXEC);
     p->limit = 12u << 20;
-    if (p->fd < 0 || fstat(p->fd, &st)) { snprintf(err, errlen, "%s: %s", path, strerror(errno)); goto fail; }
-    if (read_at(p->fd, &p->hdr, sizeof p->hdr, 0) || p->hdr.magic != BGM_MAGIC || p->hdr.version != BGM_VERSION
-        || p->hdr.nlevels < 1 || p->hdr.nlevels > BGM_MAX_LEVELS) {
-        snprintf(err, errlen, "%s: não é um mapa do Big GPS (versão %u)", path, BGM_VERSION);
-        goto fail;
-    }
-    if (read_at(p->fd, p->lv, p->hdr.nlevels * sizeof(bgm_level_t), sizeof p->hdr)) { snprintf(err, errlen, "%s: cabeçalho curto", path); goto fail; }
-    for (unsigned l = 0; l < p->hdr.nlevels; l++) {
-        size_t n = p->lv[l].ntiles * sizeof(bgm_index_t);
-        if ((off_t)p->lv[l].index_off + (off_t)n > st.st_size || (l && p->lv[l].zoom <= p->lv[l - 1].zoom)) { snprintf(err, errlen, "%s: índice inválido", path); goto fail; }
-        p->idx[l] = malloc(n ? n : 1);
-        if (!p->idx[l] || read_at(p->fd, p->idx[l], n, p->lv[l].index_off)) { snprintf(err, errlen, "%s: erro ao ler o índice", path); goto fail; }
-        for (uint32_t i = 0; i < p->lv[l].ntiles; i++)
-            if ((off_t)p->idx[l][i].off + p->idx[l][i].len > st.st_size || (i && p->idx[l][i].key <= p->idx[l][i - 1].key)) {
-                snprintf(err, errlen, "%s: índice inválido", path);
-                goto fail;
-            }
-    }
-    if (p->hdr.attr_off < st.st_size) {
-        size_t n = (size_t)(st.st_size - p->hdr.attr_off);
-        if (n > 1024) n = 1024;
-        p->attr = calloc(1, n + 1);
-        if (p->attr && read_at(p->fd, p->attr, n, p->hdr.attr_off)) p->attr[0] = 0;
-    }
+    if (bgm_add(p, path, err, errlen)) { bgm_close(p); return NULL; }
     return p;
-fail:
-    bgm_close(p);
-    return NULL;
 }
 
 static void tile_free(bgm_tile_t *t) { free(t); }   /* one allocation per tile */
@@ -98,8 +140,7 @@ static void tile_free(bgm_tile_t *t) { free(t); }   /* one allocation per tile *
 void bgm_close(bgm_pack_t *p)
 {
     if (!p) return;
-    if (p->fd >= 0) close(p->fd);
-    for (int i = 0; i < BGM_MAX_LEVELS; i++) free(p->idx[i]);
+    for (int i = 0; i < p->nf; i++) if (p->f[i].fd >= 0) close(p->f[i].fd);
     for (int i = 0; i < HASH; i++)
         for (bgm_tile_t *t = p->hash[i], *n; t; t = n) { n = t->next; tile_free(t); }
     free(p->attr);
@@ -110,13 +151,13 @@ void bgm_close(bgm_pack_t *p)
 const bgm_header_t *bgm_header(const bgm_pack_t *p) { return &p->hdr; }
 const char *bgm_attribution(const bgm_pack_t *p) { return p->attr ? p->attr : ""; }
 int bgm_nlevels(const bgm_pack_t *p) { return (int)p->hdr.nlevels; }
-int bgm_level_zoom(const bgm_pack_t *p, int level) { return p->lv[level].zoom; }
+int bgm_level_zoom(const bgm_pack_t *p, int level) { return p->zoom[level]; }
 
 int bgm_level_for_zoom(const bgm_pack_t *p, int zoom)
 {
     int best = 0;
     for (unsigned l = 0; l < p->hdr.nlevels; l++)
-        if (p->lv[l].zoom <= zoom) best = (int)l;
+        if (p->zoom[l] <= zoom) best = (int)l;
     return best;
 }
 
@@ -130,19 +171,33 @@ void bgm_get_stats(bgm_pack_t *p, bgm_stats_t *st, int reset)
     if (reset) memset(&p->st, 0, sizeof p->st);
 }
 
-static const bgm_index_t *find(const bgm_pack_t *p, int level, uint32_t key)
+/* binary search of the key in the files that have this zoom; *fd, *off, *len of the blob */
+static int find(const bgm_pack_t *p, int level, uint32_t key, int *fd, uint32_t *off, uint32_t *len)
 {
-    const bgm_index_t *a = p->idx[level];
-    uint32_t lo = 0, hi = p->lv[level].ntiles;
-    while (lo < hi) {
-        uint32_t m = (lo + hi) / 2;
-        if (a[m].key < key) lo = m + 1;
-        else hi = m;
+    uint8_t z = p->zoom[level];
+    for (int i = 0; i < p->nf; i++) {
+        const file_t *f = &p->f[i];
+        for (int l = 0; l < f->nlevels; l++) {
+            if (f->lv[l].zoom != z) continue;
+            uint32_t lo = 0, hi = f->lv[l].ntiles;
+            while (lo < hi) {
+                uint32_t m = lo + (hi - lo) / 2;
+                bgm_index_t e;
+                if (read_at(f->fd, &e, sizeof e, (off_t)f->lv[l].index_off + (off_t)m * (off_t)sizeof e)) return 0;
+                if (e.key < key) lo = m + 1;
+                else if (e.key > key) hi = m;
+                else {
+                    if ((off_t)e.off + e.len > f->size) return 0;      /* corrupt entry: no tile */
+                    *fd = f->fd;
+                    *off = e.off;
+                    *len = e.len;
+                    return 1;
+                }
+            }
+        }
     }
-    return lo < p->lv[level].ntiles && a[lo].key == key ? &a[lo] : NULL;
+    return 0;
 }
-
-
 
 /* inline varint for the hot loop; on a truncated blob it stops at the end (checked after) */
 #define VARINT(dst) do { \
@@ -261,24 +316,25 @@ const bgm_tile_t *bgm_tile(bgm_pack_t *p, int level, int tx, int ty)
         if (t->level == level && t->tx == tx && t->ty == ty) { t->used = p->frame; p->st.hits++; return t; }
     for (int i = 0; i < p->nempty; i++)
         if (p->empties[i].level == level && p->empties[i].tx == tx && p->empties[i].ty == ty) { p->st.empty++; return NULL; }
-    const bgm_index_t *ix = find(p, level, (uint32_t)ty << 16 | (uint32_t)tx);
-    if (!ix) {
+    int fd;
+    uint32_t off, len;
+    if (!find(p, level, (uint32_t)ty << 16 | (uint32_t)tx, &fd, &off, &len)) {
         empty_t *e = &p->empties[p->nempty < 64 ? p->nempty++ : (int)(p->frame % 64)];
         e->level = level; e->tx = tx; e->ty = ty; e->used = p->frame;
         p->st.empty++;
         return NULL;
     }
     uint32_t t0 = now_us();
-    if (ix->len > p->rcap) {
-        uint8_t *nb = realloc(p->rbuf, ix->len);
+    if (len > p->rcap) {
+        uint8_t *nb = realloc(p->rbuf, len);
         if (!nb) return NULL;
         p->rbuf = nb;
-        p->rcap = ix->len;
+        p->rcap = len;
     }
-    if (read_at(p->fd, p->rbuf, ix->len, ix->off)) return NULL;
-    bgm_tile_t *t = decode(p->rbuf, ix->len, level, tx, ty);
+    if (read_at(fd, p->rbuf, len, off)) return NULL;
+    bgm_tile_t *t = decode(p->rbuf, len, level, tx, ty);
     p->st.misses++;
-    p->st.bytes_read += ix->len;
+    p->st.bytes_read += len;
     p->st.decode_us += now_us() - t0;
     if (!t) return NULL;
     t->used = p->frame;

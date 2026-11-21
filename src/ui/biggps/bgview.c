@@ -1,6 +1,6 @@
 /* bgview.c - render a Big GPS map view to a PPM file and measure frame times.
  *
- *   bgview MAP.bgm LAT LON ZOOM [options]
+ *   bgview MAP.bgm[,PARTE2.bgm...] LAT LON ZOOM [options]
  *     -o FILE.ppm      write the image (with labels marked as small boxes)
  *     -r DEG           map rotation (clockwise)
  *     -n               night palette
@@ -84,8 +84,14 @@ int main(int argc, char **argv)
     }
     char err[256];
     double t = now();
-    bgm_pack_t *p = bgm_open(argv[1], err, sizeof err);
+    /* MAPA may list several files of one map: a.bgm,b.bgm */
+    char list[2048];
+    snprintf(list, sizeof list, "%s", argv[1]);
+    char *save = NULL, *first = strtok_r(list, ",", &save);
+    bgm_pack_t *p = first ? bgm_open(first, err, sizeof err) : NULL;
     if (!p) { fprintf(stderr, "%s\n", err); return 1; }
+    for (char *more = strtok_r(NULL, ",", &save); more; more = strtok_r(NULL, ",", &save))
+        if (bgm_add(p, more, err, sizeof err)) { fprintf(stderr, "%s\n", err); return 1; }
     printf("abrir: %.1f ms (%s)\n", (now() - t) * 1e3, bgm_attribution(p));
     rast_surface_t s = {malloc((size_t)w * h * 2), w, h, w};
     bgr_view_t v = {0};

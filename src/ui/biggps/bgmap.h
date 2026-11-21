@@ -32,6 +32,9 @@ typedef struct bgm_tile {
 typedef struct bgm_pack bgm_pack_t;
 
 bgm_pack_t *bgm_open(const char *path, char *err, size_t errlen);
+/* Attach another file of the same map (tiles must not overlap; a tile is taken from the
+ * first file that has it).  0 on success. */
+int bgm_add(bgm_pack_t *p, const char *path, char *err, size_t errlen);
 void bgm_close(bgm_pack_t *p);
 const bgm_header_t *bgm_header(const bgm_pack_t *p);
 const char *bgm_attribution(const bgm_pack_t *p);

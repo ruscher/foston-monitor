@@ -1300,8 +1300,10 @@ static void demo_timer(lv_timer_t *t)
     if(demo_alive) scr_map_demo((int)(intptr_t)lv_timer_get_user_data(t));
 }
 
-/* primeiro .bgm em <dir>/mapas ou <dir> (ordem alfabética) */
-static bool find_map(char *out, size_t n)
+/* todos os .bgm de <dir>/mapas (ou de <dir>), em ordem alfabética: um mapa pode vir em
+ * várias partes (limite de 4 GB por arquivo no FAT32) */
+#define MAXMAPS 8
+static int find_maps(char paths[][1024], int max)
 {
     const char *base = getenv("BIGFOSTON_BIGGPS");
     if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
@@ -1311,18 +1313,24 @@ static bool find_map(char *out, size_t n)
     for(int d = 0; d < 2; d++) {
         DIR *dp = opendir(dirs[d]);
         if(!dp) continue;
-        char best[256] = "";
+        int n = 0;
         struct dirent *de;
-        while((de = readdir(dp))) {
+        while((de = readdir(dp)) && n < max) {
             size_t l = strlen(de->d_name);
             if(l > 4 && !strcasecmp(de->d_name + l - 4, ".bgm") && de->d_name[0] != '.'
-               && (!best[0] || strcmp(de->d_name, best) < 0))
-                if(snprintf(best, sizeof best, "%s", de->d_name) >= (int)sizeof best) best[0] = 0;
+               && snprintf(paths[n], 1024, "%s/%s", dirs[d], de->d_name) < 1024) n++;
         }
         closedir(dp);
-        if(best[0]) return snprintf(out, n, "%s/%s", dirs[d], best) < (int)n;
+        for(int i = 1; i < n; i++)                  /* ordem alfabética (poucos arquivos) */
+            for(int j = i; j > 0 && strcmp(paths[j - 1], paths[j]) > 0; j--) {
+                char t[1024];
+                memcpy(t, paths[j], sizeof t);
+                memcpy(paths[j], paths[j - 1], sizeof t);
+                memcpy(paths[j - 1], t, sizeof t);
+            }
+        if(n) return n;
     }
-    return false;
+    return 0;
 }
 
 static void show_message(const char *title, const char *sub)
@@ -1475,14 +1483,18 @@ static void create(lv_obj_t *parent, int arg)
     set_follow(follow);
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
 
-    char path[1024], err[256];
-    if(!find_map(path, sizeof path)) {
+    static char paths[MAXMAPS][1024];
+    char err[256];
+    int nmaps = find_maps(paths, MAXMAPS);
+    if(!nmaps) {
         show_message(tr(S_MAP_NOMAP), tr(S_MAP_NOMAP_SUB));
         gps_update();
         tick = lv_timer_create(tick_cb, 100, NULL);
         return;
     }
-    R.pack = bgm_open(path, err, sizeof err);
+    R.pack = bgm_open(paths[0], err, sizeof err);
+    for(int i = 1; R.pack && i < nmaps; i++)
+        if(bgm_add(R.pack, paths[i], err, sizeof err)) fprintf(stderr, "biggps: %s\n", err);
     if(!R.pack) {
         show_message(tr(S_MAP_NOMAP), err);
         gps_update();
@@ -1490,7 +1502,7 @@ static void create(lv_obj_t *parent, int arg)
         return;
     }
     bgm_set_cache_limit(R.pack, 8u << 20);
-    fprintf(stderr, "biggps: mapa %s\n", path);
+    fprintf(stderr, "biggps: mapa %s (%d arquivo%s)\n", paths[0], nmaps, nmaps > 1 ? "s" : "");
     for(int i = 0; i < 2; i++) {
         R.buf[i] = malloc((size_t)MAP_W * MAP_H * 2);
         memset(&dsc[i], 0, sizeof dsc[i]);

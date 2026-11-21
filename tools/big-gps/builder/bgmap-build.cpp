@@ -1,9 +1,19 @@
 // bgmap-build.cpp - Big GPS map builder (runs on the PC).
 //
-//   bgmap-build IN.osm.pbf OUT.bgm [--bbox MINLON,MINLAT,MAXLON,MAXLAT]
+//   bgmap-build IN.osm.pbf OUT.bgm [--bbox=MINLON,MINLAT,MAXLON,MAXLAT] [--levels=5,8,11,14]
+//               [--maxminzoom=N] [--chunk11=TX0,TY0,TX1,TY1]
 //
 // --bbox keeps only what is inside the box (geometry is clipped to it) and records the box
 // in the header; use it for regional extracts, whose relations reach far outside.
+// For a whole country (bounded memory), build parts and join them with bgmap-merge:
+//   --levels=5,8 --maxminzoom=11       low zooms: only what is visible below zoom 11
+//   --levels=11,14 --chunk11=...       one block of zoom-11 tiles (inclusive range): only the
+//                                      tiles inside are written; features are clipped to
+//                                      the block plus a margin while being collected
+//   --spill=DIR,N                      all of it in one reading of the input: zoom 11/14
+//                                      features go to block files of N x N zoom-11 tiles in
+//                                      DIR, low zooms stay in memory (simplified); writes
+//                                      DIR/part-*.bgm, to be joined with bgmap-merge
 //
 // Reads OpenStreetMap data with libosmium, keeps what the Big GPS map draws (roads, water,
 // land use, buildings, places), projects to 32-bit Web Mercator, simplifies per data level,
@@ -25,6 +35,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -42,12 +53,35 @@ namespace {
 
 struct Pt { int64_t x, y; };
 using Ring = std::vector<Pt>;
+struct P32 { uint32_t x, y; };   // storage: half the memory of Pt
+using SRing = std::vector<P32>;
 
-struct Feat {
+struct Feat {                    // as collected (int64 for the geometry code)
     uint8_t kind, flags;
     std::string name;
     std::vector<Ring> rings;     // line: 1 ring; point: 1 ring of 1 point
 };
+
+struct SFeat {                   // as stored until the tiles are written
+    uint8_t kind, flags;
+    std::string name;
+    std::vector<SRing> rings;
+};
+
+Ring widen(const SRing &r)
+{
+    Ring o(r.size());
+    for (size_t i = 0; i < r.size(); i++) o[i] = {(int64_t)r[i].x, (int64_t)r[i].y};
+    return o;
+}
+
+SRing narrow(const Ring &r)
+{
+    SRing o(r.size());
+    for (size_t i = 0; i < r.size(); i++)
+        o[i] = {(uint32_t)std::min<int64_t>(std::max<int64_t>(r[i].x, 0), 0xFFFFFFFFll), (uint32_t)std::min<int64_t>(std::max<int64_t>(r[i].y, 0), 0xFFFFFFFFll)};
+    return o;
+}
 
 const int LEVELS[] = {5, 8, 11, 14};
 // zoom at which each level's simplification and minimum area are chosen (inside its display range)
@@ -144,8 +178,9 @@ std::string feature_name(const osmium::TagList &t, bool road)
     return {};
 }
 
-std::vector<Feat> feats;
+std::vector<SFeat> feats;
 std::unordered_set<osmium::object_id_type> boundary_ways;
+void keep(Feat &&f);             // filter, clip and store (defined after the geometry code)
 
 class Collect : public osmium::handler::Handler {
 public:
@@ -157,7 +192,7 @@ public:
         if (f.name.empty()) return;
         f.flags |= BGM_F_NAME;
         f.rings.push_back({project(n.location().lon(), n.location().lat())});
-        feats.push_back(std::move(f));
+        keep(std::move(f));
     }
 
     void way(const osmium::Way &w)
@@ -178,7 +213,7 @@ public:
             if (nr.location().valid()) r.push_back(project(nr.location().lon(), nr.location().lat()));
         if (r.size() < 2) return;
         f.rings.push_back(std::move(r));
-        feats.push_back(std::move(f));
+        keep(std::move(f));
     }
 
     void area(const osmium::Area &a)
@@ -196,7 +231,7 @@ public:
                 if (h.size() >= 4) f.rings.push_back(std::move(h));
             }
         }
-        if (!f.rings.empty()) feats.push_back(std::move(f));
+        if (!f.rings.empty()) keep(std::move(f));
     }
 };
 
@@ -342,6 +377,168 @@ std::vector<Ring> clip_line(const Ring &r, const Box &b)
     return out;
 }
 
+// ---------- collection filter ----------
+
+struct Box;
+Box *g_clip = nullptr;           // collect only inside this box (--bbox / --chunk11 + margin)
+int g_maxminzoom = 99;           // collect only kinds visible below this zoom
+size_t g_points = 0;
+
+// --spill: block files
+std::string g_spill_dir;
+int g_spill_n = 0;               // block size in zoom-11 tiles
+std::map<std::pair<int, int>, FILE *> g_spill_files;
+
+int64_t spill_span() { return (int64_t)g_spill_n << 21; }
+int64_t spill_margin() { return (int64_t)BGM_BUFFER << (32 - 11 - BGM_EXTENT_BITS) << 1; }
+
+void put_feat(FILE *f, uint8_t kind, uint8_t flags, const std::string &name, const std::vector<Ring> &rings)
+{
+    uint16_t nl = (uint16_t)std::min<size_t>(name.size(), 65535), nr = (uint16_t)rings.size();
+    std::fputc(kind, f);
+    std::fputc(flags, f);
+    std::fwrite(&nl, 2, 1, f);
+    std::fwrite(name.data(), 1, nl, f);
+    std::fwrite(&nr, 2, 1, f);
+    for (auto &r : rings) {
+        SRing sr = narrow(r);
+        uint32_t n = (uint32_t)sr.size();
+        std::fwrite(&n, 4, 1, f);
+        std::fwrite(sr.data(), sizeof(P32), n, f);
+    }
+}
+
+bool get_feat(FILE *f, SFeat &s)
+{
+    int k = std::fgetc(f), fl = std::fgetc(f);
+    uint16_t nl, nr;
+    if (k == EOF || fl == EOF || std::fread(&nl, 2, 1, f) != 1) return false;
+    s.kind = (uint8_t)k;
+    s.flags = (uint8_t)fl;
+    s.name.resize(nl);
+    if ((nl && std::fread(&s.name[0], 1, nl, f) != nl) || std::fread(&nr, 2, 1, f) != 1) return false;
+    s.rings.resize(nr);
+    for (auto &r : s.rings) {
+        uint32_t n;
+        if (std::fread(&n, 4, 1, f) != 1 || n > 100000000u) return false;
+        r.resize(n);
+        if (std::fread(r.data(), sizeof(P32), n, f) != n) return false;
+    }
+    return true;
+}
+
+FILE *spill_file(int cx, int cy)
+{
+    auto it = g_spill_files.find({cx, cy});
+    if (it != g_spill_files.end()) return it->second;
+    char path[1024];
+    std::snprintf(path, sizeof path, "%s/bloco-%d-%d.bin", g_spill_dir.c_str(), cx, cy);
+    FILE *f = std::fopen(path, "wb");
+    if (!f) { std::perror(path); std::exit(1); }
+    g_spill_files[{cx, cy}] = f;
+    return f;
+}
+
+void spill(const Feat &f)
+{
+    int g = f.flags & BGM_F_GEOM;
+    Box fb{INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN};
+    for (auto &r : f.rings)
+        for (auto &p : r) { fb.x0 = std::min(fb.x0, p.x); fb.y0 = std::min(fb.y0, p.y); fb.x1 = std::max(fb.x1, p.x); fb.y1 = std::max(fb.y1, p.y); }
+    int64_t span = spill_span(), m = spill_margin();
+    int cx0 = (int)((fb.x0 - m) / span), cx1 = (int)((fb.x1 + m) / span);
+    int cy0 = (int)((fb.y0 - m) / span), cy1 = (int)((fb.y1 + m) / span);
+    if (g == BGM_F_POINT) { cx0 = cx1 = (int)(fb.x0 / span); cy0 = cy1 = (int)(fb.y0 / span); }
+    for (int cy = std::max(cy0, 0); cy <= cy1; cy++)
+        for (int cx = std::max(cx0, 0); cx <= cx1; cx++) {
+            Box c{cx * span - m, cy * span - m, (cx + 1) * span + m, (cy + 1) * span + m};
+            if (g == BGM_F_POINT) { put_feat(spill_file(cx, cy), f.kind, f.flags, f.name, f.rings); continue; }
+            if (g == BGM_F_LINE) {
+                for (auto &piece : clip_line(f.rings[0], c)) put_feat(spill_file(cx, cy), f.kind, f.flags, f.name, {piece});
+                continue;
+            }
+            std::vector<Ring> rs;
+            for (auto &r : f.rings) {
+                Ring cr = clip_polygon(r, c);
+                if (cr.size() >= 3) rs.push_back(std::move(cr));
+            }
+            if (!rs.empty()) put_feat(spill_file(cx, cy), f.kind, f.flags, f.name, rs);
+        }
+}
+
+Ring simplify(const Ring &in, double tol);
+double ring_area(const Ring &r);
+
+void keep(Feat &&f)
+{
+    if (bgk_minzoom(f.kind) >= g_maxminzoom) return;
+    if (g_spill_n && g_clip) {                    /* national builds are clipped to the country box first */
+        const Box &c = *g_clip;
+        int g0 = f.flags & BGM_F_GEOM;
+        if (g0 == BGM_F_POINT) {
+            const Pt &p = f.rings[0][0];
+            if (p.x < c.x0 || p.x > c.x1 || p.y < c.y0 || p.y > c.y1) return;
+        } else if (g0 == BGM_F_LINE) {
+            std::vector<Ring> pieces = clip_line(f.rings[0], c);
+            if (pieces.size() != 1) {
+                for (auto &piece : pieces) keep(Feat{f.kind, f.flags, f.name, {std::move(piece)}});
+                return;
+            }
+            f.rings[0] = std::move(pieces[0]);
+        } else {
+            std::vector<Ring> rs;
+            for (auto &r : f.rings) { Ring cr = clip_polygon(r, c); if (cr.size() >= 3) rs.push_back(std::move(cr)); }
+            if (rs.empty()) return;
+            f.rings = std::move(rs);
+        }
+    }
+    if (g_spill_n) {
+        spill(f);
+        if (bgk_minzoom(f.kind) < 11) {          /* low zooms: simplified copy in memory */
+            int g = f.flags & BGM_F_GEOM;
+            double px = std::ldexp(1.0, 32 - 9 - 8), tol = 0.35 * px, min_area = 2.0 * px * px;
+            SFeat s{f.kind, f.flags, f.name, {}};
+            for (auto &r : f.rings) {
+                if (g == BGM_F_POINT) { s.rings.push_back(narrow(r)); continue; }
+                Ring sr = simplify(r, tol);
+                if (g == BGM_F_AREA && (sr.size() < 4 || ring_area(sr) < min_area)) continue;
+                if (g == BGM_F_LINE && sr.size() < 2) continue;
+                g_points += sr.size();
+                s.rings.push_back(narrow(sr));
+            }
+            if (!s.rings.empty()) feats.push_back(std::move(s));
+        }
+        return;
+    }
+    int g = f.flags & BGM_F_GEOM;
+    SFeat s{f.kind, f.flags, std::move(f.name), {}};
+    if (!g_clip) {
+        for (auto &r : f.rings) { g_points += r.size(); s.rings.push_back(narrow(r)); }
+        feats.push_back(std::move(s));
+        return;
+    }
+    const Box &c = *g_clip;
+    if (g == BGM_F_POINT) {
+        const Pt &p = f.rings[0][0];
+        if (p.x < c.x0 || p.x > c.x1 || p.y < c.y0 || p.y > c.y1) return;
+        s.rings.push_back(narrow(f.rings[0]));
+        g_points++;
+        feats.push_back(std::move(s));
+    } else if (g == BGM_F_LINE) {
+        for (auto &piece : clip_line(f.rings[0], c)) {
+            g_points += piece.size();
+            SFeat p2{s.kind, s.flags, s.name, {narrow(piece)}};
+            feats.push_back(std::move(p2));
+        }
+    } else {
+        for (auto &r : f.rings) {
+            Ring cr = clip_polygon(r, c);
+            if (cr.size() >= 3) { g_points += cr.size(); s.rings.push_back(narrow(cr)); }
+        }
+        if (!s.rings.empty()) feats.push_back(std::move(s));
+    }
+}
+
 // ---------- encoding ----------
 
 void put_varint(std::string &o, uint64_t v)
@@ -401,100 +598,34 @@ std::string encode_tile(Tile &t)
 
 } // namespace
 
-int main(int argc, char **argv)
+// Write the stored features as a pack (or a part of one): the levels in want[], only the
+// tiles inside own when have_own.
+int write_pack(const char *path, const bool *want, bool have_own, const Box &own, bool have_clip, const Box &clip, time_t t0)
 {
-    Box clip{0, 0, 0, 0};
-    bool have_clip = false;
-    const char *bbox_arg = argc == 5 && !std::strcmp(argv[3], "--bbox") ? argv[4]
-                         : argc == 4 && !std::strncmp(argv[3], "--bbox=", 7) ? argv[3] + 7 : nullptr;
-    if (bbox_arg) {
-        double a, b, c, d;
-        if (std::sscanf(bbox_arg, "%lf,%lf,%lf,%lf", &a, &b, &c, &d) != 4 || a >= c || b >= d) {
-            std::fprintf(stderr, "--bbox inválido: %s\n", bbox_arg);
-            return 2;
-        }
-        Pt p0 = project(a, d), p1 = project(c, b);     // north-west, south-east
-        clip = {p0.x, p0.y, p1.x, p1.y};
-        have_clip = true;
-    } else if (argc != 3) {
-        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgm [--bbox MINLON,MINLAT,MAXLON,MAXLAT]\n", argv[0]);
-        return 2;
-    }
-    osmium::io::File input{argv[1]};
-    time_t t0 = time(nullptr);
-
-    // pass 1: relations (multipolygons and state/country borders)
-    osmium::TagsFilter filter{false};
-    for (const char *k : {"building", "natural", "waterway", "landuse", "leisure", "aeroway", "amenity", "highway", "place"})
-        filter.add_rule(true, osmium::TagMatcher{k});
-    osmium::area::Assembler::config_type acfg;
-    osmium::area::MultipolygonManager<osmium::area::Assembler> mp{acfg, filter};
-    {
-        Boundaries bh;
-        osmium::io::Reader rr{input, osmium::osm_entity_bits::relation};
-        while (osmium::memory::Buffer buf = rr.read()) {
-            osmium::apply(buf, bh);
-            for (auto &r : buf.select<osmium::Relation>()) mp.relation(r);
-        }
-        rr.close();
-        mp.prepare_for_lookup();
-    }
-    std::fprintf(stderr, "relações lidas (%zu vias de divisa)\n", boundary_ways.size());
-
-    // pass 2: nodes, ways, areas
-    using Index = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
-    Index index;
-    osmium::handler::NodeLocationsForWays<Index> loc{index};
-    loc.ignore_errors();
-    Collect col;
-    {
-        osmium::io::Reader rd{input};
-        osmium::apply(rd, loc, col, mp.handler([&col](osmium::memory::Buffer &&b) { osmium::apply(b, col); }));
-        rd.close();
-    }
-    std::fprintf(stderr, "%zu feições coletadas em %ld s\n", feats.size(), (long)(time(nullptr) - t0));
-
-    if (have_clip) {
-        std::vector<Feat> kept;
-        for (auto &f : feats) {
-            int g = f.flags & BGM_F_GEOM;
-            if (g == BGM_F_POINT) {
-                const Pt &p = f.rings[0][0];
-                if (p.x >= clip.x0 && p.x <= clip.x1 && p.y >= clip.y0 && p.y <= clip.y1) kept.push_back(std::move(f));
-            } else if (g == BGM_F_LINE) {
-                for (auto &piece : clip_line(f.rings[0], clip)) {
-                    Feat c{f.kind, f.flags, f.name, {std::move(piece)}};
-                    kept.push_back(std::move(c));
-                }
-            } else {
-                Feat c{f.kind, f.flags, f.name, {}};
-                for (auto &r : f.rings) {
-                    Ring cr = clip_polygon(r, clip);
-                    if (cr.size() >= 3) c.rings.push_back(std::move(cr));
-                }
-                if (!c.rings.empty()) kept.push_back(std::move(c));
-            }
-        }
-        feats.swap(kept);
-        std::fprintf(stderr, "%zu feições dentro do --bbox\n", feats.size());
-    }
-
     // bounding box
     Box bb{INT64_MAX, INT64_MAX, INT64_MIN, INT64_MIN};
     for (auto &f : feats)
         for (auto &r : f.rings)
-            for (auto &p : r) { bb.x0 = std::min(bb.x0, p.x); bb.y0 = std::min(bb.y0, p.y); bb.x1 = std::max(bb.x1, p.x); bb.y1 = std::max(bb.y1, p.y); }
+            for (auto &p : r) {
+                bb.x0 = std::min<int64_t>(bb.x0, p.x); bb.y0 = std::min<int64_t>(bb.y0, p.y);
+                bb.x1 = std::max<int64_t>(bb.x1, p.x); bb.y1 = std::max<int64_t>(bb.y1, p.y);
+            }
+    if (feats.empty()) bb = have_own ? own : clip;
 
-    FILE *out = std::fopen(argv[2], "wb");
-    if (!out) { std::perror(argv[2]); return 1; }
+    FILE *out = std::fopen(path, "wb");
+    if (!out) { std::perror(path); return 1; }
+    int nout = 0;
+    for (int L = 0; L < NLEVELS; L++) nout += want[L];
     bgm_header_t hdr{};
     bgm_level_t lv[NLEVELS]{};
     std::fwrite(&hdr, sizeof hdr, 1, out);
-    std::fwrite(lv, sizeof lv, 1, out);
-    uint32_t pos = sizeof hdr + sizeof lv;
+    std::fwrite(lv, sizeof(bgm_level_t), (size_t)nout, out);
+    uint64_t pos = sizeof hdr + sizeof(bgm_level_t) * (size_t)nout;
     std::vector<std::vector<bgm_index_t>> idx(NLEVELS);
+    int li = 0;                                         // output level index
 
     for (int L = 0; L < NLEVELS; L++) {
+        if (!want[L]) continue;
         int z = LEVELS[L];
         int next = L + 1 < NLEVELS ? LEVELS[L + 1] : 99;
         int shift = 32 - z - BGM_EXTENT_BITS;           // world units per tile unit (log2)
@@ -508,8 +639,9 @@ int main(int argc, char **argv)
             if (bgk_minzoom(f.kind) >= next) continue;
             int g = f.flags & BGM_F_GEOM;
             std::vector<Ring> rings;
-            for (auto &r : f.rings) {
-                if (g == BGM_F_POINT) { rings.push_back(r); continue; }
+            for (auto &sr : f.rings) {
+                Ring r = widen(sr);
+                if (g == BGM_F_POINT) { rings.push_back(std::move(r)); continue; }
                 Ring s = simplify(r, tol);
                 if (g == BGM_F_AREA && (s.size() < 4 || ring_area(s) < min_area)) continue;
                 if (g == BGM_F_LINE && s.size() < 2) continue;
@@ -525,6 +657,7 @@ int main(int argc, char **argv)
             for (int64_t ty = ty0; ty <= ty1; ty++)
                 for (int64_t tx = tx0; tx <= tx1; tx++) {
                     int64_t ox = tx << (32 - z), oy = ty << (32 - z);
+                    if (have_own && (ox < own.x0 || ox >= own.x1 || oy < own.y0 || oy >= own.y1)) continue;   // another block's tile
                     Box tb{ox - buf, oy - buf, ox + ((int64_t)1 << (32 - z)) + buf, oy + ((int64_t)1 << (32 - z)) + buf};
                     TileFeat tf{f.kind, f.flags, f.name, {}};
                     auto local = [&](const Ring &r) {
@@ -563,33 +696,164 @@ int main(int argc, char **argv)
         size_t bytes = 0;
         for (auto &kv : tiles) {
             std::string blob = encode_tile(kv.second);
+            if (pos + blob.size() > 0xFFFFFFF0ull) { std::fprintf(stderr, "pacote passaria de 4 GB: divida em partes\n"); return 1; }
             std::fwrite(blob.data(), 1, blob.size(), out);
-            idx[L].push_back({kv.first, pos, (uint32_t)blob.size()});
-            pos += (uint32_t)blob.size();
+            idx[L].push_back({kv.first, (uint32_t)pos, (uint32_t)blob.size()});
+            pos += blob.size();
             bytes += blob.size();
         }
-        lv[L].zoom = (uint8_t)z;
-        lv[L].ntiles = (uint32_t)tiles.size();
+        tiles.clear();
+        lv[li].zoom = (uint8_t)z;
+        lv[li].ntiles = (uint32_t)idx[L].size();
+        li++;
         std::fprintf(stderr, "nível z%d: %zu tiles, %zu feições, %zu bytes\n", z, tiles.size(), nf, bytes);
     }
+    li = 0;
     for (int L = 0; L < NLEVELS; L++) {
-        lv[L].index_off = pos;
+        if (!want[L]) continue;
+        lv[li++].index_off = (uint32_t)pos;
         std::fwrite(idx[L].data(), sizeof(bgm_index_t), idx[L].size(), out);
-        pos += (uint32_t)(idx[L].size() * sizeof(bgm_index_t));
+        pos += idx[L].size() * sizeof(bgm_index_t);
     }
     const char attr[] = "Dados do mapa \xC2\xA9 colaboradores do OpenStreetMap, licen\xC3\xA7" "a ODbL 1.0 (openstreetmap.org/copyright)";
-    hdr.attr_off = pos;
+    hdr.attr_off = (uint32_t)pos;
     std::fwrite(attr, 1, sizeof attr, out);
     hdr.magic = BGM_MAGIC;
     hdr.version = BGM_VERSION;
-    hdr.nlevels = NLEVELS;
-    if (have_clip) bb = clip;
+    hdr.nlevels = (uint32_t)nout;
+    if (have_own) bb = own;
+    else if (have_clip) bb = clip;
     hdr.bbox[0] = (uint32_t)bb.x0; hdr.bbox[1] = (uint32_t)bb.y0; hdr.bbox[2] = (uint32_t)bb.x1; hdr.bbox[3] = (uint32_t)bb.y1;
     hdr.created = (uint32_t)time(nullptr);
     std::fseek(out, 0, SEEK_SET);
     std::fwrite(&hdr, sizeof hdr, 1, out);
-    std::fwrite(lv, sizeof lv, 1, out);
-    if (std::fclose(out)) { std::perror(argv[2]); return 1; }
-    std::fprintf(stderr, "%s: %u bytes em %ld s\n", argv[2], pos + (uint32_t)sizeof attr, (long)(time(nullptr) - t0));
+    std::fwrite(lv, sizeof(bgm_level_t), (size_t)nout, out);
+    if (std::fclose(out)) { std::perror(path); return 1; }
+    std::fprintf(stderr, "%s: %llu bytes em %ld s\n", path, (unsigned long long)(pos + sizeof attr), (long)(time(nullptr) - t0));
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    Box clip{0, 0, 0, 0}, own{0, 0, 0, 0};   // own: tiles written (chunk), clip: features collected
+    bool have_clip = false, have_own = false;
+    bool want[NLEVELS] = {true, true, true, true};
+    if (argc < 3) {
+        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgm [--bbox=MINLON,MINLAT,MAXLON,MAXLAT] [--levels=5,8,11,14] "
+                             "[--maxminzoom=N] [--chunk11=TX0,TY0,TX1,TY1]\n", argv[0]);
+        return 2;
+    }
+    for (int i = 3; i < argc; i++) {
+        const char *a = argv[i];
+        if (!std::strncmp(a, "--bbox=", 7)) {
+            double x0, y0, x1, y1;
+            if (std::sscanf(a + 7, "%lf,%lf,%lf,%lf", &x0, &y0, &x1, &y1) != 4 || x0 >= x1 || y0 >= y1) { std::fprintf(stderr, "--bbox inválido\n"); return 2; }
+            Pt p0 = project(x0, y1), p1 = project(x1, y0);       // north-west, south-east
+            clip = {p0.x, p0.y, p1.x, p1.y};
+            have_clip = true;
+        } else if (!std::strncmp(a, "--levels=", 9)) {
+            for (int L = 0; L < NLEVELS; L++) want[L] = false;
+            for (const char *q = a + 9; *q;) {
+                int z = std::atoi(q);
+                bool ok = false;
+                for (int L = 0; L < NLEVELS; L++) if (LEVELS[L] == z) { want[L] = true; ok = true; }
+                if (!ok) { std::fprintf(stderr, "nível inválido: %d\n", z); return 2; }
+                while (*q && *q != ',') q++;
+                if (*q) q++;
+            }
+        } else if (!std::strncmp(a, "--maxminzoom=", 13)) {
+            g_maxminzoom = std::atoi(a + 13);
+        } else if (!std::strncmp(a, "--spill=", 8)) {
+            const char *comma = std::strrchr(a + 8, ',');
+            if (!comma || (g_spill_n = std::atoi(comma + 1)) < 1 || g_spill_n > 512) { std::fprintf(stderr, "--spill=PASTA,N\n"); return 2; }
+            g_spill_dir.assign(a + 8, (size_t)(comma - (a + 8)));
+        } else if (!std::strncmp(a, "--chunk11=", 10)) {
+            long t0_, t1_, t2_, t3_;
+            if (std::sscanf(a + 10, "%ld,%ld,%ld,%ld", &t0_, &t1_, &t2_, &t3_) != 4 || t0_ > t2_ || t1_ > t3_ || t0_ < 0 || t3_ > 2047) {
+                std::fprintf(stderr, "--chunk11 inválido\n");
+                return 2;
+            }
+            own = {t0_ << 21, t1_ << 21, (t2_ + 1) << 21, (t3_ + 1) << 21};
+            have_own = true;
+        } else {
+            std::fprintf(stderr, "opção desconhecida: %s\n", a);
+            return 2;
+        }
+    }
+    if (have_own) {
+        if (want[0] || want[1]) { std::fprintf(stderr, "--chunk11 só com --levels=11,14\n"); return 2; }
+        /* collect the block plus two zoom-11 tile buffers (geometry reaching into the block) */
+        int64_t m = (int64_t)BGM_BUFFER << (32 - 11 - BGM_EXTENT_BITS) << 1;
+        Box c{own.x0 - m, own.y0 - m, own.x1 + m, own.y1 + m};
+        if (have_clip) c = {std::max(c.x0, clip.x0), std::max(c.y0, clip.y0), std::min(c.x1, clip.x1), std::min(c.y1, clip.y1)};
+        clip = c;
+        have_clip = true;
+    }
+    if (have_clip) g_clip = &clip;
+    osmium::io::File input{argv[1]};
+    time_t t0 = time(nullptr);
+
+    // pass 1: relations (multipolygons and state/country borders)
+    osmium::TagsFilter filter{false};
+    for (const char *k : {"building", "natural", "waterway", "landuse", "leisure", "aeroway", "amenity", "highway", "place"})
+        filter.add_rule(true, osmium::TagMatcher{k});
+    osmium::area::Assembler::config_type acfg;
+    osmium::area::MultipolygonManager<osmium::area::Assembler> mp{acfg, filter};
+    {
+        Boundaries bh;
+        osmium::io::Reader rr{input, osmium::osm_entity_bits::relation};
+        while (osmium::memory::Buffer buf = rr.read()) {
+            osmium::apply(buf, bh);
+            for (auto &r : buf.select<osmium::Relation>()) mp.relation(r);
+        }
+        rr.close();
+        mp.prepare_for_lookup();
+    }
+    std::fprintf(stderr, "relações lidas (%zu vias de divisa)\n", boundary_ways.size());
+
+    // pass 2: nodes, ways, areas
+    using Index = osmium::index::map::FlexMem<osmium::unsigned_object_id_type, osmium::Location>;
+    Index index;
+    osmium::handler::NodeLocationsForWays<Index> loc{index};
+    loc.ignore_errors();
+    Collect col;
+    {
+        osmium::io::Reader rd{input};
+        osmium::apply(rd, loc, col, mp.handler([&col](osmium::memory::Buffer &&b) { osmium::apply(b, col); }));
+        rd.close();
+    }
+    std::fprintf(stderr, "%zu feições coletadas em %ld s\n", feats.size(), (long)(time(nullptr) - t0));
+
+    std::fprintf(stderr, "%zu pontos guardados\n", g_points);
+
+    if (!g_spill_n) return write_pack(argv[2], want, have_own, own, have_clip, clip, t0) ? 1 : 0;
+
+    /* national build: low zooms from memory, then one block file at a time */
+    for (auto &kv : g_spill_files) std::fclose(kv.second);
+    std::string part = g_spill_dir + "/part-g.bgm";
+    bool low[NLEVELS] = {true, true, false, false}, high[NLEVELS] = {false, false, true, true};
+    if (write_pack(part.c_str(), low, false, own, have_clip, clip, t0)) return 1;
+    feats.clear();
+    feats.shrink_to_fit();
+    size_t nblk = 0;
+    for (auto &kv : g_spill_files) {
+        char path[1024], out[1024];
+        std::snprintf(path, sizeof path, "%s/bloco-%d-%d.bin", g_spill_dir.c_str(), kv.first.first, kv.first.second);
+        std::snprintf(out, sizeof out, "%s/part-%d-%d.bgm", g_spill_dir.c_str(), kv.first.first, kv.first.second);
+        FILE *f = std::fopen(path, "rb");
+        if (!f) { std::perror(path); return 1; }
+        SFeat sf;
+        while (get_feat(f, sf)) feats.push_back(std::move(sf));
+        std::fclose(f);
+        int64_t span = spill_span();
+        Box blk{kv.first.first * span, kv.first.second * span, (kv.first.first + 1) * span, (kv.first.second + 1) * span};
+        std::fprintf(stderr, "bloco %d,%d: %zu feições\n", kv.first.first, kv.first.second, feats.size());
+        if (write_pack(out, high, true, blk, false, clip, t0)) return 1;
+        feats.clear();
+        feats.shrink_to_fit();
+        std::remove(path);
+        nblk++;
+    }
+    std::fprintf(stderr, "%zu blocos; junte com: bgmap-merge %s %s/part-*.bgm\n", nblk, argv[2], g_spill_dir.c_str());
     return 0;
 }
