@@ -15,8 +15,7 @@ abertura do kernel mostra o logotipo FOSTONOS; em 6,2 s a interface LVGL está n
 tela, com toque, som, cartão SD com gravação, rede USB com SSH e relógio certo.
 Ajustes, calibração e livros ficam no cartão SD.
 
-Ficam de fora, por falta de driver: GPS, Bluetooth, TV, transmissor FM e
-microfone. Parcial: reiniciar (o aparelho fica desligado).
+Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 ## Boot e sistema
 
@@ -50,7 +49,8 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | USB ao ligar sem cabo | **FUNCIONANDO** | sem cabo no boot o CE deixa o bloco USB desligado; o glue o liga como o CE (conferido 21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
-| GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026) | [gps.md](gps.md) |
+| GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026); relógio acertado pela hora do GPS sem NTP | [gps.md](gps.md) |
+| Big GPS (mapa, rotas, navegação, voz, busca offline) | **FUNCIONANDO** (simulado; falta teste dirigindo) | motor próprio sem FPU; mapa do Brasil inteiro no aparelho; rotas carro/moto/bicicleta/a pé com Contraction Hierarchies; voz pt-BR (eSpeak NG); busca com favoritos e recentes | [big-gps/00-visao-geral.md](big-gps/00-visao-geral.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
@@ -70,7 +70,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | Avisos de dispositivos (fone, carregador, USB, SD) | **FUNCIONANDO** | |
 | Galeria (JPEG, PNG, GIF, BMP, SVG) | **FUNCIONANDO** | miniaturas numa thread com cache no cartão; visualizador com zoom, ◀ ▶ e GIF animado | [apps.md](apps.md) |
 | Controle de volume (barra superior e Multimídia) | **FUNCIONANDO** (simulador; ícone no aparelho) | barra vertical, mudo | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
-| GPS, GpsInfo, TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
+| TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
 
 ## Ferramentas no PC
 
@@ -97,5 +97,5 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | GPS: mapa/navegação offline sobre a posição | navegação | alto |
+| 1 | Big GPS: teste dirigindo; rotas nacionais de bicicleta e a pé | navegação | médio |
 | 2 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

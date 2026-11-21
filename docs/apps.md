@@ -9,7 +9,7 @@ Estado em 2026-11-21. Todos testados no aparelho, salvo indicação.
 | Terminal | **FUNCIONANDO** | `/bin/sh -l` num PTY com emulação VT100 (ash, top, vi); usuário `bigfoston` |
 | Livros | **FUNCIONANDO** | EPUB, TXT, PDF (texto) e SVG — detalhes abaixo |
 | Galeria | **FUNCIONANDO** | JPEG, PNG, GIF (animado no visualizador), BMP e SVG — detalhes abaixo |
-| GPS | **FUNCIONANDO** | estado, satélites, sinal, posição, velocidade, rumo, ligar/desligar — [gps.md](gps.md); posição real conferida ao ar livre |
+| GPS (Big GPS) | **FUNCIONANDO** | mapa offline em tela cheia, destino por toque longo ou busca, rotas para carro/moto/bicicleta/a pé, navegação com voz, favoritos e recentes — [big-gps](big-gps/00-visao-geral.md); estado do receptor no botão de satélites ([gps.md](gps.md)) |
 | TV, Bluetooth, FM | NÃO IMPLEMENTADO | dependem de hardware/firmware proprietário (ver [04-linux-port.md](04-linux-port.md)) |
 
 ## Arquivos: gravação
