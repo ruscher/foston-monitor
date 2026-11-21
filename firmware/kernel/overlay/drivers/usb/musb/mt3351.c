@@ -85,6 +85,96 @@ static void mt3351_state(struct work_struct *work)
 	schedule_delayed_work(&mt3351_state_work, 3 * HZ);
 }
 
+/*
+ * Reconnecting the cable re-enumerated the gadget (ep0 fine) but the network
+ * endpoints never moved data again. The FIFO configuration of each endpoint is
+ * photographed at the first interrupt (right after musb_core_init set it up),
+ * compared after every bus reset, logged if the controller changed it and
+ * written back before the gadget handles the reset.
+ */
+#define MT3351_EPS 5
+static struct { u8 txsz, rxsz; u16 txadd, rxadd; } mt3351_fifo[MT3351_EPS];
+static bool mt3351_fifo_saved;
+static unsigned int st_reset, st_disc, st_susp, st_resume, st_fifo_fix, st_tx[8], st_rx[8];
+
+static void mt3351_fifo_check(struct musb *musb, bool save)
+{
+	void __iomem *r = musb->mregs;
+	u8 index = musb_readb(r, MUSB_INDEX);
+
+	for (int i = 1; i < MT3351_EPS; i++) {
+		u8 txsz, rxsz;
+		u16 txadd, rxadd;
+
+		musb_writeb(r, MUSB_INDEX, i);
+		txsz = musb_readb(r, MUSB_TXFIFOSZ);
+		rxsz = musb_readb(r, MUSB_RXFIFOSZ);
+		txadd = musb_readw(r, MUSB_TXFIFOADD);
+		rxadd = musb_readw(r, MUSB_RXFIFOADD);
+		if (save) {
+			mt3351_fifo[i].txsz = txsz;
+			mt3351_fifo[i].rxsz = rxsz;
+			mt3351_fifo[i].txadd = txadd;
+			mt3351_fifo[i].rxadd = rxadd;
+		} else if (txsz != mt3351_fifo[i].txsz || rxsz != mt3351_fifo[i].rxsz ||
+			   txadd != mt3351_fifo[i].txadd || rxadd != mt3351_fifo[i].rxadd) {
+			st_fifo_fix++;
+			pr_info_ratelimited("mt3351-usb: ep%d FIFO changed by the reset (tx %02x@%04x rx %02x@%04x, was tx %02x@%04x rx %02x@%04x): restored\n",
+					    i, txsz, txadd, rxsz, rxadd, mt3351_fifo[i].txsz,
+					    mt3351_fifo[i].txadd, mt3351_fifo[i].rxsz, mt3351_fifo[i].rxadd);
+			musb_writeb(r, MUSB_TXFIFOSZ, mt3351_fifo[i].txsz);
+			musb_writeb(r, MUSB_RXFIFOSZ, mt3351_fifo[i].rxsz);
+			musb_writew(r, MUSB_TXFIFOADD, mt3351_fifo[i].txadd);
+			musb_writew(r, MUSB_RXFIFOADD, mt3351_fifo[i].rxadd);
+		}
+	}
+	musb_writeb(r, MUSB_INDEX, index);
+}
+
+static void mt3351_count(unsigned int *c, u16 bits)
+{
+	for (int i = 0; i < 8; i++)
+		if (bits & BIT(i))
+			c[i]++;
+}
+
+/* /sys/module/mt3351/parameters/stats: interrupt counters and the FIFO setup now */
+static int mt3351_stats_get(char *buf, const struct kernel_param *kp)
+{
+	struct musb *musb = mt3351_musb;
+	int n;
+
+	n = sysfs_emit(buf, "irqs %u empty %u reset %u disconnect %u suspend %u resume %u fifo_restored %u\n",
+		       mt3351_irqs, mt3351_empty, st_reset, st_disc, st_susp, st_resume, st_fifo_fix);
+	n += sysfs_emit_at(buf, n, "tx ep0-4 %u %u %u %u %u  rx ep1-4 %u %u %u %u\n",
+			   st_tx[0], st_tx[1], st_tx[2], st_tx[3], st_tx[4],
+			   st_rx[1], st_rx[2], st_rx[3], st_rx[4]);
+	if (musb) {
+		unsigned long flags;
+		u8 index;
+
+		spin_lock_irqsave(&musb->lock, flags);
+		index = musb_readb(musb->mregs, MUSB_INDEX);
+		for (int i = 1; i < MT3351_EPS; i++) {
+			musb_writeb(musb->mregs, MUSB_INDEX, i);
+			n += sysfs_emit_at(buf, n, "ep%d fifo tx %02x@%04x rx %02x@%04x txcsr %04x rxcsr %04x\n", i,
+					   musb_readb(musb->mregs, MUSB_TXFIFOSZ),
+					   musb_readw(musb->mregs, MUSB_TXFIFOADD),
+					   musb_readb(musb->mregs, MUSB_RXFIFOSZ),
+					   musb_readw(musb->mregs, MUSB_RXFIFOADD),
+					   musb_readw(musb->mregs, 0x10 + MUSB_TXCSR),
+					   musb_readw(musb->mregs, 0x10 + MUSB_RXCSR));
+		}
+		musb_writeb(musb->mregs, MUSB_INDEX, index);
+		spin_unlock_irqrestore(&musb->lock, flags);
+	}
+	return n;
+}
+
+static const struct kernel_param_ops mt3351_stats_ops = { .get = mt3351_stats_get };
+module_param_cb(stats, &mt3351_stats_ops, NULL, 0444);
+MODULE_PARM_DESC(stats, "USB interrupt counters and endpoint FIFO setup (read only)");
+
 static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 {
 	struct musb *musb = __hci;
@@ -96,8 +186,22 @@ static irqreturn_t mt3351_musb_interrupt(int irq, void *__hci)
 	musb->int_usb = musb_clearb(musb->mregs, MUSB_INTRUSB);
 	musb->int_rx = musb_clearw(musb->mregs, MUSB_INTRRX);
 	musb->int_tx = musb_clearw(musb->mregs, MUSB_INTRTX);
+	if (!mt3351_fifo_saved) {		/* FIFOs as musb_core_init configured them */
+		mt3351_fifo_check(musb, true);
+		mt3351_fifo_saved = true;
+	}
+	if (musb->int_usb & MUSB_INTR_DISCONNECT)
+		st_disc++;
+	if (musb->int_usb & MUSB_INTR_SUSPEND)
+		st_susp++;
+	if (musb->int_usb & MUSB_INTR_RESUME)
+		st_resume++;
+	mt3351_count(st_tx, musb->int_tx);
+	mt3351_count(st_rx, musb->int_rx);
 	/* ...and FADDR is not cleared by a bus reset (FADDR stayed at CE's 0x04) */
 	if ((musb->int_usb & MUSB_INTR_RESET) && !is_host_active(musb)) {
+		st_reset++;
+		mt3351_fifo_check(musb, false);
 		musb_ep_select(musb->mregs, 0);
 		musb_writeb(musb->mregs, MUSB_FADDR, 0);
 	}

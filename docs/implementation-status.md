@@ -45,7 +45,8 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série, duas rodadas de teste com MD5 | [sd-controller.md](sd-controller.md) |
 | Bateria e carregador | **PARCIAL** | leitura completa; carga por software implementada (algoritmo do CE), desligada por padrão; pela USB do PC recusa carregar como o CE (VCHG < 4,35 V); falta testar com carregador de tomada | [battery-charger.md](battery-charger.md) |
 | USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (Full-Speed) | `ssh root@192.168.7.2`, ~190–240 KB/s | [04-linux-port.md](04-linux-port.md) |
-| USB High-Speed, reconexão do cabo | **NÃO IMPLEMENTADO** | ao tirar e recolocar o cabo o gadget reaparece, mas a rede não responde até reiniciar | [04-linux-port.md](04-linux-port.md) |
+| Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
+| USB High-Speed | **NÃO IMPLEMENTADO** | o PHY falha em HS depois do CE; Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
 | GPS (MT3328) | **NÃO IMPLEMENTADO** | protocolo binário *host-based*; a posição sai da biblioteca proprietária do CE | [uart.md](uart.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
@@ -92,7 +93,7 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
 | 1 | Carga da bateria: teste com carregador de tomada e ligar por padrão | usar o Linux por horas | médio: algoritmo pronto, falta a validação |
-| 2 | Reconexão do cabo USB (a rede para ao recolocar) | uso diário com o PC | médio: driver USB do MT3351 |
+| 2 | Reconexão do cabo USB: confirmar com mais uso e isolar a causa | uso diário com o PC | baixo: contadores em `/sys/module/mt3351/parameters/stats` |
 | 4 | Arquivos com gravação, montar/ejetar o SD pela interface | uso do SD pelo usuário | baixo |
 | 5 | USB High-Speed e reconexão | atualizações mais rápidas | médio |
 | 6 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
