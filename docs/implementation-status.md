@@ -28,7 +28,7 @@ Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone. P
 | Tela de abertura do kernel | **FUNCIONANDO** | logotipo sobre degradê calculado pelo kernel, barra 5→100 % | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | Kernel 6.12 + initramfs XZ (BusyBox, musl estático) | **FUNCIONANDO** | interface em 6,2 s após o kernel; 5 MB de 122 MB usados | [04-linux-port.md](04-linux-port.md) |
 | Desligar | **FUNCIONANDO** | watchdog como handler de POWER_OFF; tela "Desligando…" até apagar | [04-linux-port.md](04-linux-port.md) |
-| Botão de energia → diálogo (Cancelar · Hibernar · Reiniciar · Desligar) | **EM TESTE** | driver `mt3351-pwrkey` (GPIO 106) + `core/powerkey.c`; Hibernar só apaga a tela (sem suspensão do processador) | [04-linux-port.md](04-linux-port.md) |
+| Botão de energia → diálogo (Cancelar · Hibernar · Reiniciar · Desligar) | **EM TESTE** | driver `mt3351-pwrkey` (tecla 8 do teclado `0x80036000`) + `core/powerkey.c`; Hibernar só apaga a tela (sem suspensão do processador) | [04-linux-port.md](04-linux-port.md) |
 | Reiniciar | **PARCIAL** | o reset do watchdog deixa o aparelho **desligado** (o CE faz igual); liga no botão | [04-linux-port.md](04-linux-port.md) |
 | Relógio | **PARCIAL** | sem driver de RTC no Linux; vem do relógio do CE (que guarda a hora desligado), do PC, do ajuste manual ou do NTP | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | Log do kernel após reset (ramoops) | **PARCIAL** | só sobrevive a reset com energia; desligar apaga a RAM (pstore vazio no boot seguinte) | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
