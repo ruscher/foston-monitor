@@ -303,6 +303,7 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s, bgr_label_
     xf_init(&vv, s, &x);
     double unit = ldexp(1.0, 32 - lz - BGM_EXTENT_BITS);
     double a16 = unit * x.k * RAST_SUB;
+    int32_t tiny = (int32_t)(2.0 * RAST_SUB / a16);   /* 2 px in tile units */
     int64_t A = llround(a16 * x.c * 65536.0), B = llround(a16 * x.s * 65536.0);
     if (!v->rot) B = 0;
 
@@ -378,6 +379,9 @@ int bgr_render(bgm_pack_t *p, const bgr_view_t *v, rast_surface_t *s, bgr_label_
                 for (int fi = t->kind_first[k]; fi < t->kind_first[k + 1]; fi++) {
                     const bgm_feat_t *f = &t->feat[fi];
                     if (f->bx1 < vt->cu0 || f->bx0 > vt->cu1 || f->by1 < vt->cv0 || f->by0 > vt->cv1) continue;
+                    /* areas smaller than 2 px on screen (dense blocks of buildings at zoom 15):
+                     * invisible detail, most of the drawing time in big cities */
+                    if (area && f->bx1 - f->bx0 < tiny && f->by1 - f->by0 < tiny) continue;
                     int n = transform(vt, f, A, B);
                     if (!n) continue;
                     stats.feats++;
