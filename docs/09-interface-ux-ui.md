@@ -103,28 +103,28 @@ Cada ícone vem do provedor de status (`src/ui/core/status.h`):
 
 ### Ícone da bateria
 
-Desenhado (`src/ui/widgets/battery.c`): contorno, nível proporcional e um raio. O mesmo
-widget aparece na barra superior, no Início em modo Painel e em Ajustes > Potência. O
-estado vem de `/sys/class/power_supply/battery/status`.
+O símbolo de bateria da fonte (nível em 5 passos), com **o ícone inteiro colorido**
+(`src/ui/widgets/battery.c`), na barra superior, no Início em modo Painel e em
+Ajustes > Potência. O estado vem de `/sys/class/power_supply/battery/status`.
 
-| Estado | Aparência | Quando |
-|---|---|---|
-| descarregando | nível na cor do texto; **vermelho** em 15 % ou menos | sem carregador |
-| carregando | nível **âmbar** + raio | `Charging` |
-| carga completa | bateria **verde** + raio | `Full`: o algoritmo de carga terminou (corrente baixa em tensão constante, 2 h em CV ou 8 h no total) |
-| ligado, sem carregar | nível cinza + raio | `Not charging`: fonte fraca (USB do PC) ou falha |
-| desconhecido | só o contorno, apagado, e "—" | sem medidor |
+| Cor | Quando |
+|---|---|
+| **verde**, com um raio ao lado | carregador ou cabo USB ligado: carregando, carga completa ou ligado sem carregar |
+| **laranja** | usando a bateria |
+| **vermelho** | usando a bateria, abaixo de 10 % |
+| apagado, com "—" | sem medidor (nunca uma porcentagem inventada) |
 
-O verde, o âmbar e o vermelho são os mesmos em todos os temas de cores, então o verde
-de "carga completa" não se confunde com o destaque do tema. Durante a carga a
-porcentagem desconta os ~200 mV que o carregador soma à leitura (medido em 21/11/2026).
+O texto do Painel diz o estado: "carregando", "carga completa" (o algoritmo de carga
+terminou: corrente baixa em tensão constante, 2 h em CV ou 8 h no total) ou "ligado,
+sem carregar" (fonte fraca, como a USB do PC, ou falha). Durante a carga a porcentagem
+desconta os ~200 mV que o carregador soma à leitura (medido em 21/11/2026).
 
 | | |
 |---|---|
-| ![](images/ui/01d-bateria-carregando.png) | **Carregando** — âmbar com raio, "64% carregando". |
-| ![](images/ui/01e-bateria-carga-completa.png) | **Carga completa** — verde com raio. |
-| ![](images/ui/01f-bateria-ligado-sem-carregar.png) | **Ligado, sem carregar** — nível cinza com raio. |
-| ![](images/ui/01g-bateria-fraca.png) | **Bateria fraca** — vermelho em 15 % ou menos, sem carregador. |
+| ![](images/ui/01d-bateria-carregando.png) | **Carregando** — verde com raio, "64% carregando". |
+| ![](images/ui/01e-bateria-carga-completa.png) | **Carga completa**. |
+| ![](images/ui/01f-bateria-ligado-sem-carregar.png) | **Ligado, sem carregar** (USB do PC). |
+| ![](images/ui/01g-bateria-fraca.png) | **Bateria fraca** — vermelho abaixo de 10 %. |
 | ![](images/ui/27b-potencia-carregando.png) | **Potência** — o mesmo ícone, maior. |
 
 No simulador, `BIGFOSTON_SIM_BATTERY="64,c"` fixa o estado (`d` descarregando, `c`

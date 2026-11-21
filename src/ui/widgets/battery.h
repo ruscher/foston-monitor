@@ -1,20 +1,20 @@
-/* battery.h — ícone de bateria desenhado (contorno, nível, raio).
+/* battery.h — ícone de bateria (símbolo da fonte, com o nível em 5 passos).
  *
- *   descarregando        contorno e nível na cor do texto; vermelho <= 15%
- *   carregando           nível âmbar e um raio por cima
- *   carga completa       bateria verde, com o raio (carregador ligado)
- *   ligado sem carregar  nível cinza com o raio (fonte fraca, ex. USB do PC)
- *   desconhecido         só o contorno, apagado (nunca inventa nível)
+ * O ícone inteiro muda de cor:
+ *   verde     carregador ou cabo USB ligado (carregando, carga completa ou
+ *             ligado sem carregar), com um raio ao lado
+ *   laranja   usando a bateria
+ *   vermelho  usando a bateria, abaixo de 10%
+ *   apagado   desconhecido (nunca inventa nível)
  *
- * As cores vêm da paleta (verde, âmbar e vermelho são os mesmos em todos os
- * temas), então o verde de "carga completa" não se confunde com o destaque. */
+ * Verde, laranja e vermelho são os mesmos em todos os temas de cores (o
+ * laranja escurece no modo claro, para contrastar com o fundo). */
 #ifndef BF_BATTERY_H
 #define BF_BATTERY_H
 #include "lvgl.h"
 #include "../core/status.h"
 
-/* w x h é o corpo; o polo fica à direita (w/10 de largura). font: o do raio. */
-lv_obj_t *battery_create(lv_obj_t *parent, int w, int h, const lv_font_t *font);
+lv_obj_t *battery_create(lv_obj_t *parent, const lv_font_t *font);
 /* pct -1 = desconhecido */
 void battery_set(lv_obj_t *bat, int pct, bf_bat_state_t st);
 /* Rótulo curto do estado ("carregando", "carga completa"...); "" se descarregando. */

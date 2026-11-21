@@ -90,7 +90,7 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_flex_flow(batbox, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(batbox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(batbox, 4, 0);
-    ic_bat = battery_create(batbox, 30, 16, BF_FONT_S);
+    ic_bat = battery_create(batbox, BF_FONT_M);
     bat_pct = bf_label(batbox, "—", BF_FONT_S, p->text);
 
     lv_obj_t *clockbox = bf_plain(icons);

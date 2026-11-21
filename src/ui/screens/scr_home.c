@@ -340,7 +340,7 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_set_flex_flow(brow, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(brow, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(brow, BF_SP_S, 0);
-    bat_icon = battery_create(brow, 48, 24, BF_FONT_M);
+    bat_icon = battery_create(brow, BF_FONT_M);
     bat_lbl = bf_label(brow, "", BF_FONT_M, p->text);
 
     /* tocando agora */

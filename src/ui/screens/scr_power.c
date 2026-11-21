@@ -28,7 +28,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(c, BF_SP_XL, 0);
     bool known = s->battery_pct >= 0;
-    lv_obj_t *bat = battery_create(c, 84, 42, BF_FONT_L);
+    lv_obj_t *bat = battery_create(c, BF_FONT_L);
     battery_set(bat, s->battery_pct, s->battery_state);
     lv_obj_t *col = bf_plain(c);
     lv_obj_set_size(col, LV_SIZE_CONTENT, LV_SIZE_CONTENT);

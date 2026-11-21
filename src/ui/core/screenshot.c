@@ -137,7 +137,7 @@ int screenshot_run(const char *dir)
     sim_set_battery(64, 'c'); status_refresh(); pump(1100); shot("01d-bateria-carregando");
     sim_set_battery(100, 'f'); status_refresh(); pump(1100); shot("01e-bateria-carga-completa");
     sim_set_battery(88, 'n'); status_refresh(); pump(1100); shot("01f-bateria-ligado-sem-carregar");
-    sim_set_battery(12, 'd'); status_refresh(); pump(1100); shot("01g-bateria-fraca");
+    sim_set_battery(8, 'd'); status_refresh(); pump(1100); shot("01g-bateria-fraca");
     sim_set_battery(64, 'c'); status_refresh();
     go(SCR_POWER, 0);               shot("27b-potencia-carregando");
     sim_set_battery(-2, 0); status_refresh();      /* volta ao padrão (ou BIGFOSTON_SIM_BATTERY) */
