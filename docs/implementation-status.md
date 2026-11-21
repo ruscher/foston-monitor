@@ -25,6 +25,7 @@ carregador de tomada) e reiniciar (o aparelho fica desligado).
 |---|---|---|---|
 | Agente no Windows CE (`bfagent` 0.5.1) | **FUNCIONANDO** | abre sozinho no boot (`HKLM\init\Launch90`), arquivos conferidos por SHA-256 | [05-bootloader.md](05-bootloader.md) |
 | Boot automático do Linux | **FUNCIONANDO** | `autoboot.conf` `delay=12`; "Ficar no Windows CE" cancela; o PC cancela ao falar com o agente | [05-bootloader.md](05-bootloader.md) |
+| Atualizar o Linux pelo próprio Linux (`linux-update.py`, agente 0.6.0) | **FUNCIONANDO** | 21/11/2026: enviado pelo SSH ao cartão, aplicado pelo CE no boot (`update.log`: APLICADA), `dropbear` novo em execução com SHA-256 igual ao compilado | [05-bootloader.md](05-bootloader.md) |
 | Linux na memória interna (`install-linux`, `boot-flash`) | **FUNCIONANDO** | zImage, initrd e DTB gravados em `\ResidentFlash\BigFoston\linux` e relidos com SHA-256 | [05-bootloader.md](05-bootloader.md), [17-recuperacao.md](17-recuperacao.md) |
 | Tela de abertura do kernel | **FUNCIONANDO** | logotipo sobre degradê calculado pelo kernel, barra 5→100 % | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | Kernel 6.12 + initramfs XZ (BusyBox, musl estático) | **FUNCIONANDO** | interface em 6,2 s após o kernel; 5 MB de 122 MB usados | [04-linux-port.md](04-linux-port.md) |
@@ -45,7 +46,7 @@ carregador de tomada) e reiniciar (o aparelho fica desligado).
 | Microfone | **NÃO IMPLEMENTADO** | o CE só grava no caminho de voz do DSP | [audio.md](audio.md) |
 | Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série; gravação sustentada corrigida (576 MB conferidos por MD5, zero erros); reparo automático com `fsck.fat` se o cartão não foi desmontado | [sd-controller.md](sd-controller.md) |
 | Bateria e carregador | **PARCIAL** | leitura completa; carga por software implementada (algoritmo do CE), desligada por padrão; pela USB do PC recusa carregar como o CE (VCHG < 4,35 V); falta testar com carregador de tomada | [battery-charger.md](battery-charger.md) |
-| USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (High-Speed) | `ssh root@192.168.7.2`; TCP 3,7 MB/s PC→FOSTON, 6,2 MB/s FOSTON→PC (21/11/2026) | [04-linux-port.md](04-linux-port.md) |
+| USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (High-Speed) | `ssh root@192.168.7.2` (login 0,55 s; antes 5,9 s pela espera de DNS reverso); TCP 3,7 MB/s PC→FOSTON, 6,2 MB/s FOSTON→PC (21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
