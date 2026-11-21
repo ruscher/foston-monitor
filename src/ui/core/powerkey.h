@@ -10,6 +10,8 @@
 #include <stdbool.h>
 
 void powerkey_init(void);        /* começa a ler o botão (nada no simulador) */
+int  powerkey_fd(void);          /* fd do evdev do botão (-1 = ausente), para o poll do laço */
+void powerkey_read(void);        /* lê os eventos pendentes (fd legível) */
 void powerkey_press(void);       /* o que um toque no botão faz (também para testes) */
 void powerkey_hibernate(void);
 void powerkey_wake(void);

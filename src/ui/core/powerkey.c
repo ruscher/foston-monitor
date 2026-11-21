@@ -26,7 +26,6 @@
 #endif
 
 static int key_fd = -2;              /* -2 ainda não procurado, -1 ausente */
-static unsigned scans;               /* novas buscas enquanto ausente */
 static lv_timer_t *timer;
 static lv_obj_t *sleep_layer;        /* camada preta do Hibernar */
 
@@ -130,11 +129,10 @@ void powerkey_press(void)
     else bottombar_open_power();
 }
 
-static void poll_cb(lv_timer_t *t)
+/* eventos do botão: chamada pelo laço principal quando o fd fica legível (poll) */
+void powerkey_read(void)
 {
-    (void)t;
 #if defined(__linux__) && defined(EVIOCGBIT)
-    if(key_fd == -2 || (key_fd == -1 && ++scans % 125 == 0)) find_key();   /* ausente: tenta a cada ~5 s */
     if(key_fd < 0) return;
     struct input_event ev;
     ssize_t n;
@@ -148,8 +146,21 @@ static void poll_cb(lv_timer_t *t)
 #endif
 }
 
+int powerkey_fd(void) { return key_fd; }
+
+/* procura o dispositivo (de novo a cada 5 s enquanto ausente); a leitura em si não
+ * usa timer: o laço principal espera no fd com poll() */
+static void scan_cb(lv_timer_t *t)
+{
+    (void)t;
+#if defined(__linux__) && defined(EVIOCGBIT)
+    if(key_fd < 0) find_key();
+#endif
+}
+
 void powerkey_init(void)
 {
     if(timer || status_provider()->simulated) return;
-    timer = lv_timer_create(poll_cb, 40, NULL);
+    timer = lv_timer_create(scan_cb, 5000, NULL);
+    scan_cb(timer);
 }

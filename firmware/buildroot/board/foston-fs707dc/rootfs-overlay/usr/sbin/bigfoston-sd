@@ -31,7 +31,11 @@ lock() {
     trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 }
 
-mounted() { grep -q " $MNT " /proc/mounts; }
+# só builtins do shell: o laço de vigia roda a cada segundo (sem fork de grep)
+mounted() {
+    while read -r _d m _r; do [ "$m" = "$MNT" ] && return 0; done < /proc/mounts
+    return 1
+}
 
 wait_dev() {
     n=0

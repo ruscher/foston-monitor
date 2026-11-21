@@ -29,12 +29,36 @@
 #include <unistd.h>
 
 #include "core/perf.h"
+#include "core/powerkey.h"
 #ifdef BIGFOSTON_TARGET
+#include <poll.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
 #endif
+
+#ifdef BIGFOSTON_TARGET
+static lv_indev_t *touch_indev;
+#endif
+
+/* espera até o próximo timer do LVGL ou até chegar um toque/botão: com o toque por
+ * evento a interface parada não acorda a cada 33 ms (docs/performance/12) */
+static void wait_events(uint32_t ms)
+{
+#ifdef BIGFOSTON_TARGET
+    struct pollfd pf[2];
+    int n = 0, ti = -1, ki = -1;
+    if(touch_indev && touch_fd() >= 0) { ti = n; pf[n++] = (struct pollfd){ touch_fd(), POLLIN, 0 }; }
+    if(powerkey_fd() >= 0) { ki = n; pf[n++] = (struct pollfd){ powerkey_fd(), POLLIN, 0 }; }
+    if(poll(pf, (nfds_t)n, (int)ms) > 0) {
+        if(ti >= 0 && (pf[ti].revents & POLLIN)) lv_indev_read(touch_indev);
+        if(ki >= 0 && (pf[ki].revents & (POLLIN | POLLERR | POLLHUP))) powerkey_read();
+    }
+#else
+    usleep(ms * 1000);
+#endif
+}
 
 static uint32_t tick_ms(void)
 {
@@ -142,7 +166,7 @@ int main(int argc, char **argv)
     const char *touch = getenv("BIGFOSTON_TOUCH");
     if(!touch || !*touch) touch = find_touch(tbuf, sizeof tbuf);
     if(touch) {
-        lv_indev_t *in = touch_create(touch);
+        lv_indev_t *in = touch_indev = touch_create(touch);
         if(!in) fprintf(stderr, "bigfoston: não foi possível abrir o toque %s\n", touch);
         else fprintf(stderr, "bigfoston: toque em %s\n", touch);
     }
@@ -180,8 +204,8 @@ int main(int argc, char **argv)
         uint64_t t0 = perf_now_us();
         uint32_t idle = lv_timer_handler();
         perf_add(PERF_LOOP, (uint32_t)(perf_now_us() - t0));
-        if(idle == LV_NO_TIMER_READY || idle > 100) idle = 100;
-        usleep(idle * 1000);
+        if(idle == LV_NO_TIMER_READY || idle > 1000) idle = 1000;
+        wait_events(idle);
     }
     return 0;
 }

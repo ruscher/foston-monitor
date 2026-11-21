@@ -3,3 +3,6 @@
 CONFIG_NTPD=y
 # CONFIG_FEATURE_NTPD_SERVER is not set
 # CONFIG_FEATURE_NTPD_CONF is not set
+# sleep, echo, test etc. sem fork nos laços dos serviços (bigfoston-sd watch, S10bigfoston)
+CONFIG_FEATURE_PREFER_APPLETS=y
+CONFIG_FEATURE_SH_NOFORK=y
