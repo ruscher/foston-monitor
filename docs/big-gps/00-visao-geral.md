@@ -29,6 +29,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [01-pesquisa-tecnologias.md](01-pesquisa-tecnologias.md) | candidatos, medições do libosmscout, decisão |
 | [02-analise-hardware.md](02-analise-hardware.md) | orçamento de CPU, RAM, SD, ponto flutuante |
 | [03-arquitetura.md](03-arquitetura.md) | componentes, fluxo de dados, organização do SD |
+| [04-formatos.md](04-formatos.md) | formatos dos arquivos de mapa, rotas, busca e voz |
 | [05-construtor-mapas.md](05-construtor-mapas.md) | `bgmap-build` no PC |
 | [06-renderizacao.md](06-renderizacao.md) | rasterizador, estilos, medições de quadro |
 | [07-roteamento.md](07-roteamento.md) | grafo, perfis, CH, conferência, medições |
@@ -36,6 +37,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [09-voz.md](09-voz.md) | eSpeak NG: escolha medida, funcionamento, dados no cartão |
 | [10-busca.md](10-busca.md) | índice, normalização, ordenação, favoritos, medições |
 | [11-interface.md](11-interface.md) | a tela do mapa, destino, navegação, busca, relógio |
+| [12-integracao-gps.md](12-integracao-gps.md) | como o Big GPS usa o serviço de GPS existente |
 | [13-dados-brasil.md](13-dados-brasil.md) | construção dos dados nacionais, tamanhos, tempos |
 | [15-testes.md](15-testes.md) | conferências, robustez (arquivos corrompidos, sanitizadores) |
 | [16-licencas.md](16-licencas.md) | auditoria de licenças de código, dados, voz e fontes |
@@ -43,6 +45,7 @@ Nada aqui está aprovado para uso no trânsito real.
 | [17-instalacao-sd.md](17-instalacao-sd.md) | gerar os dados e instalar no cartão |
 | [18-uso.md](18-uso.md) | como usar |
 | [19-problemas-conhecidos.md](19-problemas-conhecidos.md) | limitações e o que falta verificar |
+| [20-proximos-passos.md](20-proximos-passos.md) | próximos passos recomendados |
 | [21-relatorio-entrega.md](21-relatorio-entrega.md) | relatório de entrega |
 
 
