@@ -42,7 +42,7 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Alto-falante (ALSA + OSS) | **FUNCIONANDO** | MP3 a ~7 % de CPU com espectro; sons de toque | [audio.md](audio.md) |
 | Fone de ouvido | **FUNCIONANDO** | detecção no GPIO 12 e troca alto-falante/fone conferidas com um fone | [audio.md](audio.md) |
 | Microfone | **NÃO IMPLEMENTADO** | o CE só grava no caminho de voz do DSP | [audio.md](audio.md) |
-| Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série, duas rodadas de teste com MD5 | [sd-controller.md](sd-controller.md) |
+| Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série; gravação sustentada corrigida (576 MB conferidos por MD5, zero erros); reparo automático com `fsck.fat` se o cartão não foi desmontado | [sd-controller.md](sd-controller.md) |
 | Bateria e carregador | **PARCIAL** | leitura completa; carga por software implementada (algoritmo do CE), desligada por padrão; pela USB do PC recusa carregar como o CE (VCHG < 4,35 V); falta testar com carregador de tomada | [battery-charger.md](battery-charger.md) |
 | USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (Full-Speed) | `ssh root@192.168.7.2`, ~190–240 KB/s | [04-linux-port.md](04-linux-port.md) |
 | Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
@@ -59,7 +59,7 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 | Aparência: modo escuro/claro/automático, 6 temas, papel de parede, animações, sons, escurecer a tela | **FUNCIONANDO** | papel de parede pré-calculado (redesenhar é cópia) |
 | Multimídia (MP3) | **FUNCIONANDO** | capa, espectro, fila, aleatório, repetir |
 | Livros (TXT, EPUB, PDF, SVG) | **FUNCIONANDO** | paginação real, sumário, marcadores, busca |
-| Arquivos | **FUNCIONANDO** (só leitura) | visualizadores de texto, JPEG e SVG |
+| Arquivos | **FUNCIONANDO** | copiar, recortar, renomear, apagar e nova pasta no SD e na pasta de dados (sistema só leitura); visualizadores de texto, JPEG e SVG |
 | Terminal | **FUNCIONANDO** | PTY + VT100, teclado na tela |
 | Run, Monitor, Sistema de Informação | **FUNCIONANDO** | |
 | Data: ajuste, fusos, horário de verão, NTP | **FUNCIONANDO** | NTP pelo PC (`sntp_server.py`) testado |
@@ -94,7 +94,7 @@ microfone, carga da bateria pelo Linux, USB High-Speed e reiniciar sem desligar.
 |---|---|---|---|
 | 1 | Carga da bateria: teste com carregador de tomada e ligar por padrão | usar o Linux por horas | médio: algoritmo pronto, falta a validação |
 | 2 | Reconexão do cabo USB: confirmar com mais uso e isolar a causa | uso diário com o PC | baixo: contadores em `/sys/module/mt3351/parameters/stats` |
-| 4 | Arquivos com gravação, montar/ejetar o SD pela interface | uso do SD pelo usuário | baixo |
+| 4 | Ejetar e montar o SD pela interface | uso do SD pelo usuário | baixo |
 | 5 | USB High-Speed e reconexão | atualizações mais rápidas | médio |
 | 6 | GPS via biblioteca do CE | navegação | alto: 4–6 semanas, camada de API do CE |
 | 7 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

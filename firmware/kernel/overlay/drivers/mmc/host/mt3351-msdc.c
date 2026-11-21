@@ -67,6 +67,13 @@ enum { RSP_NONE, RSP_R1, RSP_R2, RSP_R3, RSP_R6 = 6, RSP_R1B = 7 };
 
 #define MSDC_SRC_HZ		48000000	/* UPLL 48 MHz, as left by CE */
 
+#define PIO_TIMEOUT_MS	2000
+
+/* longest wait for FIFO room/data within one segment (read only, diagnostics) */
+static unsigned int max_stall_ms;
+module_param(max_stall_ms, uint, 0444);
+MODULE_PARM_DESC(max_stall_ms, "longest PIO stall seen, in ms");
+
 static bool readonly = true;
 /* writable at run time; it takes effect when the card is (re)initialised, so
  * /etc/init.d/S30sdcard unbinds and binds the host after clearing it */
@@ -137,11 +144,19 @@ static u32 msdc_cmd_word(struct mmc_command *cmd)
 
 static int msdc_send_cmd(struct msdc *h, struct mmc_command *cmd)
 {
-	u32 busy = cmd->opcode == MMC_STOP_TRANSMISSION ? SDC_CMDBUSY : SDC_BUSY;
+	/*
+	 * CMD12 and CMD13 are answered while the card is still programming
+	 * (DAT0 low): only the command line must be free. Every other command
+	 * waits for the controller, up to 1 s: after long writes SanDisk cards
+	 * were seen busy for more than the 500 ms used before, the write
+	 * failed and the core then declared the card removed.
+	 */
+	bool cmd_only = cmd->opcode == MMC_STOP_TRANSMISSION || cmd->opcode == MMC_SEND_STATUS;
+	u32 busy = cmd_only ? SDC_CMDBUSY : SDC_BUSY;
 	u32 st;
 	int ret;
 
-	if (msdc_wait_clear(h, SDC_STA, busy, 500))
+	if (msdc_wait_clear(h, SDC_STA, busy, cmd_only ? 500 : 1000))
 		return -EBUSY;
 	readl(h->base + SDC_CMDSTA);		/* read-to-clear a stale status */
 	writel(cmd->arg, h->base + SDC_ARG);
@@ -175,17 +190,30 @@ static int msdc_pio(struct msdc *h, struct mmc_data *data)
 {
 	bool write = data->flags & MMC_DATA_WRITE;
 	struct sg_mapping_iter miter;
-	unsigned long timeout;
+	unsigned long timeout, t0;
+	unsigned int stall, moved;
 	int ret = 0;
 	u32 st;
 
+	/*
+	 * Not SG_MITER_ATOMIC: this runs in a workqueue and must be able to give
+	 * the (single) CPU away while the card is busy, or the whole system
+	 * froze for as long as the card stalled.
+	 */
 	sg_miter_start(&miter, data->sg, data->sg_len,
-		       SG_MITER_ATOMIC | (write ? SG_MITER_FROM_SG : SG_MITER_TO_SG));
+		       write ? SG_MITER_FROM_SG : SG_MITER_TO_SG);
 	while (sg_miter_next(&miter)) {
 		u32 *p = miter.addr;
 		size_t words = miter.length / 4;
 
-		timeout = jiffies + msecs_to_jiffies(500);
+		/*
+		 * A card may stop taking data between blocks while it programs
+		 * its flash: 500 ms was exceeded in a sustained write test (CMD25
+		 * data timeouts, files corrupted). Allow 2 s and record the
+		 * longest stall seen (max_stall_ms).
+		 */
+		timeout = jiffies + msecs_to_jiffies(PIO_TIMEOUT_MS);
+		t0 = jiffies;
 		while (words) {
 			st = readl(h->base + SDC_DATSTA);
 			if (st & ST_TIMEOUT) {
@@ -196,26 +224,41 @@ static int msdc_pio(struct msdc *h, struct mmc_data *data)
 				ret = -EILSEQ;
 				goto out;
 			}
+			moved = 0;
 			while (words && (readl(h->base + MSDC_STA) & STA_FIFO)) {
 				if (write)
 					writel(*p++, h->base + MSDC_DAT);
 				else
 					*p++ = readl(h->base + MSDC_DAT);
 				words--;
+				moved++;
 			}
 			if (words && time_after(jiffies, timeout)) {
 				ret = -ETIMEDOUT;
 				goto out;
 			}
+			if (!moved)
+				cond_resched();		/* card busy: let the UI run */
 		}
+		stall = jiffies_to_msecs(jiffies - t0);
+		if (stall > max_stall_ms)
+			max_stall_ms = stall;
 		data->bytes_xfered += miter.length;
 	}
 	/* the last block: wait for its data status (CE SD_WaitDATRdyOrTo, 250 ms) */
-	if (readl_poll_timeout_atomic(h->base + SDC_DATSTA, st, st & 0xffff, 2, 250 * 1000) == 0 &&
+	if (readl_poll_timeout(h->base + SDC_DATSTA, st, st & 0xffff, 10, 250 * 1000) == 0 &&
 	    (st & (ST_TIMEOUT | ST_CRC)))
 		ret = st & ST_CRC ? -EILSEQ : -ETIMEDOUT;
 out:
 	sg_miter_stop(&miter);
+	/*
+	 * On any error report nothing transferred: the FIFO may have taken words
+	 * the card never programmed, and a partial count made the core rewrite
+	 * only the "missing" part (files were corrupted). Rewriting the same
+	 * blocks again is harmless.
+	 */
+	if (ret)
+		data->bytes_xfered = 0;
 	return ret;
 }
 
@@ -248,6 +291,14 @@ static void msdc_work(struct work_struct *work)
 			mrq->stop->error = msdc_send_cmd(h, mrq->stop);
 	}
 done:
+	/* every failure in the log, with the state of the controller and of the slot */
+	if (mrq->cmd->error || (data && data->error) || (mrq->stop && mrq->stop->error))
+		dev_warn_ratelimited(mmc_dev(h->mmc),
+				     "CMD%u arg %#x: cmd %d data %d stop %d (SDC_STA %#x CMDSTA %#x DATSTA %#x PS %#x)\n",
+				     mrq->cmd->opcode, mrq->cmd->arg, mrq->cmd->error,
+				     data ? data->error : 0, mrq->stop ? mrq->stop->error : 0,
+				     readl(h->base + SDC_STA), readl(h->base + SDC_CMDSTA),
+				     readl(h->base + SDC_DATSTA), readl(h->base + MSDC_PS));
 	h->mrq = NULL;
 	mmc_request_done(h->mmc, mrq);
 }

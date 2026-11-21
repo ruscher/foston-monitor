@@ -87,6 +87,33 @@ Parâmetros: `readonly` (padrão 1; gravável em tempo de execução, vale quand
   erros de `mmc0` no log. Gravação ≈ 1,4 MB/s (inclui gerar os dados com
   `/dev/urandom`), leitura de 64 MB com o cache limpo em 7,97 s (≈ 8 MB/s).
 
+## Gravação sustentada: defeito encontrado e corrigido (21/11/2026)
+
+Um teste pesado (3 arquivos de 96 MB a ~3 MB/s, conferidos por MD5) **corrompeu 2 dos
+3 arquivos** com o driver anterior. O log novo mostrou 14 falhas `CMD25 ... data -110`:
+numa gravação longa o cartão para de aceitar dados entre blocos enquanto programa a
+flash, e o driver desistia depois de 500 ms; pior, contava como transferido o que a
+FIFO já tinha aceitado, e o núcleo MMC regravava só "o que faltava". Antes disso, num
+teste de 80 MB, uma falha dessas levou o núcleo a dar o cartão como **removido**.
+
+Correções em `mt3351-msdc.c`:
+
+- espera de até 2 s por trecho (medido: até **670 ms**), parâmetro `max_stall_ms`;
+- em qualquer erro, `bytes_xfered = 0`: o núcleo regrava a requisição inteira;
+- CMD12/CMD13 só esperam a linha de comando (o cartão responde a eles ocupado); os
+  demais esperam o controlador até 1 s;
+- PIO sem `SG_MITER_ATOMIC` e com `cond_resched()` enquanto o cartão está ocupado
+  (antes a espera congelava o sistema de uma CPU);
+- toda falha registrada no log com `SDC_STA`, `CMDSTA`, `DATSTA` e `PS`.
+
+Depois: 2 rodadas do mesmo teste, **6 de 6 arquivos conferidos**, zero erros; e as 22
+verificações do motor de arquivos do shell direto no cartão.
+
+**Reparo automático:** o `S30sdcard` lê o bit "dirty" do FAT32 (setor de boot `0x41`,
+bit 0) e, se o cartão não foi desmontado (energia cortada no carro), roda
+`fsck.fat -a` antes de liberar a gravação; o relatório fica em
+`BigFoston/fsck-ultimo.log`. Testado: corrigiu o cartão em 6 s após a falha acima.
+
 ## Pendente
 
 - **Interrupção de detecção** (IRQ 15). Não se sabe como reconhecê-la, então o driver consulta o slot periodicamente.

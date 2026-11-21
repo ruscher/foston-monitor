@@ -15,6 +15,23 @@ DRV=/sys/bus/platform/drivers/mt3351-msdc
 RO_OPTS=ro,noatime,iocharset=iso8859-1,utf8
 RW_OPTS=rw,noatime,flush,iocharset=iso8859-1,utf8,errors=remount-ro
 
+# FAT32 "dirty" (boot sector 0x41, bit 0): set by Linux while mounted with
+# writes and cleared on a clean unmount; set at boot = power was cut (car) or
+# the card was not unmounted. Then fsck.fat repairs it before any write.
+fat_dirty() {
+    [ "$(( $(dd if="$DEV" bs=1 skip=65 count=1 2>/dev/null | hexdump -e '1/1 "%u"') & 1 ))" = 1 ]
+}
+
+check_fat() {
+    command -v fsck.fat >/dev/null || return 0
+    fat_dirty || return 0
+    echo "sdcard: cartão marcado como não desmontado; verificando (fsck.fat -a)" > /dev/kmsg
+    fsck.fat -a -w "$DEV" > /tmp/fsck-sd.log 2>&1
+    rc=$?
+    echo "sdcard: fsck.fat terminou com código $rc (0 = sem erros, 1 = corrigido)" > /dev/kmsg
+    return 0
+}
+
 wait_dev() {
     n=0
     while [ ! -b "$DEV" ] && [ $n -lt "$1" ]; do sleep 0.5; n=$((n + 1)); done
@@ -42,7 +59,8 @@ start)
     serial=$(cat /sys/block/mmcblk0/device/serial 2>/dev/null)
     if [ -n "$serial" ] && grep -qx "serial=$serial" "$MNT/BigFoston/linux-rw" 2>/dev/null; then
         umount "$MNT"
-        if enable_writes && mount -t vfat -o "$RW_OPTS" "$DEV" "$MNT"; then
+        if enable_writes && check_fat && mount -t vfat -o "$RW_OPTS" "$DEV" "$MNT"; then
+            [ -f /tmp/fsck-sd.log ] && cp /tmp/fsck-sd.log "$MNT/BigFoston/fsck-ultimo.log"
             mkdir -p "$MNT/BigFoston/data" "$DATA"
             # primeira vez: leva para o cartão o que já estiver na RAM
             if [ -z "$(ls -A "$MNT/BigFoston/data")" ] && [ -n "$(ls -A "$DATA")" ]; then

@@ -5,10 +5,20 @@ Estado em 2026-11-20. Todos testados no aparelho, salvo indicação.
 | App | Estado | Notas |
 |---|---|---|
 | Multimídia | **FUNCIONANDO** | MP3 com libmpg123 (ponto fixo); capa, espectro real, progresso com avanço, aleatório/repetir, fila, informações, tela cheia — [audio.md](audio.md) |
-| Arquivos | **FUNCIONANDO** (somente leitura) | cartão SD, dados e sistema; texto, JPEG/SVG com zoom; MP3 abre no Multimídia; EPUB/PDF no Livros |
+| Arquivos | **FUNCIONANDO** | cartão SD, dados e sistema; texto, JPEG/SVG com zoom; MP3 abre no Multimídia; EPUB/PDF no Livros; copiar, recortar, renomear, apagar e nova pasta (só no SD e nos dados) |
 | Terminal | **FUNCIONANDO** | `/bin/sh -l` num PTY com emulação VT100 (ash, top, vi); usuário `bigfoston` |
 | Livros | **FUNCIONANDO** | EPUB, TXT, PDF (texto) e SVG — detalhes abaixo |
 | GPS, TV, Bluetooth, FM | NÃO IMPLEMENTADO | dependem de hardware/firmware proprietário (ver [04-linux-port.md](04-linux-port.md)) |
+
+## Arquivos: gravação
+
+Segurar um item abre Copiar, Recortar, Renomear e Apagar (Apagar confirma; pastas
+inteiras); nas pastas graváveis a barra tem Nova pasta e Colar. Só grava no cartão SD
+liberado para gravação e na pasta de dados — o sistema (`/`) continua só leitura.
+Cópias, movimentações e exclusões rodam numa thread (`core/fileops.c`) com barra de
+progresso e Cancelar; nada fica pela metade, conflito de nome vira "nome (2)", nomes
+inválidos no FAT são recusados e o fim de cada operação faz `sync`. Testado no aparelho:
+22 verificações direto no cartão (inclusive cancelar uma cópia de 80 MB).
 
 ## Livros
 
