@@ -252,7 +252,7 @@ static int clip_seg(int32_t *a, int32_t *b, int32_t L, int32_t T, int32_t R, int
     int64_t p[4] = {-dx, dx, -dy, dy}, q[4] = {x0 - L, R - x0, y0 - T, B - y0};
     for (int k = 0; k < 4; k++) {
         if (p[k] == 0) { if (q[k] < 0) return 0; continue; }
-        int64_t t = (q[k] << 16) / p[k];
+        int64_t t = q[k] * 65536 / p[k];
         if (t > 65536) t = 65537;
         if (t < -1) t = -1;
         if (p[k] < 0) { if (t > t1) return 0; if (t > t0) t0 = (int32_t)t; }

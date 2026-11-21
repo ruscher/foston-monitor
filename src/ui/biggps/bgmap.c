@@ -228,10 +228,11 @@ static bgm_tile_t *decode(const uint8_t *b, size_t n, int level, int tx, int ty)
                  + nstr * sizeof(char *) + npts * 2 * sizeof(int16_t) + namebytes + 16;
     bgm_tile_t *t = calloc(1, mem);
     if (!t) return NULL;
+    /* largest alignment first: pointers, then 4-byte, 2-byte and 1-byte data */
     uint8_t *m = (uint8_t *)(t + 1);
+    t->names = (const char **)m; m += nstr * sizeof(char *);
     t->feat = (bgm_feat_t *)m; m += nfeat * sizeof(bgm_feat_t);
     t->ring_start = (uint32_t *)m; m += (nring + 1) * sizeof(uint32_t);
-    t->names = (const char **)m; m += nstr * sizeof(char *);
     t->pts = (int16_t *)m; m += npts * 2 * sizeof(int16_t);
     char *names = (char *)m;
     t->level = level; t->tx = tx; t->ty = ty;

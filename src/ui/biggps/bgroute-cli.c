@@ -59,7 +59,7 @@ int main(int argc, char **argv)
     if (!p) { fprintf(stderr, "%s\n", err); return 1; }
     const bgr_header_t *h = bgr_info(p);
     printf("abrir: %.1f ms; perfil %u, %u nós, %u arcos, CH %u+%u\n", (now() - t0) * 1e3, h->profile, h->nodes, h->arcs, h->ch_fwd, h->ch_bwd);
-    if (!strcmp(argv[2], "-c")) return check(p, argv[3]);
+    if (!strcmp(argv[2], "-c")) { int rc = check(p, argv[3]); bgr_close(p); return rc; }
     if (argc < 6) return 2;
     int heading = -1, simulate = 0;
     for (int i = 6; i < argc; i++) {
