@@ -2197,7 +2197,7 @@ diff -Nur a/drivers/power/reset/mt3351-reboot.c b/drivers/power/reset/mt3351-reb
 diff -Nur a/drivers/tty/serial/8250/8250_mt3351.c b/drivers/tty/serial/8250/8250_mt3351.c
 --- a/drivers/tty/serial/8250/8250_mt3351.c
 +++ b/drivers/tty/serial/8250/8250_mt3351.c
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,161 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * UARTs of the MediaTek MT3351 (FOSTON FS-707DC) on the generic 8250 core.
@@ -2323,6 +2323,13 @@ diff -Nur a/drivers/tty/serial/8250/8250_mt3351.c b/drivers/tty/serial/8250/8250
 +	data->line = serial8250_register_8250_port(&up);
 +	if (data->line < 0)
 +		return data->line;
++	/*
++	 * Receive FIFO trigger at 1 byte (the core uses 8): the GPS sends its
++	 * measurements in bursts at 921600 baud and with 8 left in the 16-byte
++	 * FIFO (87 us) the interrupt came too late: 202 overruns in ~500 bytes.
++	 * At 1 byte (162 us of margin): no overrun (21/11/2026). CE uses DMA.
++	 */
++	serial8250_get_port(data->line)->fcr = UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_00;
 +	platform_set_drvdata(pdev, data);
 +	return 0;
 +}

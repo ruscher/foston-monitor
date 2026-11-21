@@ -1402,8 +1402,61 @@ static u32 exp_va(const char *name, const uint8_t *exps, u32 nexp)
     return 0;
 }
 
+/* --probe BAUD [HEX]: só a serial, sem o DLL nem reset. Ouve 3 s, envia HEX
+ * (opcional) e ouve mais 3 s; mostra quantos bytes chegaram e os primeiros. */
+static int probe(u32 baud, const char *hex)
+{
+    int fd = open("/dev/ttyS0", O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if(fd < 0) { logf_("/dev/ttyS0: %s", strerror(errno)); return 1; }
+    struct termios t;
+    tcgetattr(fd, &t);
+    cfmakeraw(&t);
+    t.c_cflag |= CLOCAL | CREAD;
+    t.c_cflag &= ~(CRTSCTS | CSTOPB | PARENB);
+    cfsetispeed(&t, baud_code(baud));
+    cfsetospeed(&t, baud_code(baud));
+    tcsetattr(fd, TCSANOW, &t);
+    tcflush(fd, TCIOFLUSH);
+    for(int phase = 0; phase < 2; phase++) {
+        if(phase == 1) {
+            if(!hex) break;
+            uint8_t b[256];
+            u32 n = 0;
+            for(const char *q = hex; q[0] && q[1] && n < sizeof b; q += 2) {
+                if(*q == ' ') { q--; continue; }
+                unsigned v;
+                if(sscanf(q, "%2x", &v) != 1) break;
+                b[n++] = (uint8_t)v;
+            }
+            strace_ = 1;
+            hexlog("->", b, n, n);
+            if(write(fd, b, n) != (ssize_t)n) logf_("escrita incompleta");
+            tcdrain(fd);
+        }
+        uint8_t buf[4096];
+        u32 got = 0;
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for(;;) {
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            if((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000 > 3000) break;
+            struct pollfd pf = { fd, POLLIN, 0 };
+            if(poll(&pf, 1, 100) <= 0) continue;
+            ssize_t r = read(fd, buf + got, sizeof buf - got);
+            if(r > 0) got += (u32)r;
+            if(got >= sizeof buf) break;
+        }
+        strace_ = 1;
+        logf_("%s: %u bytes em 3 s a %u baud", phase ? "depois do envio" : "ouvindo", got, baud);
+        if(got) hexlog("<-", buf, got, got);
+    }
+    close(fd);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if(argc >= 3 && !strcmp(argv[1], "--probe")) return probe((u32)atoi(argv[2]), argc > 3 ? argv[3] : NULL);
     const char *bfx = NULL, *regfile = "/etc/bigfoston/gps-registry.txt";
     int seconds = 20;
     for(int i = 1; i < argc; i++) {

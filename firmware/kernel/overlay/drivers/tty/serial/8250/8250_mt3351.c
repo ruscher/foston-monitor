@@ -123,6 +123,13 @@ static int mt3351_uart_probe(struct platform_device *pdev)
 	data->line = serial8250_register_8250_port(&up);
 	if (data->line < 0)
 		return data->line;
+	/*
+	 * Receive FIFO trigger at 1 byte (the core uses 8): the GPS sends its
+	 * measurements in bursts at 921600 baud and with 8 left in the 16-byte
+	 * FIFO (87 us) the interrupt came too late: 202 overruns in ~500 bytes.
+	 * At 1 byte (162 us of margin): no overrun (21/11/2026). CE uses DMA.
+	 */
+	serial8250_get_port(data->line)->fcr = UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_00;
 	platform_set_drvdata(pdev, data);
 	return 0;
 }
