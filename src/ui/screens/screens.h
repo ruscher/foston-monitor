@@ -31,7 +31,7 @@ void scr_run_demo_keyboard(void);
 void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
 void scr_gallery_demo(int step); /* 0 espera as miniaturas, 1 abre a 1ª, 2 fecha */
-void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar */
+void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar, 4 fonte Bluetooth */
 void scr_map_demo(int step);     /* Big GPS: 0 destino e rota, 1 simular, 2 avançar 60 s, 3-5 busca */
 void music_play_file(const char *path);   /* Arquivos -> Multimídia */
 enum { MUSIC_TOGGLE, MUSIC_PREV, MUSIC_NEXT };

@@ -30,6 +30,7 @@ bool       player_cover(const uint8_t **d, size_t *l, const char **m) { (void)d;
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include "btaudio.h"
 #include <mpg123.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -416,15 +417,19 @@ void player_spectrum(uint8_t out[PL_BANDS])
     if(!tw_ready) tw_init();
 
     bool live = player_state() == PL_PLAYING;
-    if(live) {
+    static int16_t bt[FFT_N];
+    /* música do celular: as amostras que o bluealsa-aplay já decodificou (core/btaudio) */
+    bool bt_live = !live && btaudio_live() && btaudio_samples(bt, FFT_N);
+    if(live || bt_live) {
         unsigned w = ring_w;
         for(int i = 0; i < FFT_N; i++) {
-            int32_t s = ring[(w - FFT_N + (unsigned)i) & (RING - 1)];
+            int32_t s = bt_live ? bt[i] : ring[(w - FFT_N + (unsigned)i) & (RING - 1)];
             re[i] = (s * win[i]) >> 15;
             im[i] = 0;
         }
         fft(re, im);
     }
+    live = live || bt_live;
     for(int b = 0; b < PL_BANDS; b++) {
         int target = 0;
         if(live) {

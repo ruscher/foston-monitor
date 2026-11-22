@@ -7,13 +7,22 @@
  * tocar/pausar, próxima, repetir: desligado/todas/uma), lista de reprodução,
  * informações e estatísticas da sessão, e um modo tela cheia.
  * A reprodução continua fora da tela: um timer global cuida do fim da faixa.
- * Procura *.mp3 em /mnt/sd (cartão SD, só leitura) e em <dados>/music. */
+ * Procura *.mp3 em /mnt/sd (cartão SD, só leitura) e em <dados>/music.
+ *
+ * Fonte Bluetooth: a música de um celular conectado (A2DP) toca pelo bluealsa-aplay;
+ * esta tela mostra o que o celular informa por AVRCP (core/btstat: título, artista,
+ * álbum, duração, posição, estado), manda anterior/tocar/pausar/próxima ao celular e
+ * desenha o espectro com as amostras já decodificadas (core/btaudio). Quando o celular
+ * começa a tocar, a fonte troca sozinha e a música do cartão pausa e solta o /dev/dsp;
+ * tocar uma música do cartão pede pausa ao celular. */
 #define _DEFAULT_SOURCE
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../core/player.h"
 #include "../core/cover.h"
+#include "../core/btstat.h"
+#include "../core/btaudio.h"
 #include "../widgets/dialog.h"
 #include "../widgets/volpop.h"
 #include <dirent.h>
@@ -40,11 +49,43 @@ static uint32_t last_tick;
 
 enum { REP_OFF, REP_ALL, REP_ONE };
 
+/* fonte Bluetooth (vive fora da tela) */
+static bool src_bt;
+static bt_info_t btc;              /* estado do agente, relido no máximo a cada 500 ms */
+static uint32_t btc_at;
+static bool bt_was_live;
+
+static const bt_info_t *bt_now(void)
+{
+    uint32_t now = lv_tick_get();
+    if(!btc_at || now - btc_at >= 500) { bt_read(&btc); btc_at = now ? now : 1; }
+    return &btc;
+}
+
+/* há um celular conectado que pode mandar música */
+static bool bt_phone(void)
+{
+    const bt_info_t *b = bt_now();
+    if(!b->available || !b->powered) return false;
+    if(b->player || b->streaming) return true;
+    for(int i = 0; i < b->ndev; i++)
+        if(b->dev[i].connected && !strcmp(b->dev[i].icon, "phone")) return true;
+    return false;
+}
+
+static const char *bt_dev_name(void)
+{
+    const bt_info_t *b = bt_now();
+    if(b->pl_dev[0]) return b->pl_dev;
+    for(int i = 0; i < b->ndev; i++) if(b->dev[i].connected) return b->dev[i].name;
+    return tr(S_APP_BLUETOOTH);
+}
+
 /* ---------------- objetos da tela (NULL fora dela) ---------------- */
 
 typedef struct {
     lv_obj_t *title, *artist, *album, *tech, *elapsed, *total, *slider, *play_lbl;
-    lv_obj_t *shuffle, *repeat, *badge;
+    lv_obj_t *shuffle, *repeat, *badge, *queue, *src;
     lv_obj_t *spec;               /* um só objeto desenha as PL_BANDS barras */
     uint8_t shown[PL_BANDS];      /* nível desenhado (0..25): só redesenha se mudar */
     int bar_h;
@@ -135,6 +176,9 @@ static void play(int idx, bool remember)
         hist[n_hist++] = cur;
     }
     cur = idx;
+    if(src_bt || btaudio_live()) bt_cmd("pause");    /* o cartão assume a saída de som */
+    src_bt = false;
+    player_suspend(false);
     if(player_open(tracks[idx])) plays[idx]++;
     ui_refresh_track();
 }
@@ -152,10 +196,28 @@ static int next_index(bool user)
     return settings()->music_repeat == REP_ALL || user ? 0 : -1;
 }
 
+/* troca de fonte: o Bluetooth faz a música do cartão pausar e soltar o /dev/dsp */
+static void set_source(bool bt)
+{
+    if(bt == src_bt) return;
+    src_bt = bt;
+    if(bt) {
+        if(player_state() == PL_PLAYING) player_toggle();
+        if(player_state() != PL_STOPPED) player_suspend(true);
+    }
+    else player_suspend(false);
+    btc_at = 0;
+    ui_refresh_track();
+}
+
 /* fim da faixa e tempo ouvido; roda sempre, mesmo fora da tela */
 static void watch_cb(lv_timer_t *t)
 {
     (void)t;
+    bool live = btaudio_live();
+    if(live && !bt_was_live) set_source(true);     /* o celular começou a tocar */
+    bt_was_live = live;
+    if(src_bt && !live && !bt_phone()) set_source(false);   /* celular desconectado */
     uint32_t now = lv_tick_get();
     if(player_state() == PL_PLAYING) listened_ms += (uint32_t)(now - last_tick);
     last_tick = now;
@@ -167,6 +229,11 @@ static void watch_cb(lv_timer_t *t)
 static void toggle_click(lv_event_t *e)
 {
     (void)e;
+    if(src_bt) {
+        bt_cmd("%s", !strcmp(bt_now()->pl_status, "playing") ? "pause" : "play");
+        btc_at = 0;
+        return;
+    }
     if(player_state() == PL_STOPPED) play(cur >= 0 ? cur : 0, false);
     else player_toggle();
     ui_refresh_track();
@@ -175,12 +242,25 @@ static void toggle_click(lv_event_t *e)
 static void prev_click(lv_event_t *e)
 {
     (void)e;
+    if(src_bt) { bt_cmd("prev"); btc_at = 0; return; }
     if(player_state() != PL_STOPPED && player_pos_ms() > 3000) { player_seek_ms(0); return; }
     if(n_hist) { play(hist[--n_hist], false); return; }
     play(cur > 0 ? cur - 1 : 0, false);
 }
 
-static void next_click(lv_event_t *e) { (void)e; play(next_index(true), true); }
+static void next_click(lv_event_t *e)
+{
+    (void)e;
+    if(src_bt) { bt_cmd("next"); btc_at = 0; return; }
+    play(next_index(true), true);
+}
+
+static void src_click(lv_event_t *e)
+{
+    (void)e;
+    if(src_bt) set_source(false);
+    else if(bt_phone()) set_source(true);
+}
 
 static void shuffle_click(lv_event_t *e)
 {
@@ -200,6 +280,7 @@ static void repeat_click(lv_event_t *e)
 
 static void slider_event(lv_event_t *e)
 {
+    if(src_bt) return;                    /* o celular não aceita pular por aqui */
     lv_event_code_t c = lv_event_get_code(e);
     lv_obj_t *s = lv_event_get_target(e);
     if(c == LV_EVENT_PRESSED) dragging = true;
@@ -392,7 +473,8 @@ static void build_controls(lv_obj_t *parent, bool compact)
     lv_obj_t *gap = bf_plain(row);
     lv_obj_set_size(gap, BF_SP_S, 1);
     icon_button(row, LV_SYMBOL_VOLUME_MAX, vol_click, 0, 60, 56);
-    icon_button(row, LV_SYMBOL_LIST, open_queue, 0, 60, 56);
+    vw->queue = icon_button(row, LV_SYMBOL_LIST, open_queue, 0, 60, 56);
+    vw->src = icon_button(row, LV_SYMBOL_BLUETOOTH, src_click, 0, 60, 56);   /* fonte Bluetooth */
     if(compact) {
         icon_button(row, BF_SYMBOL_INFO, open_info, 0, 60, 56);
         icon_button(row, LV_SYMBOL_UP, open_full, 0, 60, 56);
@@ -426,9 +508,56 @@ static void tech_line(char *out, size_t n)
              in.audio_out ? "" : tr(S_MUSIC_NOOUT));
 }
 
+static void enable_obj(lv_obj_t *o, bool on)
+{
+    if(!o) return;
+    lv_obj_set_style_opa(o, LV_OPA_40, LV_STATE_DISABLED);   /* desativado à vista */
+    if(on) lv_obj_remove_state(o, LV_STATE_DISABLED);
+    else lv_obj_add_state(o, LV_STATE_DISABLED);
+}
+
+static void refresh_view_bt(view_t *vw)
+{
+    const bt_info_t *b = bt_now();
+    char buf[300];
+    const char *dev = bt_dev_name();
+    if(b->pl_title[0]) set_text(vw->title, b->pl_title);
+    else set_text(vw->title, tr(S_MUSIC_BT_PLAYING));
+    const char *ar = b->pl_artist[0] ? b->pl_artist : dev;
+    if(vw->album) {
+        set_text(vw->artist, ar);
+        set_text(vw->album, b->pl_album);
+    }
+    else if(b->pl_album[0] && strcmp(b->pl_album, b->pl_title)) {
+        snprintf(buf, sizeof buf, "%.140s  —  %.95s", ar, b->pl_album);
+        set_text(vw->artist, buf);
+    }
+    else set_text(vw->artist, ar);
+    if(vw->tech) {
+        snprintf(buf, sizeof buf, tr(S_MUSIC_BT_TECH), dev);
+        set_text(vw->tech, buf);
+    }
+    set_text(vw->play_lbl, !strcmp(b->pl_status, "playing") ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+    int mx = b->pl_dur > 1000 ? (int)(b->pl_dur / 1000) : 1;
+    if(lv_slider_get_max_value(vw->slider) != mx) lv_slider_set_range(vw->slider, 0, mx);
+    fmt_time(buf, sizeof buf, (int)b->pl_dur);
+    set_text(vw->total, b->pl_dur ? buf : "--:--");
+    lv_obj_add_flag(vw->badge, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void refresh_view(view_t *vw)
 {
     if(!vw->title) return;
+    /* botões que só valem para o cartão; o da fonte só com um celular conectado */
+    enable_obj(vw->shuffle, !src_bt);
+    enable_obj(vw->repeat, !src_bt);
+    enable_obj(vw->queue, !src_bt && n_tracks > 0);
+    if(vw->src) {
+        if(bt_phone() || src_bt) lv_obj_remove_flag(vw->src, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(vw->src, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_state(vw->src, LV_STATE_CHECKED, src_bt);
+    }
+    if(src_bt) { refresh_view_bt(vw); return; }
     pl_tags_t t;
     char buf[300], name[200];
     player_tags(&t);
@@ -504,8 +633,19 @@ static void apply_full_bg(void);
 
 static void refresh_cover(void)
 {
-    if((!cover_img && !fcover_img) || cover_for == cur) return;
-    cover_for = cur;
+    int want = src_bt ? -3 : cur;            /* -3: capa do Bluetooth (o celular não manda imagem) */
+    if((!cover_img && !fcover_img) || cover_for == want) return;
+    cover_for = want;
+    const char *sym = src_bt ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_AUDIO;
+    if(cover_note) lv_label_set_text(cover_note, sym);
+    if(fcover_note) lv_label_set_text(fcover_note, sym);
+    if(src_bt) {
+        cover_has = false;
+        show_cover(cover_img, cover_note, NULL);
+        show_cover(fcover_img, fcover_note, NULL);
+        if(full) apply_full_bg();
+        return;
+    }
     const uint8_t *d;
     size_t n;
     const char *mime;
@@ -549,12 +689,18 @@ static void ui_tick(lv_timer_t *t)
     static pl_state_t last = PL_STOPPED;
     uint8_t lv[PL_BANDS];
     player_spectrum(lv);
-    int pos = player_pos_ms();
+    int pos = src_bt ? (int)bt_position_ms(bt_now()) : player_pos_ms();
     tick_view(&v, lv, pos);
     tick_view(&vfull, lv, pos);
     pl_state_t s = player_state();
-    if(s != last) {
+    /* o que o celular informa mudou (faixa, estado) ou o celular conectou/saiu */
+    static char bt_sig[160];
+    char sig[160];
+    const bt_info_t *b = bt_now();
+    snprintf(sig, sizeof sig, "%d%d%.15s|%.95s|%u", src_bt, bt_phone(), b->pl_status, b->pl_title, b->pl_dur);
+    if(s != last || strcmp(sig, bt_sig)) {
         last = s;
+        snprintf(bt_sig, sizeof bt_sig, "%s", sig);
         ui_refresh_track();
     }
 }
@@ -912,7 +1058,9 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
     lv_obj_remove_flag(root, LV_OBJ_FLAG_SCROLLABLE);
 
-    if(!player_available() || !n_tracks) {
+    if(btaudio_live() || (src_bt && bt_phone())) src_bt = true;
+    else if(src_bt) set_source(false);
+    if(!player_available() || (!n_tracks && !src_bt && !bt_phone())) {
         lv_obj_t *box = bf_card(root);
         lv_obj_set_size(box, LV_PCT(100), LV_SIZE_CONTENT);
         lv_obj_set_style_pad_all(box, BF_SP_XL, 0);
@@ -983,10 +1131,17 @@ static void destroy(void)
 }
 
 /* Controle a partir de outras telas (Painel da Início) */
-bool music_has_queue(void) { return n_tracks > 0; }
+bool music_has_queue(void) { return n_tracks > 0 || src_bt; }
 
 bool music_now(char *title, size_t tn, char *sub, size_t sn, int *idx)
 {
+    if(src_bt) {
+        const bt_info_t *b = bt_now();
+        snprintf(title, tn, "%s", b->pl_title[0] ? b->pl_title : tr(S_MUSIC_BT_PLAYING));
+        snprintf(sub, sn, "%s", b->pl_artist[0] ? b->pl_artist : bt_dev_name());
+        if(idx) *idx = -3;
+        return true;
+    }
     if(cur < 0 || cur >= n_tracks) return false;
     pl_tags_t t;
     char name[200];
@@ -1002,7 +1157,7 @@ bool music_now(char *title, size_t tn, char *sub, size_t sn, int *idx)
 
 void music_command(int cmd)
 {
-    if(!n_tracks) return;
+    if(!n_tracks && !src_bt) return;
     if(cmd == MUSIC_PREV) prev_click(NULL);
     else if(cmd == MUSIC_NEXT) next_click(NULL);
     else toggle_click(NULL);
@@ -1036,6 +1191,7 @@ void music_play_file(const char *path)
 
 void scr_music_demo(int step)
 {
+    if(step == 4) { btc_at = 0; set_source(true); ui_refresh_track(); return; }   /* fonte Bluetooth */
     if(step == 0) play(0, false);
     else if(step == 1) open_queue(NULL);
     else if(step == 2) { queue_close(NULL); open_full(NULL); }

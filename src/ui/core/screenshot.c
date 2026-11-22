@@ -243,10 +243,12 @@ int screenshot_run(const char *dir)
                         "name=BigFoston\ndev=02:00:00:00:00:01|1|1|1|0|phone|Celular da Ana\n"
                         "dev=02:00:00:00:00:02|1|0|1|0|audio-headphones|Fone JBL\n"
                         "dev=02:00:00:00:00:03|0|0|0|-62|audio-card|Caixa de som\n"
-                        "player=playing|Aquarela|Toquinho|Celular da Ana\nresult=connect|ok|\n");
+                        "player=playing|Aquarela|Toquinho|Celular da Ana|Casa de Brinquedos|258000|61000|0\n"
+                        "stream=active\nresult=connect|ok|\n");
             fclose(bf);
             setenv("BIGFOSTON_BT_STATUS", bp, 1);
             go(SCR_BLUETOOTH, 0); pump(300); shot("43-bluetooth");
+            go(SCR_MUSIC, 0); pump(200); scr_music_demo(4); pump(400); shot("43c-multimidia-bluetooth");
             bf = fopen(bp, "w");
             if(bf) {
                 fprintf(bf, "updated=0\nenabled=1\nagent=1\nadapter=1\npowered=1\ndiscoverable=1\ndiscovering=0\n"

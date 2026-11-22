@@ -90,7 +90,7 @@ bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow
 
 /* ------------------------------------------------ imagem do usuário */
 
-#define CACHE_MAGIC "BFWP1"
+#define CACHE_MAGIC "BFWP2"   /* muda junto com o tratamento da imagem */
 
 typedef struct {
     char magic[8];
@@ -156,8 +156,9 @@ bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palett
     else { cw = iw; ch = (int)((long long)iw * BF_WALL_H / BF_WALL_W); }
     int ox = (iw - cw) / 2, oy = (ih - ch) / 2;
     const uint16_t *src = (const uint16_t *)img.data;
-    /* no escuro, 80 % do brilho; no claro, 30 % da cor de fundo por cima */
-    unsigned mul = p->dark ? 205 : 179, br = p->bg.red, bgc = p->bg.green, bb = p->bg.blue;
+    /* no escuro, 80 % do brilho; no claro, só 30 % da imagem sobre a cor de fundo (com 70 %,
+     * uma imagem escura deixava o texto escuro do tema claro ilegível) */
+    unsigned mul = p->dark ? 205 : 77, br = p->bg.red, bgc = p->bg.green, bb = p->bg.blue;
     for(int y = 0; y < BF_WALL_H; y++) {
         const uint16_t *srow = src + (size_t)(oy + y * ch / BF_WALL_H) * is + ox;
         uint16_t *row = buf + (size_t)y * BF_WALL_W;
