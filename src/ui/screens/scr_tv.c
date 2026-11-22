@@ -739,8 +739,8 @@ static void build_column(int h)
     lv_obj_set_style_pad_ver(col, 4, 0);
     lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(col, h >= 400 ? 26 : 10, 0);
-    int kh = h >= 400 ? 56 : 50;
+    lv_obj_set_style_pad_row(col, h >= 340 ? 18 : 4, 0);
+    int kh = h >= 340 ? 56 : 46;
     /* fonte: TV, gravações, AV */
     lv_obj_t *r = krow(col);
     src_btn[0] = key(r, BF_SYMBOL_TOWER, NULL, "TV", 34, kh, on_src, (void *)(intptr_t)SRC_TV);
@@ -773,7 +773,7 @@ static void build_column(int h)
 /* rodapé sob o vídeo: nome do canal; região e situação menores e mais escuras; sinal à direita */
 static void build_footer(int y, int h)
 {
-    foot = box(root, AREA_W, h);
+    foot = box(root, BF_SCREEN_W, h);                    /* de ponta a ponta, sob o vídeo e o controle */
     lv_obj_set_pos(foot, 0, y);
     lv_obj_set_style_pad_hor(foot, BF_SP_L, 0);
     ft_info = box(foot, LV_PCT(100), LV_PCT(100));
@@ -784,9 +784,9 @@ static void build_footer(int y, int h)
     lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(t, 2, 0);
     ft_name = lbl(t, "", BF_FONT_L, C_WHITE);
-    bf_label_ellipsis(ft_name, 520);
+    bf_label_ellipsis(ft_name, 660);
     ft_sub = lbl(t, "", BF_FONT_S, C_GRAY);
-    bf_label_ellipsis(ft_sub, 520);
+    bf_label_ellipsis(ft_sub, 660);
     ft_bars = glass_bars(ft_info);
     for(uint32_t i = 0; i < lv_obj_get_child_count(ft_bars); i++)
         lv_obj_set_style_bg_color(lv_obj_get_child(ft_bars, (int32_t)i), C_WHITE, 0);
@@ -955,7 +955,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_bg_color(video, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(video, LV_OPA_COVER, 0);
     panel = box(video, AREA_W, area_h);
-    build_column(h);
+    build_column(area_h);                                /* o controle acaba onde começa o rodapé */
     build_footer(area_h, h - area_h);
     lv_obj_update_layout(root);
     lv_area_t a;
