@@ -13,6 +13,7 @@ OUT.bin = the raw .text section, loaded at VA 0x03BD1000 (bfvoice reads it by VA
 PATCH.bin = the MT6611 ROM patch that mtk_bthuart.dll (Radio_WritePatch) sends to this
 FOSTON's chip (version 3, revision 0x8B: 0x1CDC bytes at VA 0x01F2CFE0); bfbt-attach
 sends it like Windows CE (SD card: BigFoston/bt/mt6611-patch.bin).
+TVFW = the Siano ISDB-T firmware the CE TV stack downloads (SD card: BigFoston/tv/isdbt_nova_12mhz_b0.inp).
 SPDX-License-Identifier: GPL-3.0-or-later
 """
 import argparse
@@ -32,6 +33,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out")
     ap.add_argument("--patch", help="also write the MT6611 patch here")
+    ap.add_argument("--tvfw", help="also write the Siano ISDB-T firmware (isdbt_nova_12mhz_b0.inp) here")
     ap.add_argument("--nand", help="NAND image (default: backup/2026-11-19-nand/DSK9-msflash.img)")
     args = ap.parse_args()
     if args.nand:
@@ -58,6 +60,13 @@ def main():
         with open(args.patch, "wb") as f:
             f.write(patch)
         print("%s: %d bytes, sha256 %s" % (args.patch, len(patch), hashlib.sha256(patch).hexdigest()))
+    if args.tvfw:
+        src = os.path.join(HERE, "..", "..", "backup", "wince-referencia", "rom", "regiao2-8c705000", "files",
+                           "isdbt_nova_12mhz_b0.inp")
+        data = open(src, "rb").read()
+        with open(args.tvfw, "wb") as f:
+            f.write(data)
+        print("%s: %d bytes, sha256 %s" % (args.tvfw, len(data), hashlib.sha256(data).hexdigest()))
 
 
 if __name__ == "__main__":
