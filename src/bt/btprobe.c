@@ -9,6 +9,9 @@
  *   btprobe probe [baud]    on + reset; se não responder, off
  *   btprobe cmd HEX...      manda um comando HCI (bytes em hexa, sem o 01) a 115200 e
  *                           mostra o evento de resposta
+ *   btprobe visible [s]     nome "BigFoston", visível e conectável por s segundos (padrão
+ *                           120): um celular procurando aparelhos deve vê-lo; mostra os
+ *                           pedidos de conexão que chegarem
  *   btprobe scan [s]        procura aparelhos (HCI Inquiry com RSSI, ~s segundos, padrão
  *                           10): mostra classe, RSSI e o fim do endereço (-a: inteiro)
  *
@@ -227,6 +230,43 @@ static int scan(int secs, int full)
     return 0;
 }
 
+static int send_cmd(int fd, const unsigned char *c, int n, unsigned char *b)
+{
+    if(write(fd, c, (size_t)n) != n) return -1;
+    int k = read_event(fd, b, 300, 1000);
+    return k > 6 && b[1] == 0x0e ? b[6] : -1;          /* status do Command Complete */
+}
+
+static int visible(int secs)
+{
+    int fd = open_uart();
+    if(fd < 0) return 1;
+    unsigned char b[300], name[4 + 248] = { 0x01, 0x13, 0x0c, 248 };
+    memcpy(name + 4, "BigFoston", 9);
+    static const unsigned char cod[] = { 0x01, 0x24, 0x0c, 0x03, 0x08, 0x04, 0x20 };   /* áudio: viva-voz */
+    static const unsigned char scan_on[] = { 0x01, 0x1a, 0x0c, 0x01, 0x03 };
+    static const unsigned char scan_off[] = { 0x01, 0x1a, 0x0c, 0x01, 0x00 };
+    printf("nome: status %d\n", send_cmd(fd, name, sizeof name, b));
+    printf("classe: status %d\n", send_cmd(fd, cod, sizeof cod, b));
+    printf("visível: status %d — procure \"BigFoston\" no celular (%d s)\n", send_cmd(fd, scan_on, sizeof scan_on, b), secs);
+    fflush(stdout);
+    time_t end = time(NULL) + secs;
+    while(time(NULL) < end) {
+        int n = read_event(fd, b, sizeof b, 1000);
+        if(n <= 0) continue;
+        if(b[1] == 0x04) {                                  /* Connection Request */
+            printf("pedido de conexão: classe %02x%02x%02x, tipo de enlace %d\n", b[11], b[10], b[9], b[12]);
+            /* recusa (não há pilha para atender): Reject Connection Request, motivo 0x0d */
+            unsigned char rej[] = { 0x01, 0x0a, 0x04, 0x07, b[3], b[4], b[5], b[6], b[7], b[8], 0x0d };
+            if(write(fd, rej, sizeof rej) != (ssize_t)sizeof rej) break;
+        } else printf("evento %02x (%d bytes)\n", b[1], n);
+        fflush(stdout);
+    }
+    send_cmd(fd, scan_off, sizeof scan_off, b);
+    close(fd);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if(argc < 2) { fprintf(stderr, "uso: %s read|on|off|reset [baud]|probe [baud]\n", argv[0]); return 2; }
@@ -241,6 +281,7 @@ int main(int argc, char **argv)
     else if(!strcmp(argv[1], "off")) { hw(0); show(); }
     else if(!strcmp(argv[1], "reset")) return hci_reset(baud, 1) == 1 ? 0 : 1;
     else if(!strcmp(argv[1], "cmd")) return hci_cmd(argc - 2, argv + 2);
+    else if(!strcmp(argv[1], "visible")) return visible(argc > 2 ? atoi(argv[2]) : 120);
     else if(!strcmp(argv[1], "scan")) return scan(argc > 2 && argv[2][0] != '-' ? atoi(argv[2]) : 10, argc > 2 && !strcmp(argv[argc - 1], "-a"));
     else if(!strcmp(argv[1], "probe")) {
         hw(1);
