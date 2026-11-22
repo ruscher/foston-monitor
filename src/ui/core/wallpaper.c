@@ -33,7 +33,7 @@ static inline int lerp(int a, int b, int t)   /* t 0..256, resultado em 8.8 */
 
 bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow, bool logo)
 {
-    if(!buf && !(buf = malloc((size_t)BF_WALL_W * BF_WALL_H * 2))) return false;
+    if(!buf && !(buf = malloc((size_t)BF_SCREEN_W * BF_SCREEN_H * 2))) return false;   /* o maior caso */
 
     /* luz vinda de cima, ao centro; no escuro a cor do tema, no claro quase branco */
     lv_color_t edge = p->bg;
@@ -90,13 +90,13 @@ bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow
 
 /* ------------------------------------------------ imagem do usuário */
 
-#define CACHE_MAGIC "BFWP2"   /* muda junto com o tratamento da imagem */
+#define CACHE_MAGIC "BFWP3"   /* muda junto com o tratamento da imagem */
 
 typedef struct {
     char magic[8];
     char path[256];
     long long mtime, size;
-    int dark;
+    int dark, height;
 } cache_hdr_t;
 
 static void fill_dsc(lv_image_dsc_t *dsc)
@@ -120,13 +120,14 @@ static void cache_key(cache_hdr_t *h, const char *path, const struct stat *st, b
     h->mtime = (long long)st->st_mtime;
     h->size = (long long)st->st_size;
     h->dark = dark;
+    h->height = BF_WALL_H;
 }
 
 bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palette_t *p)
 {
     struct stat st;
     if(stat(path, &st) || !S_ISREG(st.st_mode)) return false;
-    if(!buf && !(buf = malloc((size_t)BF_WALL_W * BF_WALL_H * 2))) return false;
+    if(!buf && !(buf = malloc((size_t)BF_SCREEN_W * BF_SCREEN_H * 2))) return false;   /* o maior caso */
     const size_t bytes = (size_t)BF_WALL_W * BF_WALL_H * 2;
     char cpath[300];
     data_path(cpath, sizeof cpath, "wallpaper.cache");

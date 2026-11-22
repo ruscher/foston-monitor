@@ -2,6 +2,7 @@
  * barra inferior (72 px). Um único lv_timer de 1 s atualiza relógio/status. */
 #define _DEFAULT_SOURCE
 #include "btstat.h"
+#include "../screens/screens.h"
 #include "app.h"
 #include "nav.h"
 #include "theme.h"
@@ -51,7 +52,7 @@ static void build(void)
     if(wp) {
         lv_obj_t *wall = lv_image_create(scr);
         lv_image_set_src(wall, wp);
-        lv_obj_set_pos(wall, 0, BF_TOPBAR_H);
+        lv_obj_set_pos(wall, 0, theme_glass() ? 0 : BF_TOPBAR_H);   /* Glass: atrás da barra translúcida */
         lv_obj_remove_flag(wall, LV_OBJ_FLAG_CLICKABLE);
     }
 
@@ -62,8 +63,10 @@ static void build(void)
     lv_obj_set_pos(content, 0, BF_TOPBAR_H);
     lv_obj_set_size(content, BF_SCREEN_W, BF_CONTENT_H);
 
-    lv_obj_t *bot = bottombar_create(scr);
-    lv_obj_set_pos(bot, 0, BF_SCREEN_H - BF_BOTBAR_H);
+    if(!theme_glass()) {                 /* Glass: a navegação fica na barra superior */
+        lv_obj_t *bot = bottombar_create(scr);
+        lv_obj_set_pos(bot, 0, BF_SCREEN_H - BF_BOTBAR_H);
+    }
 }
 
 void app_apply_hw_settings(void)
@@ -86,6 +89,7 @@ void app_init(lv_display_t *d)
     nav_init(content);
     nav_show_now();
     tick = lv_timer_create(tick_cb, 1000, NULL);
+    music_service_init();               /* música do celular reconhecida sem abrir a Multimídia */
     fx_init();
     devwatch_init();
     powerkey_init();

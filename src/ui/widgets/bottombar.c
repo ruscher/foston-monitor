@@ -1,5 +1,6 @@
 /* bottombar.c — Início, Voltar, Recentes, Terminal, Ajustes, Desligar. */
 #include "bottombar.h"
+#include <string.h>
 #include "dialog.h"
 #include "../core/app.h"
 #include "../core/theme.h"
@@ -148,6 +149,9 @@ static void click(lv_event_t *e)
     }
 }
 
+/* a barra some (reconstrução da interface, Foston Glass): os botões guardados não valem mais */
+static void bar_deleted(lv_event_t *e) { (void)e; memset(btn, 0, sizeof btn); }
+
 lv_obj_t *bottombar_create(lv_obj_t *parent)
 {
     const bf_palette_t *p = pal();
@@ -163,6 +167,7 @@ lv_obj_t *bottombar_create(lv_obj_t *parent)
     lv_obj_set_style_pad_column(bar, 4, 0);
     lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_add_event_cb(bar, bar_deleted, LV_EVENT_DELETE, NULL);
 
     static const char *const sym[B__N] = { LV_SYMBOL_HOME, LV_SYMBOL_LEFT, LV_SYMBOL_LIST,
                                           BF_SYMBOL_TERMINAL, LV_SYMBOL_SETTINGS, LV_SYMBOL_POWER };

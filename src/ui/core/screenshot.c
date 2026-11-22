@@ -178,7 +178,14 @@ int screenshot_run(const char *dir)
     scr_music_demo(0); pump(2500);  shot("21b-multimidia-tocando");
     s->home_mode = BF_HOME_PANEL;
     nav_home(); pump(1200);         shot("01h-inicio-painel-tocando");
+    /* Foston Glass: tela inicial com a música tocando, a grade Apps e uma tela comum */
+    s->home_mode = BF_HOME_GLASS;
+    app_rebuild_now(); nav_home(); pump(1500); shot("44-glass-inicio");
+    go(SCR_HOME, HOME_ARG_APPS); pump(600); shot("44b-glass-apps");
+    go(SCR_APPEARANCE, 0); pump(200); shot("44c-glass-aparencia");
+    go(SCR_FEATURE, FEAT_RADIO); pump(200); shot("44d-glass-radio");
     s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
     go(SCR_MUSIC, 0); pump(200);
     scr_music_demo(1); pump(100);   shot("21c-multimidia-lista");
     scr_music_demo(2); pump(800);   shot("21d-multimidia-tela-cheia");
@@ -248,7 +255,11 @@ int screenshot_run(const char *dir)
             fclose(bf);
             setenv("BIGFOSTON_BT_STATUS", bp, 1);
             go(SCR_BLUETOOTH, 0); pump(300); shot("43-bluetooth");
-            go(SCR_MUSIC, 0); pump(200); scr_music_demo(4); pump(400); shot("43c-multimidia-bluetooth");
+            go(SCR_MUSIC, 0); pump(200); scr_music_demo(9); pump(400); shot("43c-multimidia-bluetooth");
+            s->home_mode = BF_HOME_GLASS;                          /* Glass com a música do celular */
+            app_rebuild_now(); nav_home(); pump(1200); shot("44e-glass-musica-bluetooth");
+            s->home_mode = BF_HOME_GRID;
+            app_rebuild_now(); pump(50);
             bf = fopen(bp, "w");
             if(bf) {
                 fprintf(bf, "updated=0\nenabled=1\nagent=1\nadapter=1\npowered=1\ndiscoverable=1\ndiscovering=0\n"

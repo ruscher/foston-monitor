@@ -1192,6 +1192,45 @@ bool music_now(char *title, size_t tn, char *sub, size_t sn, int *idx)
     return true;
 }
 
+void music_service_init(void)
+{
+    if(watch) return;
+    watch = lv_timer_create(watch_cb, 200, NULL);
+    last_tick = lv_tick_get();
+    srand((unsigned)time(NULL));
+}
+
+void music_status(music_status_t *m)
+{
+    memset(m, 0, sizeof *m);
+    m->idx = -1;
+    if(src_bt) {
+        const bt_info_t *b = bt_now();
+        m->bt = true;
+        m->active = b->player || btaudio_live();
+        m->playing = !strcmp(b->pl_status, "playing");
+        m->pos_ms = (int)bt_position_ms(b);
+        m->len_ms = (int)b->pl_dur;
+        m->idx = -3;
+        snprintf(m->title, sizeof m->title, "%.159s", b->pl_title[0] ? b->pl_title : tr(S_MUSIC_BT_PLAYING));
+        snprintf(m->sub, sizeof m->sub, "%.199s", b->pl_artist[0] ? b->pl_artist : bt_dev_name());
+        return;
+    }
+    pl_state_t st = player_state();
+    if(st == PL_STOPPED || cur < 0) return;
+    m->active = true;
+    m->playing = st == PL_PLAYING;
+    m->can_seek = true;
+    m->pos_ms = player_pos_ms();
+    m->len_ms = player_len_ms();
+    music_now(m->title, sizeof m->title, m->sub, sizeof m->sub, &m->idx);
+}
+
+void music_seek_ms(int ms)
+{
+    if(!src_bt && player_state() != PL_STOPPED) player_seek_ms(ms);
+}
+
 void music_command(int cmd)
 {
     if(!n_tracks && !src_bt) return;
@@ -1228,7 +1267,7 @@ void music_play_file(const char *path)
 
 void scr_music_demo(int step)
 {
-    if(step == 4) { btc_at = 0; set_source(true); ui_refresh_track(); return; }   /* fonte Bluetooth */
+    if(step == 9) { btc_at = 0; set_source(true); ui_refresh_track(); return; }   /* fonte Bluetooth */
     if(step == 0) play(0, false);
     else if(step == 1) open_queue(NULL);
     else if(step == 2) { queue_close(NULL); open_full(NULL); }

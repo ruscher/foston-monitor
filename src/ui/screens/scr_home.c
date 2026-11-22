@@ -1,7 +1,9 @@
 /* scr_home.c — tela Início, em um de três modos (Ajustes > Aparência):
  *   Grade     ícones grandes, paginada (deslizar ou setas)
  *   Painel    relógio grande, bateria, "Tocando agora" e atalhos
- *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c) */
+ *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c)
+ *   Foston Glass  cartões de vidro e dock (scr_home_glass.c)
+ * Com o argumento HOME_ARG_APPS, a grade com todos os apps (botão Apps do Foston Glass). */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../widgets/battery.h"
@@ -461,15 +463,17 @@ static void create_panel(lv_obj_t *parent)
 
 static void create(lv_obj_t *parent, int arg)
 {
-    (void)arg;
     tv = NULL;
     int m = settings()->home_mode;
-    if(m == BF_HOME_PANEL) create_panel(parent);
+    if(arg == HOME_ARG_APPS) create_grid(parent, false);     /* Apps: todos os aplicativos */
+    else if(m == BF_HOME_GLASS) home_glass_create(parent);
+    else if(m == BF_HOME_PANEL) create_panel(parent);
     else create_grid(parent, m == BF_HOME_KIOSK);
 }
 
 static void destroy(void)
 {
+    home_glass_destroy();
     if(panel_timer) { lv_timer_delete(panel_timer); panel_timer = NULL; }
     tv = NULL;
     clk_lbl = ampm_lbl = date_lbl = bat_icon = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;
@@ -478,4 +482,6 @@ static void destroy(void)
     thumb_for = -2;
 }
 
-const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, NULL };
+static const char *title_fn(int arg) { return tr(arg == HOME_ARG_APPS ? S_GL_APPS : S_HOME); }
+
+const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, title_fn };

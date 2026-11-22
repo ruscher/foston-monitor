@@ -47,7 +47,7 @@ typedef struct {
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
 /* detalhe do mapa: automático escolhe pela situação e pelo tempo de cada quadro */
 enum { BF_DETAIL_AUTO, BF_DETAIL_ECONOMIC, BF_DETAIL_BALANCED, BF_DETAIL_DETAILED, BF_DETAIL__N };
-enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME__N };
+enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME_GLASS, BF_HOME__N };   /* só cresce no fim */
 /* Multimídia, Livro, GPS, Arquivos, Monitor, Ajustes */
 #define BF_HOME_APPS_DEFAULT ((1u << 0) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10))
 enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL_IMAGE, BF_WALL__N };

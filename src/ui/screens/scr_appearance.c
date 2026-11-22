@@ -285,7 +285,8 @@ static void build_home(void)
     seg_button(r, LV_SYMBOL_LIST, tr(S_AP_HOME_GRID), s->home_mode == BF_HOME_GRID, home_click, BF_HOME_GRID);
     seg_button(r, BF_SYMBOL_CLOCK, tr(S_AP_HOME_PANEL), s->home_mode == BF_HOME_PANEL, home_click, BF_HOME_PANEL);
     seg_button(r, BF_SYMBOL_KEY, tr(S_AP_HOME_KIOSK), s->home_mode == BF_HOME_KIOSK, home_click, BF_HOME_KIOSK);
-    hint(c, tr(s->home_mode == BF_HOME_PANEL ? S_AP_HOME_PANEL_HINT :
+    seg_button(r, BF_SYMBOL_MAGIC, tr(S_AP_HOME_GLASS), s->home_mode == BF_HOME_GLASS, home_click, BF_HOME_GLASS);
+    hint(c, tr(s->home_mode == BF_HOME_GLASS ? S_AP_HOME_GLASS_HINT : s->home_mode == BF_HOME_PANEL ? S_AP_HOME_PANEL_HINT :
                s->home_mode == BF_HOME_KIOSK ? S_AP_HOME_KIOSK_HINT : S_AP_HOME_GRID_HINT), p->text_dim);
     bf_label(c, tr(S_AP_HOME_APPS), BF_FONT_S, p->text);
     lv_obj_t *chips = bf_plain(c);
