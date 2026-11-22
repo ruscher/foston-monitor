@@ -31,8 +31,8 @@
 #include "boot.h"
 #include "sha256.h"
 
-#define AGENT_VERSION "bfagent 0.6.0"
-#define AGENT_VERSION_W L"bfagent 0.6.0"
+#define AGENT_VERSION "bfagent 0.6.1"
+#define AGENT_VERSION_W L"bfagent 0.6.1"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -1790,6 +1790,15 @@ static void apply_sd_update(void)
     /* copy to <name>.new and check every copy before touching the installed files */
     CreateDirectoryW(AUTOBOOT_DIR, NULL);
     CreateDirectoryW(LINUX_DIR, NULL);
+    /* the previous version (<name>.old) is never booted and the swap below deletes it anyway:
+     * deleting it first leaves room for the new files (the 0.3.0 Bluetooth initrd, 4.9 MB, did
+     * not fit next to the installed copy and the .old one). The installed version stays
+     * untouched until every new file is checked. */
+    for (i = 0; i < UPD_FILES; i++) {
+        _snwprintf(old, MAX_PATH - 1, L"%ls\%ls.old", LINUX_DIR, upd_names[i]);
+        old[MAX_PATH - 1] = 0;
+        DeleteFileW(old);
+    }
     for (i = 0; i < UPD_FILES; i++) {
         STATUS(L"Atualizacao do BigFoston: gravando %ls na memoria interna...", upd_names[i]);
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
@@ -1798,12 +1807,14 @@ static void apply_sd_update(void)
         src[MAX_PATH - 1] = dst[MAX_PATH - 1] = 0;
         if (!CopyFileW(src, dst, FALSE) || !file_sha256(dst, upd_max[i], have, NULL) || strcmp(have, want[i])) {
             int j;
+            DWORD err = GetLastError();           /* before the cleanup below changes it */
             for (j = 0; j <= i; j++) {
                 _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[j]);
                 DeleteFileW(dst);
             }
-            _snprintf(why, sizeof(why) - 1, "a copia de %ls na memoria interna nao confere (erro %lu)",
-                      upd_names[i], (unsigned long)GetLastError());
+            _snprintf(why, sizeof(why) - 1,
+                      "a copia de %ls na memoria interna nao confere (erro %lu)",
+                      upd_names[i], (unsigned long)err);
             why[sizeof(why) - 1] = 0;
             update_reject(why);
             return;

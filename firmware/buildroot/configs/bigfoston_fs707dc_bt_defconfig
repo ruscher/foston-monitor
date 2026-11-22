@@ -58,11 +58,12 @@ BR2_LINUX_KERNEL_XZ=y
 BR2_PACKAGE_KEXEC=y
 # Bluetooth: BlueZ (bluetoothd + D-Bus), áudio A2DP com BlueALSA
 BR2_PACKAGE_BLUEZ5_UTILS=y
-BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
-BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
-BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
+# sem bluetoothctl (readline/ncurses), btmon/l2ping e hcitool/hciconfig/hcidump: o bfbt-agent e o
+# app Bluetooth fazem o papel; o initrd tem de caber na memória interna (agente do CE)
 BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
 BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
 BR2_PACKAGE_BLUEZ_ALSA=y
 BR2_PACKAGE_ALSA_UTILS=y
 BR2_PACKAGE_ALSA_UTILS_APLAY=y
+# alsamixer puxa o ncurses
+# BR2_PACKAGE_ALSA_UTILS_ALSAMIXER is not set

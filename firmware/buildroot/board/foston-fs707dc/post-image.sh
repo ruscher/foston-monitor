@@ -14,7 +14,11 @@ BOOTARGS=${BIGFOSTON_BOOTARGS:-"loglevel=7 rdinit=/init user_debug=31 print_fata
 mkdir -p "$OUT"
 rm -f "$OUT/initrd.gz" "$OUT/normal.dtb"
 cp "$BINARIES_DIR/zImage" "$OUT/zImage"
-cp "$BINARIES_DIR/rootfs.cpio.xz" "$OUT/initrd.img"
+# initrd: XZ again with the ARM branch filter (BCJ; the kernel has CONFIG_XZ_DEC_ARM) and CRC32,
+# which the kernel needs. ~6 % smaller than Buildroot's plain "xz -9": the internal flash
+# (12 MB, \ResidentFlash) has to hold the installed and the new version during an update.
+xz --check=crc32 --arm --lzma2=preset=9e,dict=8MiB,lc=2,lp=2,pb=2 -T1 -c \
+    "$BINARIES_DIR/rootfs.cpio" > "$OUT/initrd.img"
 python3 "$TOP/tools/bigfoston/mkboot.py" \
     --dtb "$BINARIES_DIR/mt3351-foston-fs707dc.dtb" \
     --initrd "$OUT/initrd.img" --bootargs "$BOOTARGS" --out "$OUT/fs707dc.dtb"

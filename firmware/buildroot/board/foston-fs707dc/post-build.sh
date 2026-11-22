@@ -35,3 +35,18 @@ fi
 
 # mpg123 programs: the shell links libmpg123 itself (~1.4 MB of the initrd)
 rm -f "$TARGET_DIR/usr/bin/mpg123" "$TARGET_DIR/usr/bin/mpg123-id3dump" "$TARGET_DIR/usr/bin/mpg123-strip" "$TARGET_DIR/usr/bin/out123"
+
+# firmware com Bluetooth (bibliotecas compartilhadas): ferramentas de desenvolvimento do GLib,
+# do PCRE2 e do D-Bus não são usadas no aparelho e o initrd tem de caber na memória interna
+for f in gapplication gdbus gi-compile-repository gi-decompile-typelib gi-inspect-typelib gio \
+         gio-querymodules gresource gsettings glib-compile-resources glib-compile-schemas \
+         gobject-query gtester pcre2grep pcre2test dbus-test-tool dbus-monitor; do
+    rm -f "$TARGET_DIR/usr/bin/$f"
+done
+rm -f "$TARGET_DIR"/usr/lib/libgirepository-2.0.so*
+# não usados no aparelho: nada carrega libsyn123/libatopology; alsactl/aserver não são chamados;
+# o shell usa a libmpg123 direto (sem os módulos de saída); a2dpconf é ferramenta de teste
+rm -f "$TARGET_DIR"/usr/lib/libsyn123.so* "$TARGET_DIR"/usr/lib/libatopology.so* \
+      "$TARGET_DIR"/usr/lib/libpcre2-posix.so* "$TARGET_DIR/usr/sbin/alsactl" \
+      "$TARGET_DIR/usr/bin/aserver" "$TARGET_DIR/usr/bin/a2dpconf"
+rm -rf "$TARGET_DIR/usr/lib/mpg123"
