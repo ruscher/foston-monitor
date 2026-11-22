@@ -6,6 +6,12 @@
  *                        SIGTERM/SIGINT desanexam e cortam a alimentação
  *   bfbt-attach off      só corta a alimentação
  *
+ * Endereço Bluetooth: o chip sai de fábrica com 00:00:46:66:11:01 (igual em todo MT6611).
+ * Como o mtk_bthuart.dll (Radio_CmdMTKSetBDAddr), o endereço é gravado com o comando 0xFC1A
+ * (6 bytes, o menos significativo primeiro). Ele vem de BDADDR_FILE no cartão (o mesmo
+ * endereço que o Windows CE gerou, copiado do backup do aparelho, ou um gerado aqui e salvo
+ * lá na primeira vez): é um identificador do aparelho e não fica no firmware.
+ *
  * -b BAUD (230400, 460800, 921600): troca a velocidade como o mtk_bthuart.dll
  * (Radio_ChangeControllerUART): comando 0xFC77 {código, 0x40 = RTS/CTS}, o chip responde
  * "Command Status" na velocidade antiga, o lado do Linux muda a UART, manda o byte 0xFF
@@ -154,6 +160,40 @@ static int set_baud(int fd, int baud)
     return 1;
 }
 
+#define BDADDR_FILE "/mnt/sd/BigFoston/bt/endereco"
+
+/* "AA:BB:CC:DD:EE:FF" do arquivo, ou um novo (salvo se o cartão aceitar gravação) */
+static int get_bdaddr(unsigned char a[6])
+{
+    unsigned v[6];
+    FILE *f = fopen(BDADDR_FILE, "r");
+    if(f) {
+        int n = fscanf(f, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]);
+        fclose(f);
+        if(n == 6) { for(int i = 0; i < 6; i++) a[i] = (unsigned char)v[i]; return 1; }
+    }
+    int r = open("/dev/urandom", O_RDONLY);
+    if(r < 0 || read(r, a, 6) != 6) { if(r >= 0) close(r); return 0; }
+    close(r);
+    a[0] = 0x02;                                   /* administrado localmente, como o da USB */
+    if(system("mkdir -p /mnt/sd/BigFoston/bt 2>/dev/null") == 0 && (f = fopen(BDADDR_FILE, "w"))) {
+        fprintf(f, "%02X:%02X:%02X:%02X:%02X:%02X\n", a[0], a[1], a[2], a[3], a[4], a[5]);
+        fclose(f);
+    }
+    return 1;
+}
+
+static int set_bdaddr(int fd)
+{
+    unsigned char a[6];
+    if(!get_bdaddr(a)) return 0;
+    unsigned char cmd[10] = { 0x01, 0x1a, 0xfc, 0x06 };
+    for(int i = 0; i < 6; i++) cmd[4 + i] = a[5 - i];        /* o menos significativo primeiro */
+    static const unsigned char done[] = { 0x04, 0x0e, 0x04, 0x01, 0x1a, 0xfc, 0x00 };
+    if(write(fd, cmd, sizeof cmd) != sizeof cmd || !expect(fd, done, sizeof done, 1000)) return 0;
+    return 1;
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
@@ -186,6 +226,7 @@ int main(int argc, char **argv)
         power(0);
         return 1;
     }
+    if(!set_bdaddr(fd)) syslog(LOG_WARNING, "endereço Bluetooth não gravado (fica o de fábrica)");
     if(baud != 115200 && (!set_baud(fd, baud) || !hci_reset(fd))) {
         syslog(LOG_ERR, "troca para %d baud falhou", baud);
         close(fd);
