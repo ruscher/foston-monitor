@@ -1,6 +1,7 @@
 /* app.c — monta a tela fixa: barra superior (48 px), conteúdo (360 px) e
  * barra inferior (72 px). Um único lv_timer de 1 s atualiza relógio/status. */
 #define _DEFAULT_SOURCE
+#include "btstat.h"
 #include "app.h"
 #include "nav.h"
 #include "theme.h"
@@ -30,6 +31,7 @@ static void tick_cb(lv_timer_t *t)
 {
     (void)t;
     topbar_update();
+    bt_poll_global();
     fx_tick();
     clock_tick();
     /* modo Automático: troca claro/escuro quando passa das 7h/19h */
