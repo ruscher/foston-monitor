@@ -1214,7 +1214,7 @@ static void sim_step(void)
 #define MAXFAV 40
 static bgs_index_t *six;
 static lv_obj_t *sv, *sv_ta, *sv_list, *sv_kb;
-static lv_timer_t *sv_timer;
+static lv_timer_t *sv_timer, *sv_poll;
 static bgs_result_t sv_res[MAXRES];
 static int sv_nres;
 static struct { char name[96]; uint32_t x, y; } favs[MAXFAV], recent[10];
@@ -1292,6 +1292,7 @@ static void fav_add(const char *name, uint32_t x, uint32_t y)
 static void search_close(void)
 {
     if(sv_timer) { lv_timer_delete(sv_timer); sv_timer = NULL; }
+    if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }
     if(sv_kb) { lv_obj_delete(sv_kb); sv_kb = NULL; }
     if(sv) { lv_obj_delete(sv); sv = NULL; }
     sv_ta = sv_list = NULL;
@@ -1374,6 +1375,7 @@ static void cat_cb(lv_event_t *e)
     int cat = (int)(intptr_t)lv_event_get_user_data(e);
     uint32_t x, y;
     ref_point(&x, &y);
+    if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }   /* a categoria vence a busca em curso */
     sv_nres = six ? bgs_nearby(six, cat, x, y, 30000, sv_res, MAXRES) : 0;
     show_results();
 }
@@ -1409,6 +1411,69 @@ static void show_home(void)
     for(int i = 0; i < nrecent; i++) list_row(LV_SYMBOL_LOOP, recent[i].name, NULL, UINT32_MAX, 2000 + i);
 }
 
+/* a busca roda numa thread própria: no índice nacional, com o cartão frio, uma consulta
+ * pode levar mais de um segundo e o teclado não pode parar. A interface pede (seq) e um
+ * timer curto recolhe o resultado do último pedido; pedidos antigos são descartados. */
+static struct {
+    pthread_t th;
+    pthread_mutex_t mu;
+    pthread_cond_t cv;
+    int started, stop;
+    unsigned seq, done;          /* último pedido / último respondido */
+    char text[128];
+    uint32_t x, y;
+    bgs_result_t res[MAXRES];
+    int nres;
+} SQ = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
+
+static void *search_worker(void *arg)
+{
+    (void)arg;
+    pthread_mutex_lock(&SQ.mu);
+    for(;;) {
+        while(!SQ.stop && SQ.done == SQ.seq) pthread_cond_wait(&SQ.cv, &SQ.mu);
+        if(SQ.stop) break;
+        unsigned seq = SQ.seq;
+        char text[128];
+        uint32_t x = SQ.x, y = SQ.y;
+        memcpy(text, SQ.text, sizeof text);
+        pthread_mutex_unlock(&SQ.mu);
+        bgs_result_t res[MAXRES];
+        int n = bgs_query(six, text, x, y, res, MAXRES);
+        pthread_mutex_lock(&SQ.mu);
+        if(seq == SQ.seq) { memcpy(SQ.res, res, sizeof res); SQ.nres = n; }
+        SQ.done = seq;
+    }
+    pthread_mutex_unlock(&SQ.mu);
+    return NULL;
+}
+
+static void search_stop(void)
+{
+    if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }
+    if(!SQ.started) return;
+    pthread_mutex_lock(&SQ.mu);
+    SQ.stop = 1;
+    pthread_cond_signal(&SQ.cv);
+    pthread_mutex_unlock(&SQ.mu);
+    pthread_join(SQ.th, NULL);
+    SQ.started = SQ.stop = 0;
+    SQ.seq = SQ.done = 0;
+}
+
+static void sv_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    pthread_mutex_lock(&SQ.mu);
+    int ready = SQ.done == SQ.seq;
+    if(ready) { memcpy(sv_res, SQ.res, sizeof sv_res); sv_nres = SQ.nres; }
+    pthread_mutex_unlock(&SQ.mu);
+    if(!ready) return;
+    lv_timer_delete(sv_poll);
+    sv_poll = NULL;
+    if(sv_list) show_results();
+}
+
 static void sv_query(lv_timer_t *t)
 {
     (void)t;
@@ -1416,11 +1481,36 @@ static void sv_query(lv_timer_t *t)
     if(!sv_ta) return;
     const char *q = lv_textarea_get_text(sv_ta);
     char norm[128];
-    if(!bgs_norm(q, norm, sizeof norm) || !six) { show_home(); return; }
+    if(!bgs_norm(q, norm, sizeof norm) || !six) {
+        pthread_mutex_lock(&SQ.mu);
+        SQ.done = SQ.seq;                           /* um pedido em curso fica sem efeito */
+        pthread_mutex_unlock(&SQ.mu);
+        if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }
+        show_home();
+        return;
+    }
     uint32_t x, y;
     ref_point(&x, &y);
-    sv_nres = bgs_query(six, q, x, y, sv_res, MAXRES);
-    show_results();
+    if(!SQ.started) {
+        if(pthread_create(&SQ.th, NULL, search_worker, NULL) == 0) SQ.started = 1;
+        else {                                      /* sem thread: na interface, como antes */
+            sv_nres = bgs_query(six, q, x, y, sv_res, MAXRES);
+            show_results();
+            return;
+        }
+    }
+    pthread_mutex_lock(&SQ.mu);
+    snprintf(SQ.text, sizeof SQ.text, "%s", q);
+    SQ.x = x;
+    SQ.y = y;
+    SQ.seq++;
+    pthread_cond_signal(&SQ.cv);
+    pthread_mutex_unlock(&SQ.mu);
+    if(!sv_poll) {
+        lv_obj_clean(sv_list);
+        bf_label(sv_list, tr(S_MAP_SEARCHING), BF_FONT_M, pal()->text_dim);
+        sv_poll = lv_timer_create(sv_poll_cb, 50, NULL);
+    }
 }
 
 static void sv_changed(lv_event_t *e)
@@ -2051,18 +2141,29 @@ static void create(lv_obj_t *parent, int arg)
         bgrt_start(base && *base ? base : BIGGPS_DIR_DEFAULT);
         char sd[600], sp[1100], serr[256];
         snprintf(sd, sizeof sd, "%s/busca", base && *base ? base : BIGGPS_DIR_DEFAULT);
+        /* o índice de versão mais alta (o formato 3 busca por região); empate: ordem
+         * alfabética. Um shell antigo abre o primeiro .bgs em ordem alfabética, então a
+         * cópia v2 se chama brasil-v2.bgs e a v3 brasil.bgs: cada um acha o seu */
         DIR *dp = opendir(sd);
         if(dp) {
             struct dirent *de;
-            char best[256] = "";
+            char bestname[256] = "";
+            uint32_t bestv = 0;
             while((de = readdir(dp))) {
                 size_t l = strlen(de->d_name);
-                if(l > 4 && de->d_name[0] != '.' && !strcasecmp(de->d_name + l - 4, ".bgs") && (!best[0] || strcmp(de->d_name, best) < 0)
-                   && snprintf(best, sizeof best, "%s", de->d_name) >= (int)sizeof best) best[0] = 0;
+                if(l <= 4 || de->d_name[0] == '.' || strcasecmp(de->d_name + l - 4, ".bgs")) continue;
+                if(snprintf(sp, sizeof sp, "%s/%s", sd, de->d_name) >= (int)sizeof sp) continue;
+                bgs_index_t *ix = bgs_open(sp, serr, sizeof serr);
+                if(!ix) { fprintf(stderr, "biggps: %s\n", serr); continue; }
+                uint32_t v = bgs_version(ix);
+                if(!six || v > bestv || (v == bestv && strcmp(de->d_name, bestname) < 0)) {
+                    bgs_close(six);
+                    six = ix;
+                    bestv = v;
+                    snprintf(bestname, sizeof bestname, "%s", de->d_name);
+                } else bgs_close(ix);
             }
             closedir(dp);
-            if(best[0] && snprintf(sp, sizeof sp, "%s/%s", sd, best) < (int)sizeof sp && !(six = bgs_open(sp, serr, sizeof serr)))
-                fprintf(stderr, "biggps: %s\n", serr);
         }
     }
     R.stop = R.has_req = R.done = 0;
@@ -2100,6 +2201,7 @@ static void destroy(void)
         R.started = 0;
     }
     search_close();
+    search_stop();                               /* antes de fechar o índice que ela usa */
     bgs_close(six);
     six = NULL;
     bgrt_stop();

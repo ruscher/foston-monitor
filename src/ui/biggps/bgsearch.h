@@ -20,6 +20,7 @@ typedef struct {
 bgs_index_t *bgs_open(const char *path, char *err, size_t errlen);
 void bgs_close(bgs_index_t *ix);
 uint32_t bgs_count(const bgs_index_t *ix);
+uint32_t bgs_version(const bgs_index_t *ix);   /* format version (2 or 3) */
 
 /* Results for the text, best first; (x, y) = reference point (world), for distance. */
 int bgs_query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_result_t *out, int max);

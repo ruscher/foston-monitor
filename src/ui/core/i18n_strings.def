@@ -482,6 +482,7 @@ X(S_MAP_NOPOS,      "map.nopos",      "Sem posição: aguarde o GPS ou use Simul
 X(S_MAP_SEARCH_HINT, "map.search_hint", "Buscar rua, lugar, endereço…", "Search street, place, address…", "Buscar calle, lugar, dirección…")
 X(S_MAP_NOSEARCH,   "map.nosearch",   "Falta o índice de busca no cartão (docs/big-gps).", "The search index is missing on the card (docs/big-gps).", "Falta el índice de búsqueda en la tarjeta (docs/big-gps).")
 X(S_MAP_NORESULT,   "map.noresult",   "Nada encontrado", "Nothing found", "No se encontró nada")
+X(S_MAP_SEARCHING,  "map.searching",  "Buscando…", "Searching…", "Buscando…")
 X(S_MAP_FAVORITES,  "map.favorites",  "Favoritos", "Favorites", "Favoritos")
 X(S_MAP_SAVE_FAV,   "map.save_fav",   "Salvar", "Save", "Guardar")
 X(S_MAP_SAVED,      "map.saved",      "Salvo nos favoritos", "Saved to favorites", "Guardado en favoritos")
