@@ -24,7 +24,7 @@ Unidade analisada: ID `Nav-61`, plataforma `APOLLO`, OEM `MTK`.
 | TV digital | **Siano SMS1xxx "Nova B0" (ISDB-T) via SPI** | `SianoSPI.dll`, `SianoTunerCe5_r.dll`, firmware `isdbt_nova_12mhz_b0.inp` |
 | Bluetooth | chip Bluetooth na UART2 (`mtk_bthuart.dll`, MediaTek; antes anotado como CSR BlueCore por causa do `bthcsr.dll`) (pilha ANW, A2DP, viva-voz) | `bthcsr.dll`, `mtk_bthuart.dll`, `hciext.dll`, `BtA2dpSnd` |
 | GPS | GPS MediaTek do MT3351, biblioteca `MNL` (AXN_1.33) | `Platform\GpsVersion`, `gps.dll` em COM1, `BEE.BIN`/`mtkgps.dat` |
-| Transmissor FM | controlado por `FMC.dll` (chip ainda não identificado) | `Drivers\BuiltIn\fmc` (FMC1:) |
+| Transmissor FM | **KT Micro KT0801A**, I²C1 (`0x8002D000`) escravo 0x36, referência de 32 kHz pela PWM3, alimentação GPIO4 ([fm-radio](fm-radio/00-visao-geral.md)) | `Drivers\BuiltIn\fmc` (FMC1:) |
 | Áudio | `wavedev_drv.dll` (WAV1:) | `Drivers\Active` |
 | Entrada AV | `avin.exe` | processo em execução |
 | USB | só função (device): Serial_Class e Mass_Storage_Class | `Drivers\USB\FunctionDrivers` |
@@ -137,7 +137,7 @@ o bsmd-ce precisa da mesma correção.
 ## Pendências desta etapa
 
 - Identificar o layout interno de UART (16550?), SPI, I2C, NAND, SD, LCD e USB (endereços-base já conhecidos acima).
-- Identificar o chip do transmissor FM (`FMC.dll`) e o endereço I2C.
+- ~~Identificar o chip do transmissor FM~~: KT0801A no I²C 0x36 ([fm-radio](fm-radio/03-engenharia-reversa-fmc.md)).
 - Confirmar se o GPS é processado em software (MNL) na CPU principal.
 - Backup do bootloader (blocos NAND antes do MBR).
 - Verificar VFP (`FPSID`) e a frequência real da CPU.

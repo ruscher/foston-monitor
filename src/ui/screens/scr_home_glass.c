@@ -468,7 +468,7 @@ static void dock_click(lv_event_t *e)
 {
     switch((int)(intptr_t)lv_event_get_user_data(e)) {
     case 0: nav_go(SCR_TV, 0); break;
-    case 1: nav_go(SCR_FEATURE, FEAT_RADIO); break;
+    case 1: nav_go(SCR_FM, 0); break;
     case 2: nav_go(SCR_HOME, HOME_ARG_APPS); break;
     case 3: nav_go(SCR_GALLERY, 0); break;
     case 4: nav_go(SCR_PHONE, 0); break;

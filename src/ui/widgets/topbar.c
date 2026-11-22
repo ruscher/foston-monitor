@@ -10,6 +10,7 @@
 #include "../core/nav.h"
 #include "bottombar.h"
 #include "../screens/screens.h"
+#include "../core/fmstat.h"
 #include "glass.h"
 #include <string.h>
 #include <stdio.h>
@@ -17,7 +18,7 @@
 #include <time.h>
 
 static lv_obj_t *bar, *spacer, *title_lbl, *sep_lbl, *clock_lbl, *date_lbl, *sim_badge;
-static lv_obj_t *ic_gps, *ic_net, *ic_bt, *ic_usb, *ic_vol, *ic_bat, *bat_pct;
+static lv_obj_t *ic_gps, *ic_net, *ic_bt, *ic_usb, *ic_vol, *ic_bat, *bat_pct, *ic_fm, *fm_box;
 static bool glass;                       /* Foston Glass: navegação aqui, vidro azul */
 
 /* Glass: Voltar, Início, Recentes, Ajustes (toque de 44 px, desenho delicado) */
@@ -174,6 +175,10 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_style_pad_column(icons, glass ? 2 : 0, 0);
 
     sim_badge = bf_pill(icons, tr(S_SIM_BADGE), p->warning);
+    /* transmissor FM ligado: "FM 99,5" discreto; um toque abre o Rádio FM */
+    fm_box = hit_box(icons, jump_click, (void *)(intptr_t)SCR_FM);
+    ic_fm = bf_label(fm_box, "", BF_FONT_S, lv_color_hex(0x3DDC84));
+    lv_obj_add_flag(fm_box, LV_OBJ_FLAG_HIDDEN);
     /* cada ícone numa caixa de toque grande; um toque leva à tela dele */
     ic_gps = icon(hit_box(icons, jump_click, (void *)(intptr_t)SCR_GPS), LV_SYMBOL_GPS);
     ic_net = icon(hit_box(icons, jump_click, (void *)(intptr_t)SCR_SSH), BF_SYMBOL_NET);
@@ -264,6 +269,15 @@ void topbar_update(void)
     if(s->simulated) lv_obj_remove_flag(sim_badge, LV_OBJ_FLAG_HIDDEN);
     else lv_obj_add_flag(sim_badge, LV_OBJ_FLAG_HIDDEN);
 
+    fm_info_t fi;                                        /* indicador do FM (estado real do bffm) */
+    fm_read(&fi);
+    if(fi.state == FM_ON) {
+        char f[16], t[32];
+        fm_format(fi.freq, f, sizeof f);
+        snprintf(t, sizeof t, BF_SYMBOL_TOWER " %s", f);
+        set_text_if(ic_fm, t);
+        lv_obj_remove_flag(fm_box, LV_OBJ_FLAG_HIDDEN);
+    } else lv_obj_add_flag(fm_box, LV_OBJ_FLAG_HIDDEN);
     icon_state(ic_gps, s->gps_fix, p->accent);
     icon_state(ic_net, s->network, p->text);
     icon_state(ic_bt, s->bluetooth, p->primary);

@@ -14,6 +14,7 @@
 #include "devwatch.h"
 #include "powerkey.h"
 #include "../widgets/topbar.h"
+#include "fmstat.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
 #include "../assets/logo/bf_logo.h"
@@ -35,6 +36,7 @@ static void tick_cb(lv_timer_t *t)
     topbar_update();
     bt_poll_global();
     ph_poll_global();
+    fm_poll_global();
     fx_tick();
     clock_tick();
     /* modo Automático: troca claro/escuro quando passa das 7h/19h */

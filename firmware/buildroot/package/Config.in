@@ -3,6 +3,7 @@ source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bigscreen/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bringup/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-bt/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-espeak-ng/Config.in"
+source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-fm/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-gps/Config.in"
 source "$BR2_EXTERNAL_BIGFOSTON_PATH/package/bigfoston-shell/Config.in"
 endmenu

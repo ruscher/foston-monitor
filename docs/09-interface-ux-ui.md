@@ -186,7 +186,7 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 | ![](images/ui/21g-multimidia-espelho-arco-iris.png) | Espelho, arco-íris e fundo pela cor média da capa. |
 | ![](images/ui/21h-multimidia-linha-claro.png) | Linha, "gelo", modo claro. |
 | ![](images/ui/21i-volume.png) | **Volume** — barra vertical, porcentagem e mudo; abre pelo ícone de som da barra superior (qualquer tela) e pelo Multimídia. |
-| ![](images/ui/22-fm-transmitir.png) | **FM Transmitir** — chip FM ainda não identificado. |
+| ![](images/ui/22-fm-transmitir.png) | **Rádio FM** — transmissor KT0801A: frequência grande, Transmitir, saída do som, favoritos ([fm-radio](fm-radio/00-visao-geral.md)). |
 | ![](images/ui/23-terminal.png) | **Terminal** — `/bin/sh` num PTY com emulação VT100 e teclado na tela. |
 | ![](images/ui/24-livro.png) | **Livro** sem livros — diz onde procura. |
 | ![](images/ui/37-galeria.png) | **Galeria** — miniaturas de JPEG, PNG, GIF, BMP e SVG do cartão SD e da pasta de dados; recentes ou por nome; rola com barra. |

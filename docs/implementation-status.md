@@ -54,7 +54,8 @@ Ficam de fora, por falta de driver: TV, transmissor FM e microfone. Bluetooth: o
 | GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026); relógio acertado pela hora do GPS sem NTP | [gps.md](gps.md) |
 | Big GPS (mapa, rotas, navegação, voz, busca offline) | **FUNCIONANDO** (simulado; falta teste dirigindo) | motor próprio sem FPU; mapa do Brasil inteiro no aparelho; rotas carro/moto/bicicleta/a pé com Contraction Hierarchies; voz pt-BR (eSpeak NG); busca com abreviações (SQN, Av., BR-020), índice por região (0,2–5 s no índice nacional com o cartão frio) e favoritos; semáforos, perfil de moto e evitar pedágios prontos no construtor (arquivos nacionais a gerar) | [big-gps/00-visao-geral.md](big-gps/00-visao-geral.md), [hardware-enablement/05](hardware-enablement/05-big-gps-improvements.md) |
 | Bluetooth (MediaTek MT6611, UART2) | **PARCIAL** | chip ligado pelos pinos da OAL (GPIO 104/3) e respondendo a HCI (`btprobe`); sem BlueZ, perfis nem app | [hardware-enablement/06](hardware-enablement/06-bluetooth-hardware.md) |
-| TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
+| Transmissor FM (KT0801A) | **IMPLEMENTADO** (liga, frequência confirmada no chip; falta ouvir num rádio externo) | `bffm`, app Rádio FM | [fm-radio](fm-radio/00-visao-geral.md) |
+| TV (ISDB-T) | **FUNCIONANDO** | `bftvd`, app TV | [tv](tv/00-visao-geral.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
 

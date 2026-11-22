@@ -18,6 +18,7 @@ int screenshot_run(const char *dir)
 #include "powerkey.h"
 #include "nav.h"
 #include "settings.h"
+#include "fmstat.h"
 #include "../widgets/imgview.h"
 #include "status.h"
 #include "../widgets/volpop.h"
@@ -184,7 +185,22 @@ int screenshot_run(const char *dir)
     app_rebuild_now(); nav_home(); pump(1500); shot("44-glass-inicio");
     go(SCR_HOME, HOME_ARG_APPS); pump(600); shot("44b-glass-apps");
     go(SCR_APPEARANCE, 0); pump(200); shot("44c-glass-aparencia");
-    go(SCR_FEATURE, FEAT_RADIO); pump(200); shot("44d-glass-radio");
+    {   /* Rádio FM: transmissor ligado (estado de demonstração; o simulador não tem o bffm) */
+        char fp[300], fc[300];
+        data_path(fp, sizeof fp, "fm-demo-status");
+        data_path(fc, sizeof fc, "fm.conf");
+        FILE *o = fopen(fc, "w");
+        if(o) { fputs("freq=995\nmode=0\ntimer=30\nhelp=1\nfav=995|Carro\nfav=1013|Rádio de casa\nfav=881|Reserva\n", o); fclose(o); }
+        o = fopen(fp, "w");
+        if(o) { fprintf(o, "state=desligado\nfreq=0.0\n"); fclose(o); }
+        setenv("BIGFOSTON_FM_STATUS", fp, 1);
+        go(SCR_FM, 0); pump(500); shot("44d-glass-radio-desligado");
+        fm_on(995, 0); pump(900); shot("44f-glass-radio-transmitindo");
+        scr_fm_demo(1); pump(300); shot("44g-glass-radio-digitar");
+        dialog_close_all(); pump(100);
+        scr_fm_demo(2); pump(300); shot("44h-glass-radio-diagnostico");
+        dialog_close_all(); pump(100);
+    }
     s->home_mode = BF_HOME_GRID;
     app_rebuild_now(); pump(50);
     go(SCR_MUSIC, 0); pump(200);
@@ -198,7 +214,9 @@ int screenshot_run(const char *dir)
     volpop_close();
     scr_music_demo(8); pump(100);
     scr_music_demo(3); pump(100);
-    go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
+    go(SCR_FM, 0); pump(500);       shot("22-fm-transmitir");
+    fm_off(); pump(100);
+    unsetenv("BIGFOSTON_FM_STATUS");
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
