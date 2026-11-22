@@ -18,6 +18,18 @@ of Completed Packets), em seguida `Encryption Key Refresh` e `Role Change` (FOST
 nenhuma resposta do celular; 6 s depois o BlueZ desiste ("Discover: Operation timed out"). Sem a
 troca de papel o Discover é respondido em ~5 ms.
 
+## Papel no enlace: celular mestre depois de conectar
+
+Com o FOSTON mestre (efeito da política acima), o áudio chegava a 18,7 KB/s (59 % do tempo real:
+música "acelerada" e com pausas). Captura: o celular mandava pacotes DH5 sem EDR (cada pacote de
+áudio de 612 bytes em dois) e a qualidade do enlace caía de 255 para 8 com sinal forte (-50 dBm):
+interferência, que o mestre evita pelo AFH; o MT6611 nem aceita o comando de leitura do mapa AFH.
+
+O `bfbt-agent`, 2 s depois de os perfis estarem conectados (`ServicesResolved`), libera a troca de
+papel nesse enlace (Write Link Policy 0x0005) e pede Switch Role para periférico, se ainda for
+mestre (HCIGETCONNINFO). POCO X4: 5/5 conexões a 41,5-41,6 KB/s, 0 XRUN; 60 s seguidos sem buraco
+nem corte; qualidade 255. A troca com a música já tocando não causou falha.
+
 ## UART
 
 Recepção em lotes no `8250_mt3351` (256 bytes, silêncio na linha ou 2 ms) e controle de fluxo

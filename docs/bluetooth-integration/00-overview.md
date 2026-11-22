@@ -9,7 +9,7 @@ HARDWARE**, PARCIAL, NÃO IMPLEMENTADO, BLOQUEADO POR DEPENDÊNCIA.
 | Pareamento com código na tela, app Bluetooth | **FUNCIONANDO NO HARDWARE** (POCO X4 pareado pela tela) | [../hardware-enablement/08](../hardware-enablement/08-bluetooth-profiles.md) |
 | Conexão iniciada pelo FOSTON e reconexão no boot | **FUNCIONANDO NO HARDWARE** (5/5 depois da correção da troca de papel) | [18](18-reconnection.md) |
 | Conexão iniciada pelo celular | NÃO TESTADO depois da correção | [18](18-reconnection.md) |
-| Música do celular na Multimídia (A2DP) | **FUNCIONANDO NO HARDWARE** (confirmado pelo usuário) | [05](05-a2dp-multimedia.md) |
+| Música do celular na Multimídia (A2DP) | **FUNCIONANDO NO HARDWARE**: 41,5 KB/s, 0 cortes em 60 s (depois da correção do papel no enlace) | [05](05-a2dp-multimedia.md) |
 | Título, artista, álbum, duração, posição, controles (AVRCP) | **FUNCIONANDO NO HARDWARE** | [06](06-avrcp-metadata.md) |
 | Aleatório/repetir pelo FOSTON | PARCIAL: mostra o estado; o app de teste recusa a mudança (aviso na tela) | [06](06-avrcp-metadata.md) |
 | Capa do álbum (AVRCP BIP) | BLOQUEADO: exige o obexd (+~1 MB), sem espaço na memória interna | [25](25-known-limitations.md) |
