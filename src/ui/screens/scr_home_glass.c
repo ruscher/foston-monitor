@@ -49,7 +49,7 @@ static void fmt_ms(char *out, size_t n, int ms)
 
 static void clock_card(lv_obj_t *p)
 {
-    lv_obj_t *c = glass_card(p, 30, 21, 420, 88, 24);
+    lv_obj_t *c = glass_card(p, 30, 21, 446, 88, 24);      /* folga à direita da data */
     clk = glass_label(c, "--:--", BF_FONT_CLOCK, GL_WHITE);
     lv_obj_align(clk, LV_ALIGN_LEFT_MID, 22, 2);
     lv_obj_t *div = lv_obj_create(c);
@@ -132,11 +132,11 @@ static lv_obj_t *dot(lv_obj_t *parent)
 
 static void conn_card(lv_obj_t *p)
 {
-    lv_obj_t *c = glass_card(p, 32, 117, 272, 138, 22);
+    lv_obj_t *c = glass_card(p, 32, 117, 272, 156, 22);     /* folga abaixo do GPS */
     lv_obj_t *t = glass_label(c, tr(S_GL_CONNECTION), BF_FONT_M, GL_WHITE);
-    lv_obj_set_pos(t, 18, 6);
+    lv_obj_set_pos(t, 18, 8);
 
-    lv_obj_t *r = row(c, 32, 58, open_bt);
+    lv_obj_t *r = row(c, 36, 60, open_bt);
     lv_obj_t *ic = glass_tile(r, 40, 12, GL_LIGHT, GL_BLUE, NULL, LV_SYMBOL_BLUETOOTH, BF_FONT_M);
     lv_obj_set_pos(ic, 10, 8);
     lv_obj_t *n = glass_label(r, tr(S_APP_BLUETOOTH), BF_FONT_M, GL_WHITE);
@@ -153,11 +153,11 @@ static void conn_card(lv_obj_t *p)
     lv_obj_t *line = lv_obj_create(c);
     lv_obj_remove_style_all(line);
     lv_obj_set_size(line, 236, 1);
-    lv_obj_set_pos(line, 18, 92);
+    lv_obj_set_pos(line, 18, 100);
     lv_obj_set_style_bg_color(line, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(line, LV_OPA_30, 0);
 
-    r = row(c, 94, 42, open_gps);
+    r = row(c, 106, 42, open_gps);
     ic = glass_tile(r, 36, 12, GL_LAVENDER, GL_LAVBLUE, NULL, LV_SYMBOL_GPS, BF_FONT_M);
     lv_obj_set_pos(ic, 12, 3);
     n = glass_label(r, tr(S_APP_GPS), BF_FONT_M, GL_WHITE);
@@ -445,10 +445,22 @@ static lv_obj_t *dock_item(lv_obj_t *dock, int cx, int w, int h, int i)
     return it;
 }
 
+static void apps_squares(lv_obj_t *t)
+{
+    for(int k = 0; k < 4; k++) {          /* 2x2 quadrados brancos */
+        lv_obj_t *q = lv_obj_create(t);
+        lv_obj_remove_style_all(q);
+        lv_obj_set_size(q, 24, 24);
+        lv_obj_set_style_radius(q, 7, 0);
+        lv_obj_set_style_bg_color(q, CLR(GL_WHITE), 0);
+        lv_obj_set_style_bg_opa(q, LV_OPA_COVER, 0);
+        lv_obj_align(q, LV_ALIGN_CENTER, k % 2 ? 15 : -15, k / 2 ? 15 : -15);
+    }
+}
+
 static void dock(lv_obj_t *p)
 {
     lv_obj_t *d = glass_card(p, 24, 287, 752, 124, 28);
-    lv_obj_add_flag(d, LV_OBJ_FLAG_OVERFLOW_VISIBLE);   /* Apps sobe acima da borda */
     static const struct { const lv_image_dsc_t *icon; bf_str_t name; uint32_t top, bot; } it[5] = {
         { &bf_icon_gps, S_APP_GPS, GL_LIGHT, GL_BLUE },
         { &bf_icon_fm, S_GL_RADIO, GL_LAVENDER, GL_LAVBLUE },
@@ -458,29 +470,25 @@ static void dock(lv_obj_t *p)
     };
     static const int cx[5] = { 85, 231, 376, 521, 667 };
     for(int i = 0; i < 5; i++) {
-        bool apps = i == 2;
-        lv_obj_t *item = dock_item(d, cx[i], apps ? 132 : 120, 122, i);
-        if(apps) lv_obj_set_y(item, -16);
-        lv_obj_t *t = glass_tile(item, apps ? 92 : 72, apps ? 26 : 20, it[i].top, it[i].bot, it[i].icon, NULL, NULL);
-        if(apps) {
-            lv_obj_set_size(t, 116, 88);
-            lv_obj_set_style_border_width(t, 2, 0);
-            lv_obj_set_style_border_color(t, CLR(GL_SKY), 0);
-            lv_obj_set_style_border_opa(t, LV_OPA_70, 0);
-            for(int k = 0; k < 4; k++) {          /* 2x2 quadrados brancos */
-                lv_obj_t *q = lv_obj_create(t);
-                lv_obj_remove_style_all(q);
-                lv_obj_set_size(q, 22, 22);
-                lv_obj_set_style_radius(q, 6, 0);
-                lv_obj_set_style_bg_color(q, CLR(GL_WHITE), 0);
-                lv_obj_set_style_bg_opa(q, LV_OPA_COVER, 0);
-                lv_obj_align(q, LV_ALIGN_CENTER, k % 2 ? 14 : -14, k / 2 ? 14 : -14);
-            }
-        }
-        lv_obj_align(t, LV_ALIGN_TOP_MID, 0, apps ? 8 : 12);
+        if(i == 2) continue;                  /* Apps: peça própria, por cima do dock */
+        lv_obj_t *item = dock_item(d, cx[i], 120, 122, i);
+        lv_obj_t *t = glass_tile(item, 72, 20, it[i].top, it[i].bot, it[i].icon, NULL, NULL);
+        lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 12);
         lv_obj_t *l = glass_label(item, tr(it[i].name), BF_FONT_M, GL_WHITE);
-        lv_obj_align(l, LV_ALIGN_TOP_MID, 0, apps ? 100 : 88);
+        lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 88);
     }
+    /* Apps: quadrado arredondado de 96 px que vaza 18 px acima do dock; filho da tela (não
+     * do dock), para nada cortar a parte de fora; o rótulo alinha com os outros (y 375) */
+    lv_obj_t *item = dock_item(p, 24 + cx[2], 132, 140, 2);
+    lv_obj_set_y(item, 263);
+    lv_obj_t *t = glass_tile(item, 96, 24, it[2].top, it[2].bot, NULL, NULL, NULL);
+    lv_obj_set_style_border_width(t, 2, 0);
+    lv_obj_set_style_border_color(t, CLR(GL_SKY), 0);
+    lv_obj_set_style_border_opa(t, LV_OPA_80, 0);
+    apps_squares(t);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 6);
+    lv_obj_t *l = glass_label(item, tr(it[2].name), BF_FONT_M, GL_WHITE);
+    lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 112);
 }
 
 /* -------------------------------------------------------------------- tela */

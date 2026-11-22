@@ -32,10 +32,10 @@ Tudo dentro do shell LVGL existente; nenhum processo ou serviço novo.
 | Peça | Posição no conteúdo |
 |---|---|
 | Barra superior | y 0-48 (vidro azul-profundo, 70 %) |
-| Relógio e data | (30, 21) 420x88 |
-| Conexão | (32, 117) 272x138 |
+| Relógio e data | (30, 21) 446x88 |
+| Conexão | (32, 117) 272x156 |
 | Player | (508, 18) 272x233 |
-| Dock | (24, 287) 752x124; Apps 116x88, 16 px acima do dock |
+| Dock | (24, 287) 752x124; Apps: quadrado de 96 px por cima do dock (filho da tela), 18 px acima dele |
 
 ## Dados reais
 
