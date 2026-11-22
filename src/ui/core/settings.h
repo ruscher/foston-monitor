@@ -10,7 +10,8 @@ typedef struct {
     bf_lang_t lang;
     int  mode;          /* BF_MODE_*: escuro (padrão), claro ou automático */
     int  palette;       /* tema de cores (core/theme.h, BF_PAL_*) */
-    int  wallpaper;     /* BF_WALL_*: liso, degradê, degradê com o símbolo */
+    int  wallpaper;     /* BF_WALL_*: liso, degradê, degradê com o símbolo, imagem */
+    char wall_image[256]; /* BF_WALL_IMAGE: arquivo escolhido na Galeria */
     bool anim;          /* animações de transição */
     bool sounds;        /* sons de toque */
     bool boot_sound;    /* som ao iniciar a interface */
@@ -49,7 +50,7 @@ enum { BF_DETAIL_AUTO, BF_DETAIL_ECONOMIC, BF_DETAIL_BALANCED, BF_DETAIL_DETAILE
 enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME__N };
 /* Multimídia, Livro, GPS, Arquivos, Monitor, Ajustes */
 #define BF_HOME_APPS_DEFAULT ((1u << 0) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10))
-enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL__N };
+enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL_IMAGE, BF_WALL__N };
 #define BF_DIM_CHOICES { 0, 1, 2, 5, 10 }
 /* o PC pela rede USB (se servir NTP), depois o NTP.br e o pool */
 #define BF_NTP_DEFAULT "192.168.7.1 a.st1.ntp.br pool.ntp.org"

@@ -18,6 +18,9 @@ typedef enum {
     FEAT_COUNT
 } bf_feature_t;
 
+/* Argumento de SCR_GALLERY: escolher o papel de parede (Aparência) */
+#define GALLERY_PICK_WALLPAPER 1
+
 /* Argumento de SCR_RUN */
 #define RUN_ARG_NORMAL   0
 #define RUN_ARG_TERMINAL 1
