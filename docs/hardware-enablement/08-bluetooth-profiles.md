@@ -13,7 +13,9 @@ kexec, ainda não instalado.
 | D-Bus (`S30dbus-daemon`) | barramento do BlueZ e do BlueALSA |
 | BlueZ 5.79 `bluetoothd` (`S40bluetoothd`) | pareamento, SDP, perfis; `/etc/bluetooth/main.conf`: nome "BigFoston", classe áudio/alto-falante |
 | BlueALSA (`S41bluealsa`) | A2DP fonte e destino (SBC) |
-| `bluealsa-aplay --pcm=hw:0,0` | toca no alto-falante o que o celular manda |
+| `bluealsa-aplay --pcm=hw:0,0` (S41bluealsa) | toca no alto-falante o que o celular manda |
+| [`bfbt-agent`](../../src/bt/bfbt-agent.c) (S42bfbt-agent) | agente de pareamento e ponte para o shell (abaixo) |
+| app **Bluetooth** do shell ([scr_bluetooth.c](../../src/ui/screens/scr_bluetooth.c), [btstat.c](../../src/ui/core/btstat.c)) | liga/desliga, visível, procurar, aparelhos, música |
 
 O BlueZ e o BlueALSA exigem bibliotecas compartilhadas (`dlopen`): o firmware de teste troca
 `BR2_STATIC_LIBS` por `BR2_SHARED_LIBS` (todo o sistema). Medido: initrd 1,7 → 4,8 MB
@@ -72,12 +74,33 @@ Ligação do chip: a troca de velocidade falhava às vezes logo depois de ligar 
 lia só 7 bytes); o `bfbt-attach` agora espera 100 ms com o chip desligado, lê a resposta
 inteira e repete a sequência até 3 vezes: 6/6 de primeira em religações seguidas.
 
+## Agente e app
+
+O shell é estático e não fala D-Bus; o `bfbt-agent` (libdbus, 0,9 MB de RAM) faz a ponte:
+
+- **Agente "DisplayYesNo"**: o pedido de pareamento aparece em qualquer tela do shell, com o
+  código em letras grandes para comparar com o celular; Aceitar marca o aparelho como
+  confiável. Serviços de aparelhos pareados e confiáveis são autorizados sem perguntar.
+  Aparelhos antigos que pedem digitar um PIN são recusados.
+- **Estado** em `/run/bigfoston-bt` (`chave=valor`; `dev=endereço|pareado|conectado|confiável|rssi|ícone|nome`,
+  `req=`, `player=estado|título|artista|aparelho`, `result=operação|ok/erro/andamento|erro`).
+- **Comandos** no FIFO `/run/bigfoston-bt.cmd`: `on`, `off`, `visible 0|1`, `scan 0|1`,
+  `pair|connect|disconnect|forget ENDEREÇO`, `accept`, `reject`, `play`, `pause`, `next`, `prev`.
+- Chamadas longas (parear, conectar) são assíncronas: o agente continua respondendo durante
+  o pareamento. Registra o agente de novo quando o `bluetoothd` reinicia.
+- **Reconexão automática** aos pareados e confiáveis 3, 15 e 60 s depois de ligar (antes do
+  BlueALSA registrar o áudio a conexão falha com "profile-unavailable"); um comando do
+  usuário cancela as tentativas restantes.
+
+Testado no aparelho pelo FIFO: reconexão automática, desconectar/conectar, visível,
+procurar, título e artista da música. A tela foi conferida no simulador (capturas 43 e 43b);
+o teste no aparelho com o dedo está pendente.
+
 ## Falta
 
 - DMA de recepção da UART (o kernel ainda gasta ~28 % só recebendo o áudio).
 - Conexão iniciada pelo celular (hoje só a iniciada pelo FOSTON funciona).
-- Agente de pareamento na interface (hoje o teste usa `bluetoothctl`), app Bluetooth
-  (ligar/desligar, parear, conectar, esquecer).
+- Teste do app no aparelho (pareamento novo pela tela, música pelos botões).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
   (mpg123), precisa de uma rota para o BlueALSA.
 - Viva-voz (HFP/SCO) e microfone; HID (teclado, mouse, controle).

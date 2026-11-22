@@ -24,7 +24,8 @@ INVIÁVEL NESTE HARDWARE, BLOQUEADO POR DEPENDÊNCIA.
 | Navegação com GPS real em movimento | NÃO TESTADO | [05](05-big-gps-improvements.md) |
 | Bluetooth: kernel (hci0), 921600 baud, endereço do aparelho | **FUNCIONANDO NO HARDWARE** | [07](07-bluetooth-driver.md) |
 | Bluetooth: BlueZ, pareamento, música do celular no FOSTON (A2DP) | **FUNCIONANDO NO HARDWARE** (firmware de teste; com música: 23 % de CPU livre, falta o DMA da UART) | [08](08-bluetooth-profiles.md) |
-| Bluetooth: app, fones/caixas, telefone, HID | NÃO IMPLEMENTADO | [08](08-bluetooth-profiles.md) |
+| Bluetooth: app (parear, conectar, música do celular) | PARCIAL: agente testado no aparelho, tela no simulador | [08](08-bluetooth-profiles.md) |
+| Bluetooth: fones/caixas, telefone, HID | NÃO IMPLEMENTADO | [08](08-bluetooth-profiles.md) |
 | Microfone | NÃO IMPLEMENTADO (o CE grava pelo caminho de voz do DSP, ver [audio.md](../audio.md)) | — |
 | TV digital (Siano SMS1xxx, ISDB-T, SPI) | NÃO IMPLEMENTADO | — |
 | TV analógica | INVIÁVEL: o Siano Nova é só digital, e a transmissão analógica terrestre terminou no Brasil | — |
