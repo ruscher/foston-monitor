@@ -315,6 +315,15 @@ int screenshot_run(const char *dir)
             scr_phone_demo(11); pump(300); shot("45h-telefone-volume");
             scr_phone_demo(12); pump(300); shot("45i-telefone-teclado");
             scr_phone_demo(13); pump(100);
+            pf = fopen(pp, "w");
+            if(pf) {
+                fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\nsignal=4\nbattery=3\nservice=1\n"
+                            "call=1|0|1|+55 11 90000-0001|Ana Souza\ncall=2|0|0|+55 21 90000-0002|Bruno Lima\n"
+                            "since=%ld\nvoice=foston\nvoice_foston=1\nvoice_on=1\nsco=1\nmute=0\nvol=5\nrec=0\nsync=ok\n",
+                        dd, (long)time(NULL) - 12);
+                fclose(pf);
+            }
+            pump(800); shot("45j-telefone-duas-chamadas");
             scr_phone_demo(10); pump(300); shot("45g-telefone-falar-pelo-foston");
             dialog_close_all();
             go(SCR_HOME, 0); pump(100);

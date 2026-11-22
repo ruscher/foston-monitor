@@ -411,6 +411,24 @@ static void set_mute(int m)
     lo16(W_ANA, 0x108, m ? 0x0080 : 0x0000);     /* 0x80 desliga o ADC do microfone (medido) */
 }
 
+/* O driver ALSA divide clocks, amplificador e analógico com a voz: ao fechar o som (por exemplo
+ * a música pausada pela ligação) ele desliga os clocks 37/43 e o amplificador, e a ligação fica
+ * muda. Durante a ligação o bfvoice confere e restaura (a cada 200 ms). */
+static unsigned long fixes;
+static void guard(void)
+{
+    uint32_t need = CLK(42) | CLK(43) | CLK(37);
+    if(r32(W_PDN, PDN1_STA) & need) { clk_on(need); fixes++; }
+    if((r32(W_ANA, 0x204) & 0xffff) != 0x1240) { lo16(W_ANA, 0x204, 0x1240); fixes++; }
+    if((r32(W_ANA, 0x108) & 0xffff) != (muted ? 0x80 : 0)) { lo16(W_ANA, 0x108, muted ? 0x80 : 0); fixes++; }
+    if((r32(W_ANA, 0x104) & 0xffff) != 0x2A00) { lo16(W_ANA, 0x104, 0x2A00); fixes++; }
+    if(!(r32(W_GPIO, 0x300) & (1u << 5))) { m32(W_GPIO, 0x300, 1u << 5, 1u << 5); fixes++; }
+    if((r16(W_ADMA, 0x204) & 0x000C) != 0x000C) { m16(W_ADMA, 0x204, 0x000C, 0x000C); fixes++; }
+}
+
+/* níveis (pico) da voz do celular e do microfone, para o log */
+static int lvl_rx, lvl_ul;
+
 static void ctl_read(void)
 {
     FILE *f = fopen(CTL_FILE, "r");
@@ -444,6 +462,11 @@ static void serve_once(void)
         bad++;
     } else {
         uint32_t src = BT_RX_RING + (ring_n++ & 1) * 0x140;
+        for(uint32_t i = 0; i < wr; i += 16) {            /* amostra dos níveis */
+            int a = abs((int16_t)r16(W_YM, src + i)), b = abs((int16_t)r16(W_YM, off + i));
+            if(a > lvl_rx) lvl_rx = a;
+            if(b > lvl_ul) lvl_ul = b;
+        }
         if(rec) {                                 /* gravação: voz do celular + microfone, 8 kHz */
             int16_t mix[160];
             int n = (int)(wr / 2);
@@ -476,10 +499,12 @@ static int run(void)
         serve_once();
         stall_us(1000);
         long t = now_ms();
-        if(t - lastctl >= 200) { lastctl = t; ctl_read(); }
+        if(t - lastctl >= 200) { lastctl = t; ctl_read(); guard(); }
         if(t - last >= 10000) {
             last = t;
-            fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
+            fprintf(stderr, "bfvoice: %lu blocos, %lu inválidos, celular %d, microfone %d%s, ganho %d%%, restaurações %lu\n",
+                    served, bad, lvl_rx, lvl_ul, muted ? " (mudo)" : "", rx_gain, fixes);
+            lvl_rx = lvl_ul = 0;
         }
     }
     fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);

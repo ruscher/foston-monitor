@@ -113,10 +113,10 @@ static void free_tracks(void)
     n_tracks = 0;
 }
 
-static bool is_mp3(const char *n)
+static bool is_mp3(const char *n)          /* MP3 e WAV (gravações de ligação) */
 {
     size_t l = strlen(n);
-    return l > 4 && !strcasecmp(n + l - 4, ".mp3");
+    return l > 4 && (!strcasecmp(n + l - 4, ".mp3") || !strcasecmp(n + l - 4, ".wav"));
 }
 
 static void scan(const char *dir, int depth)
@@ -150,9 +150,16 @@ static const char *base_name(const char *p)
 /* nome do arquivo sem ".mp3", para quando não há tag de título */
 static void file_title(char *out, size_t n, const char *path)
 {
-    snprintf(out, n, "%s", base_name(path));
+    const char *b = base_name(path);
+    int Y, M, D, h, m;
+    /* gravação do Telefone: "ligacao-AAAAMMDD-HHMMSS.wav" -> "Ligação 22/11 18:38" */
+    if(sscanf(b, "ligacao-%4d%2d%2d-%2d%2d", &Y, &M, &D, &h, &m) == 5) {
+        snprintf(out, n, "%s %02d/%02d %02d:%02d", tr(S_PH_REC_TITLE), D, M, h, m);
+        return;
+    }
+    snprintf(out, n, "%s", b);
     size_t l = strlen(out);
-    if(l > 4 && !strcasecmp(out + l - 4, ".mp3")) out[l - 4] = 0;
+    if(l > 4 && (!strcasecmp(out + l - 4, ".mp3") || !strcasecmp(out + l - 4, ".wav"))) out[l - 4] = 0;
 }
 
 static void fmt_time(char *out, size_t n, int ms)

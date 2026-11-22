@@ -547,6 +547,7 @@ static void on_tab(lv_event_t *e)
 /* ------------------------------------------------------ painel da ligação */
 
 enum { ACT_MUTE, ACT_KEYS, ACT_VOL, ACT_NEW, ACT_HOLD, ACT_REC, NACT };
+static lv_obj_t *cp_other;
 static lv_obj_t *act_btn[NACT], *act_lbl[NACT], *cp_grid, *cp_volrow, *cp_vol, *cp_vrow, *cp_rec, *cp_back;
 static bool minimized;                    /* "Nova chamada": painel escondido, discador aberto */
 static char min_sig[256];
@@ -610,7 +611,9 @@ static void on_act(lv_event_t *e)
     case ACT_VOL: lv_slider_set_value(cp_vol, cur.vol ? cur.vol : 5, LV_ANIM_OFF); show_only(cp_volrow); break;
     case ACT_HOLD: ph_cmd("hold"); break;
     case ACT_REC: ph_cmd("record %d", cur.rec ? 0 : 1); break;
-    case ACT_NEW:                                  /* discador por cima da ligação */
+    case ACT_NEW:                                  /* com duas chamadas: juntar */
+        if(cur.ncall >= 2) { ph_cmd("merge"); break; }
+        /* discador por cima da ligação */
         minimized = true;
         snprintf(min_sig, sizeof min_sig, "%s", call_sig);
         lv_obj_add_flag(call_panel, LV_OBJ_FLAG_HIDDEN);
@@ -712,6 +715,9 @@ static void build_call_panel(void)
     lv_obj_set_style_text_align(cp_name, LV_TEXT_ALIGN_CENTER, 0);
     cp_num = bf_label(left, "", BF_FONT_M, p->text_dim);
     cp_state = bf_label(left, "", BF_FONT_M, lv_color_hex(C_PHONE));
+    cp_other = bf_label(left, "", BF_FONT_S, p->warning);     /* a outra chamada (em espera) */
+    bf_label_ellipsis(cp_other, 320);
+    lv_obj_add_flag(cp_other, LV_OBJ_FLAG_HIDDEN);
     cp_rec = bf_label(left, "\xE2\x80\xA2 ", BF_FONT_M, p->danger);
     lv_obj_add_flag(cp_rec, LV_OBJ_FLAG_HIDDEN);
     cp_note = bf_label(left, tr(S_PH_VOICE_NOTE), BF_FONT_S, p->text_dim);
@@ -841,8 +847,32 @@ static void update_call(void)
     act_set(ACT_MUTE, cur.voice_on, cur.mute);
     act_set(ACT_KEYS, active, false);
     act_set(ACT_VOL, true, false);
+    /* duas chamadas: Juntar (conferência) e Alternar; e quem é a outra */
+    bool two = cur.ncall >= 2;
+    static bool was_two;
+    if(two != was_two) {
+        was_two = two;
+        lv_obj_t *il = lv_obj_get_child(act_btn[ACT_NEW], 0), *hl = lv_obj_get_child(act_btn[ACT_HOLD], 0);
+        if(il) lv_label_set_text(il, two ? LV_SYMBOL_SHUFFLE : LV_SYMBOL_PLUS);
+        if(hl) lv_label_set_text(hl, two ? LV_SYMBOL_REFRESH : LV_SYMBOL_PAUSE);
+        lv_label_set_text(act_lbl[ACT_NEW], tr(two ? S_PH_ACT_MERGE : S_PH_ACT_NEW));
+        lv_label_set_text(act_lbl[ACT_HOLD], tr(two ? S_PH_ACT_SWAP : S_PH_ACT_HOLD));
+    }
+    const ph_call_t *o = NULL;
+    for(int i = 0; i < cur.ncall; i++) if(&cur.call[i] != c) o = &cur.call[i];
+    if(o) {
+        char t[160];
+        bool conf = o->stat == PH_ACTIVE && c->stat == PH_ACTIVE;
+        snprintf(t, sizeof t, "%s: %s", tr(conf ? S_PH_IN_CONF : o->stat == PH_HELD ? S_PH_ST_HELD : S_PH_OTHER_CALL),
+                 o->name[0] ? o->name : o->num[0] ? o->num : tr(S_PH_UNKNOWN));
+        set_text(cp_other, t);
+        lv_obj_remove_flag(cp_other, LV_OBJ_FLAG_HIDDEN);
+    } else lv_obj_add_flag(cp_other, LV_OBJ_FLAG_HIDDEN);
+    bool any_held = false;
+    for(int i = 0; i < cur.ncall; i++) if(cur.call[i].stat == PH_HELD) any_held = true;
     act_set(ACT_NEW, active || held, false);
-    act_set(ACT_HOLD, active || held, held);
+    act_set(ACT_HOLD, active || held, held && !two);
+    if(two) act_set(ACT_NEW, any_held || cur.ncall >= 2, false);
     act_set(ACT_REC, cur.voice_on, cur.rec);
     if(cur.rec) {
         lv_obj_remove_flag(cp_rec, LV_OBJ_FLAG_HIDDEN);

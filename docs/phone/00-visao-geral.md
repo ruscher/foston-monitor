@@ -13,6 +13,8 @@ histórico e as mensagens podem ser importados do celular.
 |---|---|---|
 | ![Mensagens](../images/ui/45d-telefone-mensagens.png) | ![Ligação](../images/ui/45e-telefone-ligacao.png) | ![Recebida](../images/ui/45f-telefone-chamada-recebida.png) |
 
+![Duas chamadas](../images/ui/45j-telefone-duas-chamadas.png)
+
 | Volume da ligação | Teclado (DTMF) |
 |---|---|
 | ![Volume](../images/ui/45h-telefone-volume.png) | ![Teclado](../images/ui/45i-telefone-teclado.png) |
@@ -26,7 +28,8 @@ histórico e as mensagens podem ser importados do celular.
 | Volume | −/+ de 1 a 10 (ganho da voz no FOSTON: 100 % + 30 % por nível; 5 = 250 %); com a voz no celular manda `AT+VGS` |
 | Nova chamada | abre o discador por cima da ligação ("Voltar à ligação" no canto); a nova chamada põe a atual em espera |
 | Em espera | `AT+CHLD=2`: põe em espera / retoma |
-| Gravar | grava as duas vozes (8 kHz, WAV) em `BigFoston/telefone/gravacoes/ligacao-AAAAMMDD-HHMMSS.wav`; aviso "Gravando no cartão" na tela; com a voz no FOSTON |
+| Gravar | grava as duas vozes (8 kHz, WAV) em `BigFoston/telefone/gravacoes/ligacao-AAAAMMDD-HHMMSS.wav`; aviso "Gravando no cartão" na tela; com a voz no FOSTON. As gravações aparecem no **Multimídia** como "Ligação DD/MM HH:MM" (o player toca WAV) |
+| Juntar / Alternar | com duas chamadas: conferência (`AT+CHLD=3`) e troca da ativa com a em espera (`AT+CHLD=2`); a outra chamada aparece em laranja |
 | Falar pelo Celular / FOSTON | onde fica a voz |
 | Desligar / Atender | — |
 
@@ -106,3 +109,10 @@ diagnóstico (a ligação fica muda).
 
 Diagnóstico (no terminal do FOSTON): `cat /run/bigfoston-phone` (tem números: não publicar),
 `logread | grep bfphone`.
+
+## Voz no FOSTON e o som do sistema
+
+O driver ALSA divide clocks (ids 37/43), amplificador e analógico com a voz da ligação. Ao fechar o
+som (por exemplo a música pausada pela ligação) ele os desliga; durante a ligação o `bfvoice`
+confere e restaura tudo a cada 200 ms e registra em `/var/log/bfvoice.log` (a cada 10 s: blocos,
+nível da voz do celular e do microfone, restaurações; sem áudio).

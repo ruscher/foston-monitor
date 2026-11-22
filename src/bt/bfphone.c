@@ -11,7 +11,7 @@
  *  - recebe comandos, um por linha, no FIFO /run/bigfoston-phone.cmd:
  *      dial NÚMERO | redial | answer | hangup | dtmf C | voice phone|foston | sync | erase
  *      mute 0|1 | vol 1-10 | record 0|1 | hold   (mudo, volume e gravação: voz no FOSTON;
- *      hold: AT+CHLD=2, põe em espera / retoma)
+ *      hold: AT+CHLD=2, põe em espera / retoma / alterna; merge: AT+CHLD=3, conferência)
  *  - voz: o FOSTON ainda não toca a voz da ligação (o MT6611 entrega o SCO pelos pinos PCM ao
  *    DSP do MT3351; docs/phone/02-audio-da-chamada.md). Com voice=phone (padrão) o bfphone
  *    desfaz cada canal de voz (SCO) assim que ele abre: o celular volta a voz para o próprio
@@ -490,8 +490,8 @@ static void voice_start(void)
     voice_ctl();
     pid_t p = fork();
     if(p == 0) {
-        int nul = open("/dev/null", O_WRONLY);
-        if(nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        int lg = open("/var/log/bfvoice.log", O_WRONLY | O_CREAT | O_APPEND, 0600);   /* só níveis e contagens */
+        if(lg >= 0) { dup2(lg, 1); dup2(lg, 2); }
         execl(BFVOICE, "bfvoice", "run", (char *)NULL);
         _exit(127);
     }
@@ -744,7 +744,8 @@ static void command(char *l)
     } else if(!strcmp(l, "redial")) at_queue("AT+BLDN");
     else if(!strcmp(l, "answer")) at_queue("ATA");
     else if(!strcmp(l, "hangup")) at_queue("AT+CHUP");
-    else if(!strcmp(l, "hold")) at_queue("AT+CHLD=2");
+    else if(!strcmp(l, "hold")) at_queue("AT+CHLD=2");          /* em espera / alternar */
+    else if(!strcmp(l, "merge")) at_queue("AT+CHLD=3");         /* juntar em conferência */
     else if(!strcmp(l, "dtmf") && arg && strchr("0123456789*#ABCD", arg[0]) && arg[0]) at_queue("AT+VTS=%c", arg[0]);
     want_clcc = 1;
 }
