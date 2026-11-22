@@ -10,6 +10,8 @@
  *      sync=idle|andamento|ok|erro motivo  data=pasta dos dados no cartão
  *  - recebe comandos, um por linha, no FIFO /run/bigfoston-phone.cmd:
  *      dial NÚMERO | redial | answer | hangup | dtmf C | voice phone|foston | sync | erase
+ *      mute 0|1 | vol 1-10 | record 0|1 | hold   (mudo, volume e gravação: voz no FOSTON;
+ *      hold: AT+CHLD=2, põe em espera / retoma)
  *  - voz: o FOSTON ainda não toca a voz da ligação (o MT6611 entrega o SCO pelos pinos PCM ao
  *    DSP do MT3351; docs/phone/02-audio-da-chamada.md). Com voice=phone (padrão) o bfphone
  *    desfaz cada canal de voz (SCO) assim que ele abre: o celular volta a voz para o próprio
@@ -48,6 +50,9 @@
 #define BFVOICE  "/usr/sbin/bfvoice"
 #define VOICE_IMG "/mnt/sd/BigFoston/voz/wavedev-text.bin"
 #define VOICE_PREF "/data/bigfoston/telefone-voz"
+#define VOL_PREF   "/data/bigfoston/telefone-volume"
+#define REC_DIR    DATADIR "/gravacoes"
+#define VOICE_CTL  "/run/bfvoice.ctl"
 /* a voz pelo DSP funciona com a imagem do DSP e o patch do MT6611 no cartão (docs/phone/02) */
 
 /* ------------------------------------------------------------------ estado */
@@ -61,6 +66,8 @@ static struct {
     int voice_phone;                             /* 1: voz fica no celular */
     int voice_avail;                             /* bfvoice e a imagem do DSP no cartão */
     int voice_on;                                /* voz do DSP ligada agora */
+    int mute, vol, rec;                          /* microfone mudo, volume 1-10, gravando */
+    char rec_file[160];
     int sco;
     call_t call[MAXCALLS];
     int ncall;
@@ -101,6 +108,7 @@ static void write_state(void)
      * docs/phone/02-audio-da-chamada.md); até lá a voz fica no celular */
     fprintf(f, "voice=%s\nvoice_foston=%d\nvoice_on=%d\nsco=%d\n", st.voice_phone ? "phone" : "foston",
             st.voice_avail, st.voice_on, st.sco);
+    fprintf(f, "mute=%d\nvol=%d\nrec=%d\n", st.mute, st.vol, st.rec);
     for(int i = 0; i < st.ncall; i++)
         fprintf(f, "call=%d|%d|%d|%s|%s\n", st.call[i].idx, st.call[i].dir, st.call[i].stat, st.call[i].num,
                 st.call[i].name);
@@ -461,12 +469,25 @@ static void sco_request(void)
     syslog(LOG_INFO, "canal de voz pedido ao celular");
 }
 
+/* controle do bfvoice durante a ligação (mudo, volume, gravação) */
+static void voice_ctl(void)
+{
+    FILE *f = fopen(VOICE_CTL ".tmp", "w");
+    if(!f) return;
+    fprintf(f, "mute=%d gain=%d rec=%s\n", st.mute, 100 + st.vol * 30, st.rec ? st.rec_file : "-");
+    fclose(f);
+    rename(VOICE_CTL ".tmp", VOICE_CTL);
+}
+
 /* bfvoice run: liga o DSP e faz a ponte dos blocos de 20 ms até receber SIGTERM */
 static pid_t voice_pid;
 
 static void voice_start(void)
 {
     if(st.voice_on) return;
+    st.mute = 0;
+    st.rec = 0;
+    voice_ctl();
     pid_t p = fork();
     if(p == 0) {
         int nul = open("/dev/null", O_WRONLY);
@@ -493,7 +514,7 @@ static void voice_stop(void)
         if(waitpid(voice_pid, NULL, WNOHANG) == 0) { kill(voice_pid, SIGKILL); waitpid(voice_pid, NULL, 0); }
         voice_pid = 0;
     } else if(!access("/run/bfvoice.saved", F_OK)) run_bfvoice("stop");   /* sobra de outra execução */
-    if(st.voice_on) { st.voice_on = 0; write_state(); }
+    if(st.voice_on || st.rec || st.mute) { st.voice_on = 0; st.rec = 0; st.mute = 0; write_state(); }
 }
 
 static void sco_drop(void);
@@ -678,6 +699,38 @@ static void command(char *l)
         write_state();
         return;
     }
+    if(!strcmp(l, "vol") && arg) {
+        int v = atoi(arg);
+        st.vol = v < 1 ? 1 : v > 10 ? 10 : v;
+        FILE *f = fopen(VOL_PREF, "w");
+        if(f) { fprintf(f, "%d\n", st.vol); fclose(f); }
+        voice_ctl();
+        if(at_fd >= 0 && !st.voice_on) at_queue("AT+VGS=%d", st.vol * 3 / 2);   /* voz no celular */
+        write_state();
+        return;
+    }
+    if(!strcmp(l, "mute") && arg) {
+        st.mute = st.voice_on && atoi(arg);              /* só o microfone do FOSTON */
+        voice_ctl();
+        write_state();
+        return;
+    }
+    if(!strcmp(l, "record") && arg) {
+        int on = atoi(arg) && st.voice_on;
+        if(on && !st.rec) {
+            mkdirs(REC_DIR);
+            time_t t = time(NULL);
+            struct tm tm;
+            localtime_r(&t, &tm);
+            char n[40];
+            strftime(n, sizeof n, "%Y%m%d-%H%M%S", &tm);
+            snprintf(st.rec_file, sizeof st.rec_file, REC_DIR "/ligacao-%s.wav", n);
+        }
+        st.rec = on;
+        voice_ctl();
+        write_state();
+        return;
+    }
     if(!strcmp(l, "sync")) { sync_start(); return; }
     if(!strcmp(l, "erase")) { if(!sync_pid) erase_data(); return; }
     if(at_fd < 0) return;
@@ -691,6 +744,7 @@ static void command(char *l)
     } else if(!strcmp(l, "redial")) at_queue("AT+BLDN");
     else if(!strcmp(l, "answer")) at_queue("ATA");
     else if(!strcmp(l, "hangup")) at_queue("AT+CHUP");
+    else if(!strcmp(l, "hold")) at_queue("AT+CHLD=2");
     else if(!strcmp(l, "dtmf") && arg && strchr("0123456789*#ABCD", arg[0]) && arg[0]) at_queue("AT+VTS=%c", arg[0]);
     want_clcc = 1;
 }
@@ -741,6 +795,9 @@ int main(void)
     voice_check();
     FILE *pf = fopen(VOICE_PREF, "r");                 /* última escolha do usuário */
     if(pf) { char v[16] = ""; if(fgets(v, sizeof v, pf)) st.voice_phone = strncmp(v, "foston", 6) != 0; fclose(pf); }
+    st.vol = 5;
+    FILE *vf = fopen(VOL_PREF, "r");
+    if(vf) { int v; if(fscanf(vf, "%d", &v) == 1 && v >= 1 && v <= 10) st.vol = v; fclose(vf); }
     voice_stop();                                       /* sobra de uma execução anterior */
     write_state();
     int next_vcheck = 0;

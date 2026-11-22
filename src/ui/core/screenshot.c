@@ -309,8 +309,12 @@ int screenshot_run(const char *dir)
             scr_phone_demo(2); pump(300); shot("45c-telefone-recentes");
             scr_phone_demo(3); pump(300); shot("45d-telefone-mensagens");
             pf = fopen(pp, "a");
-            if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\n", (long)time(NULL) - 83); fclose(pf); }
+            if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\nvoice=foston\nvoice_foston=1\n"
+                                 "voice_on=1\nsco=1\nmute=0\nvol=5\nrec=1\n", (long)time(NULL) - 83); fclose(pf); }
             pump(800); shot("45e-telefone-ligacao");
+            scr_phone_demo(11); pump(300); shot("45h-telefone-volume");
+            scr_phone_demo(12); pump(300); shot("45i-telefone-teclado");
+            scr_phone_demo(13); pump(100);
             scr_phone_demo(10); pump(300); shot("45g-telefone-falar-pelo-foston");
             dialog_close_all();
             go(SCR_HOME, 0); pump(100);

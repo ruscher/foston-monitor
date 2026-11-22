@@ -13,7 +13,23 @@ histórico e as mensagens podem ser importados do celular.
 |---|---|---|
 | ![Mensagens](../images/ui/45d-telefone-mensagens.png) | ![Ligação](../images/ui/45e-telefone-ligacao.png) | ![Recebida](../images/ui/45f-telefone-chamada-recebida.png) |
 
-![Falar pelo FOSTON](../images/ui/45g-telefone-falar-pelo-foston.png)
+| Volume da ligação | Teclado (DTMF) |
+|---|---|
+| ![Volume](../images/ui/45h-telefone-volume.png) | ![Teclado](../images/ui/45i-telefone-teclado.png) |
+
+### Botões da ligação
+
+| Botão | O que faz |
+|---|---|
+| Silenciar | desliga o microfone do FOSTON (ADC do microfone, `0x80061108`); com a voz no FOSTON |
+| Teclado | teclas (DTMF, `AT+VTS`) |
+| Volume | −/+ de 1 a 10 (ganho da voz no FOSTON: 100 % + 30 % por nível; 5 = 250 %); com a voz no celular manda `AT+VGS` |
+| Nova chamada | abre o discador por cima da ligação ("Voltar à ligação" no canto); a nova chamada põe a atual em espera |
+| Em espera | `AT+CHLD=2`: põe em espera / retoma |
+| Gravar | grava as duas vozes (8 kHz, WAV) em `BigFoston/telefone/gravacoes/ligacao-AAAAMMDD-HHMMSS.wav`; aviso "Gravando no cartão" na tela; com a voz no FOSTON |
+| Falar pelo Celular / FOSTON | onde fica a voz |
+| Desligar / Atender | — |
+
 
 (Capturas do simulador, com nomes e números inventados.)
 

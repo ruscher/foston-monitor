@@ -370,6 +370,70 @@ static unsigned long served, bad;
  * (Y[+0x9A*2]) fica em ruído neste modo, então a ponte leva o anel ao lado do alto-falante,
  * alternando as metades — a versão aprovada pelo usuário numa ligação real. */
 #define BT_RX_RING 0x7400
+/* ganho da voz do celular em %: /data/bigfoston/voz-ganho (padrão 170; o usuário achou 100 baixo
+ * e 130 ainda baixo com o volume no máximo) */
+#define RX_GAIN_FILE "/data/bigfoston/voz-ganho"
+static int rx_gain = 250;               /* aprovado pelo usuário numa ligação real */
+
+/* Controle durante a ligação: /run/bfvoice.ctl ("mute=0|1 gain=N rec=CAMINHO|-"), escrito
+ * pelo bfphone e relido a cada 200 ms. */
+#define CTL_FILE "/run/bfvoice.ctl"
+static int muted;
+static FILE *rec;
+static char rec_path[200];
+static uint32_t rec_bytes;
+
+static void wav_header(FILE *f, uint32_t data)
+{
+    uint8_t h[44] = { 'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+                      0x40, 0x1f, 0, 0, 0x80, 0x3e, 0, 0, 2, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0 };
+    uint32_t riff = data + 36;
+    memcpy(h + 4, &riff, 4);
+    memcpy(h + 40, &data, 4);
+    fseek(f, 0, SEEK_SET);
+    fwrite(h, 1, sizeof h, f);
+    fseek(f, 0, SEEK_END);
+}
+
+static void rec_stop(void)
+{
+    if(!rec) return;
+    wav_header(rec, rec_bytes);
+    fclose(rec);
+    rec = NULL;
+    sync();
+}
+
+static void set_mute(int m)
+{
+    if(m == muted) return;
+    muted = m;
+    lo16(W_ANA, 0x108, m ? 0x0080 : 0x0000);     /* 0x80 desliga o ADC do microfone (medido) */
+}
+
+static void ctl_read(void)
+{
+    FILE *f = fopen(CTL_FILE, "r");
+    if(!f) return;
+    char l[300] = "";
+    if(!fgets(l, sizeof l, f)) l[0] = 0;
+    fclose(f);
+    int m = 0, g = rx_gain;
+    char r[220] = "-";
+    char *p;
+    if((p = strstr(l, "mute="))) m = atoi(p + 5);
+    if((p = strstr(l, "gain="))) { g = atoi(p + 5); if(g < 25 || g > 400) g = rx_gain; }
+    if((p = strstr(l, "rec="))) { sscanf(p + 4, "%219s", r); }
+    set_mute(m);
+    rx_gain = g;
+    if(r[0] == '-' && rec) rec_stop();
+    else if(r[0] == '/' && (!rec || strcmp(r, rec_path))) {
+        rec_stop();
+        umask(077);
+        rec = fopen(r, "wb");
+        if(rec) { snprintf(rec_path, sizeof rec_path, "%s", r); rec_bytes = 0; wav_header(rec, 0); }
+    }
+}
 static unsigned ring_n;
 
 static void serve_once(void)
@@ -380,7 +444,20 @@ static void serve_once(void)
         bad++;
     } else {
         uint32_t src = BT_RX_RING + (ring_n++ & 1) * 0x140;
-        for(uint32_t i = 0; i < wr; i += 2) w16(W_YM, off + 0x280 + i, r16(W_YM, src + i));
+        if(rec) {                                 /* gravação: voz do celular + microfone, 8 kHz */
+            int16_t mix[160];
+            int n = (int)(wr / 2);
+            for(int i = 0; i < n; i++) {
+                int a = (int16_t)r16(W_YM, src + 2 * i), b = muted ? 0 : (int16_t)r16(W_YM, off + 2 * i);
+                int v = (a + b) / 2;
+                mix[i] = (int16_t)v;
+            }
+            if(fwrite(mix, 2, (size_t)n, rec) == (size_t)n) rec_bytes += (uint32_t)n * 2;
+        }
+        for(uint32_t i = 0; i < wr; i += 2) {
+            int v = (int16_t)r16(W_YM, src + i) * rx_gain / 100;
+            w16(W_YM, off + 0x280 + i, (uint16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v));
+        }
         served++;
     }
     w16(W_MBOX, 0x0A, 0);
@@ -388,21 +465,25 @@ static void serve_once(void)
 
 static int run(void)
 {
+    FILE *gf = fopen(RX_GAIN_FILE, "r");
+    if(gf) { int g; if(fscanf(gf, "%d", &g) == 1 && g >= 25 && g <= 400) rx_gain = g; fclose(gf); }
     signal(SIGTERM, on_sig);
     signal(SIGINT, on_sig);
     signal(SIGHUP, on_sig);
     if(start()) { stop(); return 1; }
-    long last = now_ms();
+    long last = now_ms(), lastctl = 0;
     while(!quit) {
         serve_once();
         stall_us(1000);
         long t = now_ms();
+        if(t - lastctl >= 200) { lastctl = t; ctl_read(); }
         if(t - last >= 10000) {
             last = t;
             fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
         }
     }
     fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
+    rec_stop();
     return stop() ? 1 : 0;
 }
 

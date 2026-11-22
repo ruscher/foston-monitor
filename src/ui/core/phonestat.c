@@ -54,6 +54,9 @@ void ph_read(ph_info_t *p)
         else if(!strcmp(line, "sco")) p->sco = atoi(v);
         else if(!strcmp(line, "voice_foston")) p->voice_foston = atoi(v);
         else if(!strcmp(line, "voice_on")) p->voice_on = atoi(v);
+        else if(!strcmp(line, "mute")) p->mute = atoi(v);
+        else if(!strcmp(line, "rec")) p->rec = atoi(v);
+        else if(!strcmp(line, "vol")) p->vol = atoi(v);
         else if(!strcmp(line, "since")) p->since = (time_t)atol(v);
         else if(!strcmp(line, "sync")) snprintf(p->sync, sizeof p->sync, "%s", v);
         else if(!strcmp(line, "call") && p->ncall < PH_MAXCALLS) {

@@ -546,6 +546,11 @@ static void on_tab(lv_event_t *e)
 
 /* ------------------------------------------------------ painel da ligação */
 
+enum { ACT_MUTE, ACT_KEYS, ACT_VOL, ACT_NEW, ACT_HOLD, ACT_REC, NACT };
+static lv_obj_t *act_btn[NACT], *act_lbl[NACT], *cp_grid, *cp_volrow, *cp_vol, *cp_vrow, *cp_rec, *cp_back;
+static bool minimized;                    /* "Nova chamada": painel escondido, discador aberto */
+static char min_sig[256];
+
 static const ph_call_t *main_call(void)
 {
     const ph_call_t *m = NULL;
@@ -574,11 +579,114 @@ static void on_voice(lv_event_t *e)
     ph_cmd("voice %s", foston ? "foston" : "phone");
 }
 
-static void on_keys(lv_event_t *e)
+static void show_only(lv_obj_t *o)       /* grade, teclado ou volume: um de cada vez */
+{
+    lv_obj_t *all[] = { cp_grid, cp_dtmf, cp_volrow };
+    for(int i = 0; i < 3; i++) {
+        if(all[i] == o) lv_obj_remove_flag(all[i], LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(all[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void on_vol(lv_event_t *e)
+{
+    lv_obj_t *t = lv_event_get_target(e);
+    int v = cur.vol ? cur.vol : 5;
+    if(t == cp_vol) v = lv_slider_get_value(cp_vol);
+    else v += (intptr_t)lv_event_get_user_data(e);
+    if(v < 1) v = 1;
+    if(v > 10) v = 10;
+    lv_slider_set_value(cp_vol, v, LV_ANIM_OFF);
+    cur.vol = v;
+    ph_cmd("vol %d", v);
+}
+
+static void on_act(lv_event_t *e)
+{
+    int a = (int)(intptr_t)lv_event_get_user_data(e);
+    switch(a) {
+    case ACT_MUTE: ph_cmd("mute %d", cur.mute ? 0 : 1); break;
+    case ACT_KEYS: show_only(cp_dtmf); break;
+    case ACT_VOL: lv_slider_set_value(cp_vol, cur.vol ? cur.vol : 5, LV_ANIM_OFF); show_only(cp_volrow); break;
+    case ACT_HOLD: ph_cmd("hold"); break;
+    case ACT_REC: ph_cmd("record %d", cur.rec ? 0 : 1); break;
+    case ACT_NEW:                                  /* discador por cima da ligação */
+        minimized = true;
+        snprintf(min_sig, sizeof min_sig, "%s", call_sig);
+        lv_obj_add_flag(call_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(cp_back, LV_OBJ_FLAG_HIDDEN);
+        number[0] = 0;
+        tab = TAB_DIAL;
+        build_tab();
+        break;
+    }
+}
+
+static void on_back_to_call(lv_event_t *e)
 {
     (void)e;
-    if(lv_obj_has_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN)) lv_obj_remove_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN);
+    minimized = false;
+    lv_obj_add_flag(cp_back, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(call_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void on_sub_close(lv_event_t *e) { (void)e; show_only(cp_grid); }
+
+/* botão redondo com ícone e legenda */
+static lv_obj_t *action(lv_obj_t *grid, int a, const char *sym, bf_str_t label)
+{
+    lv_obj_t *col = bf_plain(grid);
+    lv_obj_set_size(col, 112, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(col, 2, 0);
+    lv_obj_t *b = bf_button(col, sym, NULL, 0);
+    lv_obj_set_size(b, 56, 56);
+    lv_obj_set_style_min_height(b, 0, 0);
+    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(b, 0, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(C_PHONE), LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(b, lv_color_white(), LV_STATE_CHECKED);
+    lv_obj_add_event_cb(b, on_act, LV_EVENT_CLICKED, (void *)(intptr_t)a);
+    if(!sym) {                                     /* Gravar: ponto vermelho desenhado */
+        lv_obj_t *dot = lv_obj_create(b);
+        lv_obj_remove_style_all(dot);
+        lv_obj_set_size(dot, 20, 20);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(dot, pal()->danger, 0);
+        lv_obj_center(dot);
+        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_t *l = bf_label(col, tr(label), BF_FONT_S, pal()->text_dim);
+    lv_obj_set_width(l, 112);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    act_btn[a] = b;
+    act_lbl[a] = l;
+    return b;
+}
+
+static void act_set(int a, bool enabled, bool checked)
+{
+    lv_obj_t *b = act_btn[a];
+    if(enabled) lv_obj_remove_state(b, LV_STATE_DISABLED);
+    else lv_obj_add_state(b, LV_STATE_DISABLED);
+    if(checked) lv_obj_add_state(b, LV_STATE_CHECKED);
+    else lv_obj_remove_state(b, LV_STATE_CHECKED);
+    lv_obj_set_style_opa(act_btn[a], enabled ? LV_OPA_COVER : LV_OPA_40, 0);
+    lv_obj_set_style_opa(act_lbl[a], enabled ? LV_OPA_COVER : LV_OPA_40, 0);
+}
+
+/* linha com o botão de fechar (volta à grade) */
+static lv_obj_t *sub_row(lv_obj_t *parent)
+{
+    lv_obj_t *r = bf_plain(parent);
+    lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(r, BF_SP_S, 0);
+    return r;
 }
 
 static void build_call_panel(void)
@@ -590,58 +698,105 @@ static void build_call_panel(void)
     lv_obj_remove_flag(call_panel, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_flex_flow(call_panel, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(call_panel, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(call_panel, BF_SP_S, 0);
+
+    /* esquerda: quem, estado, gravação, onde está a voz */
     lv_obj_t *left = bf_plain(call_panel);
-    lv_obj_set_size(left, 380, LV_SIZE_CONTENT);
+    lv_obj_set_size(left, 330, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(left, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(left, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(left, BF_SP_S, 0);
     page_round_icon(left, LV_SYMBOL_CALL, lv_color_hex(C_PHONE), 64);
     cp_name = bf_label(left, "", BF_FONT_L, p->text);
-    bf_label_ellipsis(cp_name, 370);
+    bf_label_ellipsis(cp_name, 320);
     lv_obj_set_style_text_align(cp_name, LV_TEXT_ALIGN_CENTER, 0);
     cp_num = bf_label(left, "", BF_FONT_M, p->text_dim);
     cp_state = bf_label(left, "", BF_FONT_M, lv_color_hex(C_PHONE));
+    cp_rec = bf_label(left, "\xE2\x80\xA2 ", BF_FONT_M, p->danger);
+    lv_obj_add_flag(cp_rec, LV_OBJ_FLAG_HIDDEN);
     cp_note = bf_label(left, tr(S_PH_VOICE_NOTE), BF_FONT_S, p->text_dim);
-    lv_obj_set_width(cp_note, 370);
+    lv_obj_set_width(cp_note, 320);
     lv_label_set_long_mode(cp_note, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(cp_note, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* direita: ações, falar pelo, atender/desligar */
     lv_obj_t *right = bf_plain(call_panel);
-    lv_obj_set_size(right, 340, LV_SIZE_CONTENT);
+    lv_obj_set_size(right, 380, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(right, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(right, BF_SP_S, 0);
-    lv_obj_t *vrow = bf_plain(right);
-    lv_obj_set_size(vrow, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(vrow, BF_SP_S, 0);
-    bf_label(vrow, tr(S_PH_TALK_ON), BF_FONT_S, p->text_dim);
-    cp_vphone = bf_button(vrow, NULL, tr(S_PH_TALK_PHONE), 0);
-    cp_vfoston = bf_button(vrow, NULL, "FOSTON", 0);
+
+    cp_grid = bf_plain(right);
+    lv_obj_set_size(cp_grid, 3 * 112 + 2 * BF_SP_S, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(cp_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_style_pad_column(cp_grid, BF_SP_S, 0);
+    lv_obj_set_style_pad_row(cp_grid, BF_SP_S, 0);
+    action(cp_grid, ACT_MUTE, LV_SYMBOL_MUTE, S_PH_ACT_MUTE);
+    action(cp_grid, ACT_KEYS, LV_SYMBOL_KEYBOARD, S_PH_KEYPAD);
+    action(cp_grid, ACT_VOL, LV_SYMBOL_VOLUME_MAX, S_PH_ACT_VOLUME);
+    action(cp_grid, ACT_NEW, LV_SYMBOL_PLUS, S_PH_ACT_NEW);
+    action(cp_grid, ACT_HOLD, LV_SYMBOL_PAUSE, S_PH_ACT_HOLD);
+    action(cp_grid, ACT_REC, NULL, S_PH_ACT_REC);
+
+    /* teclado (DTMF) e volume, no lugar da grade */
+    cp_dtmf = bf_plain(right);
+    lv_obj_set_size(cp_dtmf, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(cp_dtmf, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cp_dtmf, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(cp_dtmf, BF_SP_S, 0);
+    keypad(cp_dtmf, on_dtmf, 84, 36);
+    lv_obj_t *kc = bf_button(cp_dtmf, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_size(kc, 48, 48);
+    lv_obj_add_event_cb(kc, on_sub_close, LV_EVENT_CLICKED, NULL);
+    cp_volrow = sub_row(right);
+    lv_obj_t *vm = bf_button(cp_volrow, LV_SYMBOL_MINUS, NULL, 0);
+    lv_obj_set_size(vm, 52, 52);
+    lv_obj_add_event_cb(vm, on_vol, LV_EVENT_CLICKED, (void *)(intptr_t)-1);
+    cp_vol = lv_slider_create(cp_volrow);
+    lv_slider_set_range(cp_vol, 1, 10);
+    lv_obj_set_width(cp_vol, 130);
+    lv_obj_set_style_bg_color(cp_vol, lv_color_hex(C_PHONE), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(cp_vol, lv_color_hex(C_PHONE), LV_PART_KNOB);
+    lv_obj_add_event_cb(cp_vol, on_vol, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_t *vp = bf_button(cp_volrow, LV_SYMBOL_PLUS, NULL, 0);
+    lv_obj_set_size(vp, 52, 52);
+    lv_obj_add_event_cb(vp, on_vol, LV_EVENT_CLICKED, (void *)(intptr_t)1);
+    lv_obj_t *vc = bf_button(cp_volrow, LV_SYMBOL_OK, NULL, 0);
+    lv_obj_set_size(vc, 52, 52);
+    lv_obj_add_event_cb(vc, on_sub_close, LV_EVENT_CLICKED, NULL);
+    show_only(cp_grid);
+
+    /* falar pelo celular | FOSTON */
+    cp_vrow = sub_row(right);
+    bf_label(cp_vrow, tr(S_PH_TALK_ON), BF_FONT_S, p->text_dim);
+    cp_vphone = bf_button(cp_vrow, LV_SYMBOL_CALL, tr(S_PH_TALK_PHONE), 0);
+    cp_vfoston = bf_button(cp_vrow, LV_SYMBOL_AUDIO, "FOSTON", 0);
     for(lv_obj_t *b = cp_vphone; b; b = b == cp_vphone ? cp_vfoston : NULL) {
-        lv_obj_set_size(b, 112, 48);
+        lv_obj_set_size(b, 124, 44);
         lv_obj_set_style_min_height(b, 0, 0);
         lv_obj_set_style_bg_color(b, lv_color_hex(C_PHONE), LV_STATE_CHECKED);
         lv_obj_set_style_text_color(b, lv_color_white(), LV_STATE_CHECKED);
         lv_obj_add_event_cb(b, on_voice, LV_EVENT_CLICKED, b == cp_vfoston ? (void *)1 : NULL);
     }
-    cp_dtmf = keypad(right, on_dtmf, 96, 44);
-    lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_t *btns = bf_plain(right);
-    lv_obj_set_size(btns, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(btns, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(btns, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(btns, BF_SP_S, 0);
+
+    /* atender / desligar */
+    lv_obj_t *btns = sub_row(right);
     cp_answer = bf_button(btns, LV_SYMBOL_CALL, tr(S_PH_ANSWER), 1);
-    lv_obj_set_size(cp_answer, 150, 64);
+    lv_obj_set_size(cp_answer, 170, 56);
     lv_obj_set_style_bg_color(cp_answer, lv_color_hex(C_PHONE), 0);
     lv_obj_add_event_cb(cp_answer, on_answer, LV_EVENT_CLICKED, NULL);
     lv_obj_t *hang = bf_button(btns, LV_SYMBOL_CLOSE, tr(S_PH_HANGUP), 2);
-    lv_obj_set_size(hang, 150, 64);
+    lv_obj_set_size(hang, 170, 56);
     lv_obj_add_event_cb(hang, on_hangup, LV_EVENT_CLICKED, NULL);
-    cp_keys = bf_button(btns, LV_SYMBOL_KEYBOARD, NULL, 0);
-    lv_obj_set_size(cp_keys, 64, 64);
-    lv_obj_add_event_cb(cp_keys, on_keys, LV_EVENT_CLICKED, NULL);
+    cp_keys = hang;                                /* compatibilidade: não usado */
+
+    /* "voltar à ligação" (com a ligação minimizada para fazer outra) */
+    cp_back = bf_button(root, LV_SYMBOL_CALL, tr(S_PH_BACK_TO_CALL), 1);
+    lv_obj_add_flag(cp_back, LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(cp_back, lv_color_hex(C_PHONE), 0);
+    lv_obj_set_size(cp_back, 230, 52);
+    lv_obj_align(cp_back, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_add_event_cb(cp_back, on_back_to_call, LV_EVENT_CLICKED, NULL);
 }
 
 static void update_call(void)
@@ -656,23 +811,45 @@ static void update_call(void)
     bool changed = strcmp(sig, call_sig) != 0;
     snprintf(call_sig, sizeof call_sig, "%s", sig);
     if(!c) {
+        minimized = false;
+        lv_obj_add_flag(cp_back, LV_OBJ_FLAG_HIDDEN);
         if(!lv_obj_has_flag(call_panel, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_add_flag(call_panel, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN);
+            show_only(cp_grid);
             if(tab == TAB_RECENTS) build_tab();           /* a ligação entra no histórico do celular */
         }
         return;
     }
-    if(changed) {
+    /* minimizada: volta sozinha quando as chamadas mudam (a nova chamada aparece) */
+    if(minimized && strcmp(sig, min_sig)) { minimized = false; lv_obj_add_flag(cp_back, LV_OBJ_FLAG_HIDDEN); }
+    if(minimized) return;
+    if(changed || lv_obj_has_flag(call_panel, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_remove_flag(call_panel, LV_OBJ_FLAG_HIDDEN);
         kb_close(NULL);
         set_text(cp_name, c->name[0] ? c->name : c->num[0] ? c->num : tr(S_PH_UNKNOWN));
         set_text(cp_num, c->name[0] ? c->num : "");
-        if(c->stat == PH_INCOMING || c->stat == PH_WAITING) lv_obj_remove_flag(cp_answer, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(cp_answer, LV_OBJ_FLAG_HIDDEN);
-        if(c->stat == PH_ACTIVE) lv_obj_remove_flag(cp_keys, LV_OBJ_FLAG_HIDDEN);
-        else { lv_obj_add_flag(cp_keys, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN); }
     }
+    bool ringing = c->stat == PH_INCOMING || c->stat == PH_WAITING;
+    if(ringing) { lv_obj_remove_flag(cp_answer, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(cp_grid, LV_OBJ_FLAG_HIDDEN); }
+    else {
+        lv_obj_add_flag(cp_answer, LV_OBJ_FLAG_HIDDEN);
+        if(lv_obj_has_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN) && lv_obj_has_flag(cp_volrow, LV_OBJ_FLAG_HIDDEN))
+            lv_obj_remove_flag(cp_grid, LV_OBJ_FLAG_HIDDEN);
+    }
+    bool active = c->stat == PH_ACTIVE, held = c->stat == PH_HELD;
+    if(!active && !lv_obj_has_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN)) show_only(cp_grid);
+    act_set(ACT_MUTE, cur.voice_on, cur.mute);
+    act_set(ACT_KEYS, active, false);
+    act_set(ACT_VOL, true, false);
+    act_set(ACT_NEW, active || held, false);
+    act_set(ACT_HOLD, active || held, held);
+    act_set(ACT_REC, cur.voice_on, cur.rec);
+    if(cur.rec) {
+        lv_obj_remove_flag(cp_rec, LV_OBJ_FLAG_HIDDEN);
+        char r[64];
+        snprintf(r, sizeof r, "\xE2\x80\xA2 %s", tr(S_PH_RECORDING));
+        set_text(cp_rec, r);
+    } else lv_obj_add_flag(cp_rec, LV_OBJ_FLAG_HIDDEN);
     /* escolha da voz: marca a opção atual */
     bool on_foston = !cur.voice_phone && cur.voice_foston;     /* escolhido (o DSP liga com o canal de voz) */
     if(on_foston) { lv_obj_add_state(cp_vfoston, LV_STATE_CHECKED); lv_obj_remove_state(cp_vphone, LV_STATE_CHECKED); }
@@ -812,6 +989,9 @@ const bf_screen_def_t scr_phone_def = { create, destroy, S_APP_PHONE, NULL };
 void scr_phone_demo(int t)
 {
     if(t == 10 && cp_vfoston) { lv_obj_send_event(cp_vfoston, LV_EVENT_CLICKED, NULL); return; }
+    if(t == 11 && act_btn[ACT_VOL]) { lv_obj_send_event(act_btn[ACT_VOL], LV_EVENT_CLICKED, NULL); return; }
+    if(t == 12 && act_btn[ACT_KEYS]) { lv_obj_send_event(act_btn[ACT_KEYS], LV_EVENT_CLICKED, NULL); return; }
+    if(t == 13 && cp_grid) { show_only(cp_grid); return; }
     if(t < 0 || t >= NTABS || !root) return;
     tab = t;
     build_tab();

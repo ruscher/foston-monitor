@@ -20,6 +20,8 @@ typedef struct {
     bool voice_phone, sco;
     bool voice_foston;                /* o FOSTON já sabe fazer a voz da ligação */
     bool voice_on;                    /* voz da ligação no FOSTON agora (DSP ligado) */
+    bool mute, rec;                   /* microfone do FOSTON mudo; gravando a ligação */
+    int vol;                          /* volume da ligação 1-10 */
     ph_call_t call[PH_MAXCALLS];
     int ncall;
     time_t since;                     /* início da ligação ativa (0 = nenhuma) */
