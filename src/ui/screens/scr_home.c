@@ -41,6 +41,7 @@ static const app_t apps[] = {
     { &bf_icon_monitor,    S_APP_MONITOR,    0x26a269, SCR_MONITOR, 0 },
     { &bf_icon_settings,   S_APP_SETTINGS,   0x6c7383, SCR_SETTINGS, 0 },
     { &bf_icon_gallery,    S_APP_GALLERY,    0xd6409f, SCR_GALLERY, 0 },
+    { &bf_icon_phone,      S_APP_PHONE,      0x2ec27e, SCR_PHONE, 0 },
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8

@@ -24,6 +24,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_MAP] = &scr_map_def,
     [SCR_PERF] = &scr_perf_def,
     [SCR_BLUETOOTH] = &scr_bluetooth_def,
+    [SCR_PHONE] = &scr_phone_def,
 };
 
 static lv_obj_t *content;

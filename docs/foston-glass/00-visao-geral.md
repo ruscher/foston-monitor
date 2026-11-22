@@ -51,7 +51,7 @@ Tudo dentro do shell LVGL existente; nenhum processo ou serviço novo.
   busca na faixa pelo toque. Celular: título, artista, tempo e estado do AVRCP, ícone do
   Bluetooth no lugar da capa (o celular não manda a imagem), sem busca na faixa.
 - **Dock:** GPS (Big GPS), Rádio (página honesta: nenhum receptor de rádio identificado no FOSTON),
-  Apps (grade com todos os aplicativos), Bluetooth, TV (página de disponibilidade).
+  Apps (grade com todos os aplicativos), Bluetooth, Telefone (docs/phone; a TV fica na grade Apps).
 
 ## Desempenho (FOSTON, shell compilado pelo Buildroot)
 
@@ -74,7 +74,7 @@ Sem desfoque nem sombras: o vidro é transparência simples e degradê vertical.
 ## Limitações
 
 - Barras de sinal do Bluetooth: não mostradas (sem RSSI de uma conexão ativa).
-- Rádio e TV: dependem de hardware ainda não suportado.
+- Rádio e TV (na grade Apps): dependem de hardware ainda não suportado.
 - O papel de parede da referência (estrada e montanhas) não foi incluído: é preciso um arquivo
   com direito de redistribuição; qualquer imagem pode ser escolhida em Aparência > Papel de parede.
 - Voltar para a 0.2.0 (`BigFoston/recuperacao`): ela não conhece o modo 3 e o lê como Quiosque;

@@ -3,12 +3,14 @@
  *   bfpbap ENDERECO CANAL REPOSITORIO SAIDA.tsv
  *
  * REPOSITORIO: pb (agenda), ich (recebidas), och (feitas), mch (perdidas), cch (todas);
- * "sim1/pb" etc. para o chip. CANAL: canal RFCOMM do PBAP do celular (registro SDP 0x112F).
+ * "sim1/pb" etc. para o chip; msg/inbox e msg/sent: lista de mensagens (SMS) pelo MAP.
+ * CANAL: canal RFCOMM do serviço no celular; 0 = descobrir pelo SDP (PBAP 0x112F, MAP 0x1132).
  *
  * Pede vCard 3.0 só com os campos usados (sem fotos) e grava um TSV (UTF-8, uma linha por
  * contato/chamada; tabulações e quebras dos valores viram espaço):
  *   agenda:    nome \t telefones (tipo:número separados por ;) \t e-mail \t empresa
  *   histórico: tipo (R/F/P) \t nome \t número \t data e hora (AAAAMMDDTHHMMSS)
+ *   mensagens: lida (0/1) \t data e hora \t nome \t número \t início do texto \t identificador
  * Grava em SAIDA.tsv.tmp e renomeia no fim. Imprime "ok N" (registros) ou "erro motivo".
  * O celular pede autorização ao usuário na primeira vez (Android: "Permitir acesso aos
  * contatos"); sem ela o GET é recusado (0xC3 Forbidden).
@@ -27,12 +29,17 @@
 #include <unistd.h>
 
 #define AF_BT 31
+#define BTPROTO_L2CAP 0
 #define BTPROTO_RFCOMM 3
 struct sockaddr_rc { unsigned short family; uint8_t bdaddr[6]; uint8_t channel; };
+struct sockaddr_l2 { unsigned short family; unsigned short psm; uint8_t bdaddr[6]; unsigned short cid; uint8_t type; };
 
 #define MAXPKT 32767
 static const uint8_t PBAP_TARGET[16] = { 0x79, 0x61, 0x35, 0xf0, 0xf0, 0xc5, 0x11, 0xd8,
                                          0x09, 0x66, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66 };
+static const uint8_t MAP_TARGET[16] = { 0xbb, 0x58, 0x2b, 0x40, 0x42, 0x0c, 0x11, 0xdb,
+                                        0xb0, 0xde, 0x08, 0x00, 0x20, 0x0c, 0x9a, 0x66 };
+static const uint8_t *target = PBAP_TARGET;
 static int sk = -1;
 static uint8_t cid[4];
 static int have_cid;
@@ -81,16 +88,22 @@ static int hdr(uint8_t *p, uint8_t id, const void *data, int n)
     return n + 3;
 }
 
+static int obex_code;
+
 static int obex_connect(void)
 {
     uint8_t c[64];
     int n = 7;
     c[0] = 0x80; c[3] = 0x10; c[4] = 0; c[5] = 0x7f; c[6] = 0xff;
-    n += hdr(c + n, 0x46, PBAP_TARGET, 16);
+    n += hdr(c + n, 0x46, target, 16);
+    if(target == MAP_TARGET) {                     /* MAP 1.2+: MapSupportedFeatures do cliente */
+        static const uint8_t feat[] = { 0x29, 4, 0x00, 0x00, 0x00, 0x1f };
+        n += hdr(c + n, 0x4c, feat, sizeof feat);
+    }
     c[1] = (uint8_t)(n >> 8); c[2] = (uint8_t)n;
     if(!send_all(c, n)) return 0;
     int len = recv_pkt(15000);
-    if(len < 7 || pkt[0] != 0xa0) return 0;
+    if(len < 7 || pkt[0] != 0xa0) { obex_code = len >= 1 ? pkt[0] : -1; return 0; }
     for(int i = 7; i < len;) {
         uint8_t id = pkt[i];
         if(id == 0xcb && i + 5 <= len) { memcpy(cid, pkt + i + 1, 4); have_cid = 1; i += 5; }
@@ -253,27 +266,204 @@ static int pull(const char *repo)
     return -1;
 }
 
+/* ------------------------------------------------------------------ SDP */
+
+/* canal RFCOMM do serviço uuid16 no celular: ServiceSearchAttributeRequest pela
+ * ProtocolDescriptorList (0x0004) e procura "UUID16 0x0003 (RFCOMM), uint8 canal" */
+static int sdp_channel(const uint8_t bd[6], unsigned uuid)
+{
+    int s = socket(AF_BT, SOCK_SEQPACKET | SOCK_CLOEXEC, BTPROTO_L2CAP);
+    if(s < 0) return -1;
+    struct sockaddr_l2 a = { AF_BT, 1, { 0 }, 0, 0 };      /* PSM 1 = SDP (little-endian) */
+    memcpy(a.bdaddr, bd, 6);
+    if(connect(s, (struct sockaddr *)&a, sizeof a) < 0) { close(s); return -1; }
+    uint8_t q[] = { 0x06, 0x00, 0x01, 0x00, 0x0f,
+                    0x35, 0x03, 0x19, (uint8_t)(uuid >> 8), (uint8_t)uuid,   /* padrão de busca */
+                    0x01, 0x00,                                              /* até 256 bytes */
+                    0x35, 0x05, 0x0a, 0x00, 0x04, 0x00, 0x04,                /* atributo 0x0004 */
+                    0x00 };                                                  /* sem continuação */
+    int ch = -1;
+    if(write(s, q, sizeof q) == (ssize_t)sizeof q) {
+        struct pollfd p = { s, POLLIN, 0 };
+        uint8_t r[1024];
+        ssize_t n = poll(&p, 1, 10000) > 0 ? read(s, r, sizeof r) : -1;
+        if(n > 7 && r[0] == 0x07)
+            for(ssize_t i = 7; i + 4 < n; i++)
+                if(r[i] == 0x19 && r[i + 1] == 0x00 && r[i + 2] == 0x03 && r[i + 3] == 0x08) { ch = r[i + 4]; break; }
+    }
+    close(s);
+    return ch;
+}
+
+/* ------------------------------------------------------------------ MAP */
+
+static int setpath(const char *dir)
+{
+    uint8_t r[256];
+    int n = 5;
+    r[0] = 0x85; r[3] = 0x02; r[4] = 0x00;                 /* não criar a pasta */
+    if(have_cid) { r[n++] = 0xcb; memcpy(r + n, cid, 4); n += 4; }
+    uint8_t u16[128];
+    int ul = 0;
+    for(const char *c = dir; *c && ul < 120; c++) { u16[ul++] = 0; u16[ul++] = (uint8_t)*c; }
+    u16[ul++] = 0; u16[ul++] = 0;
+    n += hdr(r + n, 0x01, u16, ul);
+    r[1] = (uint8_t)(n >> 8); r[2] = (uint8_t)n;
+    if(!send_all(r, n)) return -1;
+    int len = recv_pkt(15000);
+    return len >= 3 && pkt[0] == 0xa0 ? 0 : (len >= 3 ? pkt[0] : -1);
+}
+
+static char *xml;
+static size_t xml_len, xml_cap;
+
+static void xml_feed(const uint8_t *b, int n)
+{
+    if(xml_len + (size_t)n + 1 > xml_cap) {
+        size_t c = xml_cap ? xml_cap * 2 : 65536;
+        while(c < xml_len + (size_t)n + 1) c *= 2;
+        if(c > 4u << 20) return;                             /* lista absurda: ignora o resto */
+        char *x = realloc(xml, c);
+        if(!x) return;
+        xml = x; xml_cap = c;
+    }
+    memcpy(xml + xml_len, b, (size_t)n);
+    xml_len += (size_t)n;
+    xml[xml_len] = 0;
+}
+
+/* valor do atributo name="..." de um elemento, com as entidades XML desfeitas */
+static void attr(const char *el, const char *name, char *out_, size_t on)
+{
+    out_[0] = 0;
+    char pat[40];
+    snprintf(pat, sizeof pat, " %s=\"", name);
+    const char *p = strstr(el, pat);
+    if(!p) return;
+    p += strlen(pat);
+    size_t o = 0;
+    for(; *p && *p != '"' && o + 4 < on; p++) {
+        if(*p != '&') { out_[o++] = *p; continue; }
+        const char *semi = strchr(p, ';');
+        if(!semi || semi - p > 8) { out_[o++] = *p; continue; }
+        unsigned cp = 0;
+        if(!strncmp(p, "&amp;", 5)) cp = '&';
+        else if(!strncmp(p, "&lt;", 4)) cp = '<';
+        else if(!strncmp(p, "&gt;", 4)) cp = '>';
+        else if(!strncmp(p, "&quot;", 6)) cp = '"';
+        else if(!strncmp(p, "&apos;", 6)) cp = '\'';
+        else if(p[1] == '#') cp = (unsigned)(p[2] == 'x' ? strtoul(p + 3, NULL, 16) : strtoul(p + 2, NULL, 10));
+        if(!cp) { out_[o++] = *p; continue; }
+        if(cp < 0x80) out_[o++] = (char)cp;                  /* UTF-8 */
+        else if(cp < 0x800) { out_[o++] = (char)(0xc0 | cp >> 6); out_[o++] = (char)(0x80 | (cp & 0x3f)); }
+        else { out_[o++] = (char)(0xe0 | (cp >> 12 & 0x0f)); out_[o++] = (char)(0x80 | (cp >> 6 & 0x3f)); out_[o++] = (char)(0x80 | (cp & 0x3f)); }
+        p = semi;
+    }
+    out_[o] = 0;
+    clean(out_);
+}
+
+static void emit_listing(void)
+{
+    if(!xml) return;
+    for(char *el = strstr(xml, "<msg "); el && records < 20000; el = strstr(el + 5, "<msg ")) {
+        char *end = strchr(el, '>');
+        if(!end) break;
+        *end = 0;
+        char h[40], subj[320], when[32], name[160], addr[64], rd[8];
+        attr(el, "handle", h, sizeof h);
+        attr(el, "subject", subj, sizeof subj);
+        attr(el, "datetime", when, sizeof when);
+        attr(el, "sender_name", name, sizeof name);
+        attr(el, "sender_addressing", addr, sizeof addr);
+        attr(el, "read", rd, sizeof rd);
+        if(!addr[0]) {                                       /* enviadas: o destinatário */
+            attr(el, "recipient_name", name, sizeof name);
+            attr(el, "recipient_addressing", addr, sizeof addr);
+        }
+        fprintf(out, "%d\t%s\t%s\t%s\t%s\t%s\n", !strcasecmp(rd, "yes"), when, name, addr, subj, h);
+        records++;
+        *end = '>';
+    }
+}
+
+/* lista de mensagens de uma pasta (inbox, sent) */
+static int pull_msgs(const char *folder)
+{
+    int rc;
+    if((rc = setpath("telecom")) || (rc = setpath("msg"))) return rc;
+    uint8_t r[512];
+    int n = 3;
+    r[0] = 0x83;
+    if(have_cid) { r[n++] = 0xcb; memcpy(r + n, cid, 4); n += 4; }
+    uint8_t u16[64];
+    int ul = 0;
+    for(const char *c = folder; *c && ul < 56; c++) { u16[ul++] = 0; u16[ul++] = (uint8_t)*c; }
+    u16[ul++] = 0; u16[ul++] = 0;
+    n += hdr(r + n, 0x01, u16, ul);
+    static const char type[] = "x-bt/MAP-msg-listing";
+    n += hdr(r + n, 0x42, type, sizeof type);
+    uint8_t ap[] = { 0x01, 2, 0x00, 0xc8,                    /* MaxListCount 200 */
+                     0x13, 1, 0xff };                        /* SubjectLength 255 */
+    n += hdr(r + n, 0x4c, ap, sizeof ap);
+    r[1] = (uint8_t)(n >> 8); r[2] = (uint8_t)n;
+    for(int round = 0; round < 100000; round++) {
+        if(!send_all(r, n)) return -1;
+        int len = recv_pkt(30000);
+        if(len < 3) return -1;
+        uint8_t code = pkt[0];
+        if(code != 0x90 && code != 0xa0) return code;
+        for(int i = 3; i + 2 < len;) {
+            uint8_t id = pkt[i];
+            if((id & 0xc0) == 0xc0) { i += 5; continue; }
+            if((id & 0xc0) == 0x80) { i += 2; continue; }
+            int l = pkt[i + 1] << 8 | pkt[i + 2];
+            if(l < 3 || i + l > len) break;
+            if(id == 0x48 || id == 0x49) xml_feed(pkt + i + 3, l - 3);
+            i += l;
+        }
+        if(code == 0xa0) { emit_listing(); return 0; }
+        n = 3;
+        r[0] = 0x83;
+        if(have_cid) { r[n++] = 0xcb; memcpy(r + n, cid, 4); n += 4; }
+        r[1] = (uint8_t)(n >> 8); r[2] = (uint8_t)n;
+    }
+    return -1;
+}
+
 int main(int argc, char **argv)
 {
-    if(argc < 5) { fprintf(stderr, "uso: bfpbap ENDERECO CANAL pb|ich|och|mch|cch SAIDA.tsv\n"); return 2; }
+    if(argc < 5) { fprintf(stderr, "uso: bfpbap ENDERECO CANAL(0=SDP) pb|ich|och|mch|cch|msg/inbox|msg/sent SAIDA.tsv\n"); return 2; }
     unsigned v[6];
     if(sscanf(argv[1], "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return 2;
     signal(SIGPIPE, SIG_IGN);
     pkt = malloc(MAXPKT + 1);
     if(!pkt) return 1;
     const char *repo = argv[3];
-    is_history = strcmp(repo, "pb") && strcmp(repo, "sim1/pb");
+    int is_msg = !strncmp(repo, "msg/", 4);
+    is_history = !is_msg && strcmp(repo, "pb") && strcmp(repo, "sim1/pb");
+    if(is_msg) target = MAP_TARGET;
+    uint8_t bd[6];
+    for(int i = 0; i < 6; i++) bd[i] = (uint8_t)v[5 - i];
+    int ch = atoi(argv[2]);
+    if(ch <= 0) ch = sdp_channel(bd, is_msg ? 0x1132 : 0x112f);
+    if(ch <= 0 || ch > 30) { printf("erro sdp\n"); return 1; }
     sk = socket(AF_BT, SOCK_STREAM | SOCK_CLOEXEC, BTPROTO_RFCOMM);
     if(sk < 0) { printf("erro socket\n"); return 1; }
-    struct sockaddr_rc a = { AF_BT, { 0 }, (uint8_t)atoi(argv[2]) };
-    for(int i = 0; i < 6; i++) a.bdaddr[i] = (uint8_t)v[5 - i];
+    struct sockaddr_rc a = { AF_BT, { 0 }, (uint8_t)ch };
+    memcpy(a.bdaddr, bd, 6);
     if(connect(sk, (struct sockaddr *)&a, sizeof a) < 0) { printf("erro conexao %d\n", errno); return 1; }
-    if(!obex_connect()) { printf("erro obex\n"); return 1; }
+    if(!obex_connect()) {
+        if(obex_code == 0xc3) printf("erro negado\n");
+        else if(obex_code == 0xd3) printf("erro indisponivel\n");   /* Android: acesso não permitido */
+        else printf("erro obex %d\n", obex_code);
+        return 1;
+    }
     char tmp[512];
     snprintf(tmp, sizeof tmp, "%s.tmp", argv[4]);
     out = fopen(tmp, "w");
     if(!out) { printf("erro arquivo %d\n", errno); return 1; }
-    int rc = pull(repo);
+    int rc = is_msg ? pull_msgs(repo + 4) : pull(repo);
     fclose(out);
     close(sk);
     if(rc != 0) {

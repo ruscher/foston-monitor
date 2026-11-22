@@ -2,7 +2,7 @@
  *
  * Cartões de vidro sobre o papel de parede (configuração global): relógio e data, Conexão
  * (Bluetooth e GPS reais), player da fonte ativa da Multimídia (cartão ou celular) e o dock com
- * GPS, Rádio, Apps, Bluetooth e TV. A navegação (Voltar, Início, Recentes, Ajustes) e o status
+ * GPS, Rádio, Apps, Bluetooth e Telefone (a TV fica na grade Apps). A navegação (Voltar, Início, Recentes, Ajustes) e o status
  * ficam na barra superior (widgets/topbar.c). Geometria em 800x480: conteúdo de y = 48 a 480.
  *
  * Desempenho: objetos criados uma vez; os timers só trocam textos e valores que mudaram (um
@@ -427,7 +427,7 @@ static void dock_click(lv_event_t *e)
     case 1: nav_go(SCR_FEATURE, FEAT_RADIO); break;
     case 2: nav_go(SCR_HOME, HOME_ARG_APPS); break;
     case 3: nav_go(SCR_BLUETOOTH, 0); break;
-    case 4: nav_go(SCR_FEATURE, FEAT_TV); break;
+    case 4: nav_go(SCR_PHONE, 0); break;
     }
 }
 
@@ -466,7 +466,7 @@ static void dock(lv_obj_t *p)
         { &bf_icon_fm, S_GL_RADIO, GL_LAVENDER, GL_LAVBLUE },
         { NULL, S_GL_APPS, GL_SKY, GL_BLUE },
         { &bf_icon_bluetooth, S_APP_BLUETOOTH, GL_LIGHT, GL_BLUE },
-        { &bf_icon_tv, S_APP_TV, GL_LAVENDER, GL_LAVBLUE },
+        { &bf_icon_phone, S_APP_PHONE, GL_LAVENDER, GL_LAVBLUE },
     };
     static const int cx[5] = { 85, 231, 376, 521, 667 };
     for(int i = 0; i < 5; i++) {

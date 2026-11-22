@@ -38,6 +38,7 @@ ICONS = [
     ("plug",       0xF1E6),  # plug (carregador)
     ("sdcard",     0xF7C2),  # sd-card
     ("gallery",    0xF302),  # images
+    ("phone",      0xF095),  # phone (Telefone)
 ]
 
 

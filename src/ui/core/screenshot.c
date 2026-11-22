@@ -32,6 +32,7 @@ int screenshot_run(const char *dir)
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/stat.h>
 
 static lv_display_t *disp;
 static uint8_t *fb;
@@ -270,6 +271,57 @@ int screenshot_run(const char *dir)
             dialog_close_all();
             unlink(bp);
             unsetenv("BIGFOSTON_BT_STATUS");
+            go(SCR_HOME, 0); pump(100);
+        }
+    }
+    {   /* Telefone com dados inventados (nomes e números fictícios) */
+        char pp[300], dd[300], f[400];
+        data_path(pp, sizeof pp, "phone-demo-status");
+        data_path(dd, sizeof dd, "phone-demo");
+        mkdir(dd, 0700);
+        static const char *const files[][2] = {
+            { "contatos.tsv", "Ana Souza\tcel:+55 11 90000-0001;casa:+55 11 3000-0001\tana@exemplo.org\t\n"
+                              "Bruno Lima\tcel:+55 21 90000-0002\t\tOficina\n"
+                              "Carla Mendes\tcel:+55 31 90000-0003\t\t\n"
+                              "Diego Rocha\ttrabalho:+55 41 3000-0004\t\tTransportes\n"
+                              "Elisa Martins\tcel:+55 51 90000-0005\t\t\n" },
+            { "historico.tsv", "R\tAna Souza\t+55 11 90000-0001\t20261122T141200\n"
+                               "P\t\t+55 61 90000-0009\t20261122T120500\n"
+                               "F\tBruno Lima\t+55 21 90000-0002\t20261121T183000\n" },
+            { "mensagens.tsv", "0\t20261122T143000\tAna Souza\t+55 11 90000-0001\tChego em 20 minutos, pode deixar o portão aberto?\t1\n"
+                               "1\t20261122T090000\tCarla Mendes\t+55 31 90000-0003\tBom dia! A reunião foi para as 15h.\t2\n" },
+            { "enviadas.tsv", "1\t20261122T143500\tAna Souza\t+55 11 90000-0001\tCombinado!\t3\n" },
+            { "sincronizado", "1795350000\n" },
+        };
+        for(size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
+            snprintf(f, sizeof f, "%s/%s", dd, files[i][0]);
+            FILE *o = fopen(f, "w");
+            if(o) { fputs(files[i][1], o); fclose(o); }
+        }
+        FILE *pf = fopen(pp, "w");
+        if(pf) {
+            fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\noperator=Operadora\nsignal=4\nbattery=3\n"
+                        "service=1\nvoice=phone\nsco=0\nsync=ok\n", dd);
+            fclose(pf);
+            setenv("BIGFOSTON_PHONE_STATUS", pp, 1);
+            go(SCR_PHONE, 0); pump(300); shot("45-telefone-discador");
+            scr_phone_demo(1); pump(300); shot("45b-telefone-contatos");
+            scr_phone_demo(2); pump(300); shot("45c-telefone-recentes");
+            scr_phone_demo(3); pump(300); shot("45d-telefone-mensagens");
+            pf = fopen(pp, "a");
+            if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\n", (long)time(NULL) - 83); fclose(pf); }
+            pump(800); shot("45e-telefone-ligacao");
+            go(SCR_HOME, 0); pump(100);
+            pf = fopen(pp, "w");
+            if(pf) {
+                fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\nsignal=4\nbattery=3\nservice=1\n"
+                            "call=1|1|4|+55 21 90000-0002|Bruno Lima\nsync=ok\n", dd);
+                fclose(pf);
+            }
+            pump(1300); shot("45f-telefone-chamada-recebida");
+            dialog_close_all();
+            unlink(pp);
+            unsetenv("BIGFOSTON_PHONE_STATUS");
             go(SCR_HOME, 0); pump(100);
         }
     }
