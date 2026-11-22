@@ -633,6 +633,16 @@ int bgr_route(bgr_pack_t *p, const bgr_snap_t *src, int nsrc, const bgr_snap_t *
         out->src_frac = src[si_].frac;
         out->dst_frac = dst[di_].frac;
         rc = 0;
+        /* "sem pedágio" pack: each toll arc entered through the hierarchy carried the
+         * penalty; the time shown is the real one (the source and target parts are timed
+         * from ARC_TIME, which has no penalty) */
+        if ((p->h.flags & BGR_F_TOLLPEN) && p->h.reserved[0]) {
+            int last = nm ? path.n - 2 : path.n - 1;
+            uint64_t pen = 0;
+            for (int i = 1; i <= last; i++)
+                if (bgr_way_info(p, bgr_arc_way(p, path.v[i])) >> 8 & BGR_WF_TOLL) pen += p->h.reserved[0];
+            out->time_ds = pen < out->time_ds ? out->time_ds - (uint32_t)pen : 0;
+        }
     }
     if (rc == 0) {
         out->arcs = path.v;
@@ -644,6 +654,8 @@ int bgr_route(bgr_pack_t *p, const bgr_snap_t *src, int nsrc, const bgr_snap_t *
         if (out->narcs == 1) len = part(lf, out->dst_frac - out->src_frac);
         else len -= part(lf, out->src_frac) + part(ll, 65536 - out->dst_frac);
         out->len_dm = (uint32_t)len;
+        for (int i = 0; i < out->narcs; i++)
+            if (bgr_way_info(p, bgr_arc_way(p, out->arcs[i])) >> 8 & BGR_WF_TOLL) out->toll_arcs++;
     }
 done:
     free(vt.t);
@@ -656,6 +668,8 @@ done:
     st->us = now_us() - t0;
     return rc;
 }
+
+int bgr_avoids_toll(const bgr_pack_t *p) { return (p->h.flags & BGR_F_TOLLPEN) != 0; }
 
 void bgr_route_free(bgr_route_t *r)
 {

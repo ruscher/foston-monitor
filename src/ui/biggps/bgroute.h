@@ -35,7 +35,11 @@ typedef struct {
     uint32_t time_ds;          /* travel time (deciseconds), including turn costs */
     uint32_t len_dm;           /* length (decimetres) from the source to the target position */
     uint32_t src_frac, dst_frac;
+    int toll_arcs;             /* arcs of toll ways on the route (0 = no toll known) */
 } bgr_route_t;
+
+/* the pack avoids tolls (BGR_F_TOLLPEN): a route with toll_arcs > 0 had no toll-free way */
+int bgr_avoids_toll(const bgr_pack_t *p);
 
 typedef struct {
     unsigned settled, relaxed, pages_read, us;

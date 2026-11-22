@@ -44,6 +44,7 @@ void settings_defaults(bf_settings_t *s)
     s->clock_24h = true;
     s->nav_voice = true;
     s->map_detail = BF_DETAIL_AUTO;
+    s->map_avoid_toll = false;
 }
 
 static void mkdir_p(const char *path)
@@ -122,6 +123,7 @@ void settings_load(void)
         else if(!strcmp(k, "book_theme"))    cur.book_theme = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "nav_voice"))     cur.nav_voice = atoi(v) != 0;
         else if(!strcmp(k, "map_detail"))    { int d = atoi(v); cur.map_detail = d >= 0 && d < BF_DETAIL__N ? d : BF_DETAIL_AUTO; }
+        else if(!strcmp(k, "map_avoid_toll")) cur.map_avoid_toll = atoi(v) != 0;
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
     }
@@ -160,6 +162,7 @@ bool settings_save(void)
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);
     fprintf(f, "map_detail = %d\n", cur.map_detail);
+    fprintf(f, "map_avoid_toll = %d\n", cur.map_avoid_toll ? 1 : 0);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
     /* no cartão SD (FAT): o conteúdo vai ao cartão antes da troca de nome */

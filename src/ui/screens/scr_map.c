@@ -1033,7 +1033,8 @@ static void route_request(int profile, bool reroute)
         bgr_lonlat_to_world(pos_lon, pos_lat, &sx, &sy);
         if(pos_live && pos_speed >= 8) heading = (int)lround(pos_course);
     } else return;
-    bgrt_req_t q = { ++N.req_id, profile, sx, sy, heading, N.dx, N.dy };
+    bgrt_req_t q = { ++N.req_id, profile, sx, sy, heading, N.dx, N.dy,
+                     (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
     N.profile = profile;
     N.waiting = 1;
     N.rerouting = reroute;
@@ -1069,6 +1070,21 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name);
 
 static void open_dest_sheet(uint32_t x, uint32_t y) { open_dest_sheet_named(x, y, NULL); }
 
+static void avoid_toll_cb(lv_event_t *e)
+{
+    settings()->map_avoid_toll = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_save();
+}
+
+/* o texto ao lado também alterna (alvo maior para o dedo) */
+static void avoid_toll_label_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_user_data(e);
+    if(lv_obj_has_state(sw, LV_STATE_CHECKED)) lv_obj_remove_state(sw, LV_STATE_CHECKED);
+    else lv_obj_add_state(sw, LV_STATE_CHECKED);
+    lv_obj_send_event(sw, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
 static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
 {
     if(N.navigating) return;
@@ -1101,6 +1117,18 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     lv_obj_t *b = bf_button(row, LV_SYMBOL_CLOSE, NULL, 0);
     lv_obj_set_height(b, 48);
     lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+    /* evitar pedágios (carro e moto): só aparece com os dados de rotas sem pedágio */
+    if(bgrt_have_toll_free(BGR_CAR) || bgrt_have_toll_free(BGR_MOTO)) {
+        lv_obj_t *tr_ = sheet_row(sh);
+        lv_obj_set_flex_align(tr_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *sw = lv_switch_create(tr_);
+        lv_obj_set_size(sw, 64, 34);
+        if(settings()->map_avoid_toll) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(sw, avoid_toll_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_t *l = bf_label(tr_, tr(S_MAP_AVOID_TOLL), BF_FONT_M, pal()->text);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
+    }
 }
 
 static void route_result(bgrt_res_t *r)
@@ -1135,6 +1163,16 @@ static void route_result(bgrt_res_t *r)
     else snprintf(line, sizeof line, "%s · %d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min);
     bf_label(sh, line, BF_FONT_L, pal()->text);
     if(N.dest_name[0]) bf_label(sh, N.dest_name, BF_FONT_S, pal()->text_dim);
+    /* pedágio: o que se sabe pelos dados (toll=yes e cabines do OSM) */
+    bool want_free = (N.profile == BGR_CAR || N.profile == BGR_MOTO) && settings()->map_avoid_toll;
+    const char *tollmsg = NULL;
+    if(want_free && !r->toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
+    else if(r->toll_arcs > 0) tollmsg = tr(r->toll_avoided ? S_MAP_TOLL_NOALT : S_MAP_TOLL);
+    if(tollmsg) {
+        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, r->toll_avoided ? pal()->warning : pal()->text_dim);
+        lv_label_set_long_mode(tl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(tl, LV_PCT(100));
+    }
     lv_obj_t *row = sheet_row(sh);
     lv_obj_t *b = bf_button(row, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
     lv_obj_set_height(b, 48);
