@@ -13,6 +13,14 @@ build/%: %.c Makefile
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
 	$(STRIP) -o $@.stripped $@
+# bfbt-agent usa o libdbus (bibliotecas compartilhadas): só com AGENT=1 e DBUS_CFLAGS/DBUS_LIBS
+build/bfbt-agent: bfbt-agent.c Makefile
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(DBUS_CFLAGS) -o $@ $< $(DBUS_LIBS)
+	$(STRIP) -o $@.stripped $@
+ifeq ($(AGENT),1)
+all: build/bfbt-agent
+endif
 clean:
 	rm -rf build
 .PHONY: all clean

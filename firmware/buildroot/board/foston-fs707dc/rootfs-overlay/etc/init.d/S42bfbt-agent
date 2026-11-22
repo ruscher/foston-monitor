@@ -1,0 +1,16 @@
+#!/bin/sh
+# bfbt-agent: agente de pareamento do BlueZ e ponte para o shell (estado em /run/bigfoston-bt,
+# comandos em /run/bigfoston-bt.cmd). Roda mesmo com o Bluetooth desligado: é por ele que o
+# shell liga e desliga.
+case "$1" in
+start)
+    [ -x /usr/sbin/bfbt-agent ] || exit 0
+    pidof bfbt-agent >/dev/null || /usr/sbin/bfbt-agent
+    ;;
+stop)
+    killall bfbt-agent 2>/dev/null
+    ;;
+restart)
+    "$0" stop; sleep 1; "$0" start
+    ;;
+esac

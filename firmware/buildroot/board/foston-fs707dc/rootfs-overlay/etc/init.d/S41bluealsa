@@ -1,13 +1,18 @@
 #!/bin/sh
 # BlueALSA: áudio Bluetooth A2DP (o FOSTON toca em fones e caixas; o celular toca no FOSTON)
+# bluealsa-aplay toca no alto-falante o que chega por A2DP (só abre o PCM com áudio chegando)
 PIDFILE=/run/bluealsa.pid
+APLAY_PID=/run/bluealsa-aplay.pid
 case "$1" in
 start)
     command -v bluealsa >/dev/null || exit 0
     start-stop-daemon -S -b -m -p "$PIDFILE" -x "$(command -v bluealsa)" -- -p a2dp-source -p a2dp-sink
+    command -v bluealsa-aplay >/dev/null &&
+        start-stop-daemon -S -b -m -p "$APLAY_PID" -x "$(command -v bluealsa-aplay)" -- --pcm=hw:0,0
     ;;
 stop)
+    start-stop-daemon -K -p "$APLAY_PID" 2>/dev/null
     start-stop-daemon -K -p "$PIDFILE" 2>/dev/null
-    rm -f "$PIDFILE"
+    rm -f "$PIDFILE" "$APLAY_PID"
     ;;
 esac
