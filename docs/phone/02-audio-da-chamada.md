@@ -87,6 +87,9 @@ firmware deste aparelho, o comando que troca a voz de PCM para HCI; nenhum dos D
 
 | Música (A2DP) com o patch do MT6611 | **quebra**: o celular mostra "tocando", mas quase não manda pacotes (20 em 3 s); sem o patch (com a máscara sem eSCO) a música volta. O patch só é carregado no modo experimental de voz |
 
+| Patch com a sequência completa do `Radio_Init` do CE (versão → `SetE2BaseAddr` `0xFCD0 {0x01000124 = 0x01005900}` → patch → HCI Reset → endereço → sem eSCO) | a música volta a tocar normal com o patch. Na ligação com "Falar pelo FOSTON": a entrada do DSP continua em ruído (pico ~50 em 900 leituras), com a outra pessoa falando, com toques e fala perto do FOSTON e com DTMF (`AT+VTS`, os bipes saem só no celular). A outra ponta ouve pequenos chiados "como se alguém encostasse": algo sai do FOSTON para o celular |
+| Varredura de `0x8004D014` (0x18, bits extras 0–11) com DTMF | nenhuma mudança na entrada; volta a 0x18 |
+
 **Bloqueio atual:** a voz do celular não chega do MT6611 ao MT3351 pela interface PCM (DAI).
 O app Bluetooth do CE não manda nenhum comando de fabricante para isso (só a API da pilha da
 Microsoft); a OAL (`nk.exe`) e o `uart.dll` têm a tabela de nomes dos grupos de pinos
@@ -97,7 +100,15 @@ outra configuração de PCM.
 Por segurança, "Falar pelo FOSTON" só aparece com a marca `/data/bigfoston/voz-experimental`
 (sem ela a ligação ficaria muda).
 
-## Próximo passo
+## Próximo passo (atualizado)
+
+O DSP no modo 2 vias (PCM2WAY da MediaTek) pede a cada 20 ms um bloco que o ARM copia para o
+lado do alto-falante (o tom de teste prova esse lado). O bloco de origem nunca recebe a voz do
+celular. A comparação decisiva continua sendo uma ligação funcionando no Windows CE (pareado
+pelo app PhoneLink, depois de "esquecer" o BigFoston no celular), lendo pelo `bfagent phys` a
+caixa postal, os blocos do DSP e `0x8004D000`/`0x80061xxx` durante a ligação.
+
+## Próximo passo (versão anterior)
 
 Medir no próprio Windows CE, com uma ligação real pelo app Bluetooth original (PhoneLink),
 os registradores enquanto a voz funciona, e comparar com o Linux: pinos (função do DAI/PCM),
