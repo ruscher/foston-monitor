@@ -30,7 +30,7 @@ typedef struct {
 /* A ordem é a dos bits de settings()->home_apps: só acrescentar no fim. */
 static const app_t apps[] = {
     { &bf_icon_multimedia, S_APP_MULTIMEDIA, 0xe5534b, SCR_MUSIC, 0 },
-    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_FEATURE, FEAT_TV },
+    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_TV,      0 },
     { &bf_icon_bluetooth,  S_APP_BLUETOOTH,  0x3584e4, SCR_BLUETOOTH, 0 },
     { &bf_icon_book,       S_APP_BOOK,       0xc98b2c, SCR_BOOK, 0 },
     { &bf_icon_gps,        S_APP_GPS,        0x2ec27e, SCR_MAP, 0 },

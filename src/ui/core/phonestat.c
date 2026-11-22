@@ -34,6 +34,7 @@ void ph_read(ph_info_t *p)
     p->signal = p->battery = p->service = -1;
     p->voice_phone = true;
     snprintf(p->sync, sizeof p->sync, "idle");
+    snprintf(p->sms, sizeof p->sms, "idle");
     FILE *f = fopen(state_path(), "r");
     if(!f) return;
     p->available = true;
@@ -59,6 +60,9 @@ void ph_read(ph_info_t *p)
         else if(!strcmp(line, "vol")) p->vol = atoi(v);
         else if(!strcmp(line, "since")) p->since = (time_t)atol(v);
         else if(!strcmp(line, "sync")) snprintf(p->sync, sizeof p->sync, "%s", v);
+        else if(!strcmp(line, "sms")) snprintf(p->sms, sizeof p->sms, "%s", v);
+        else if(!strcmp(line, "msg_auto")) p->msg_auto = atoi(v);
+        else if(!strcmp(line, "notify")) p->notify = atoi(v);
         else if(!strcmp(line, "call") && p->ncall < PH_MAXCALLS) {
             ph_call_t *c = &p->call[p->ncall++];
             const char *s = field(v, t, sizeof t); c->idx = atoi(t);
@@ -90,6 +94,26 @@ bool ph_cmd(const char *fmt, ...)
     bool ok = write(fd, buf, (size_t)n) == n;
     close(fd);
     return ok;
+}
+
+bool ph_sms(const char *number, const char *text)
+{
+    char num[48];
+    size_t k = 0;
+    for(const char *c = number; *c && k + 1 < sizeof num; c++)
+        if((*c >= '0' && *c <= '9') || *c == '+') num[k++] = *c;
+    num[k] = 0;
+    if(!num[0] || !text || !text[0]) return false;
+    /* o bfphone (root) lê /run/bfphone-sms.txt; no simulador fica ao lado do estado */
+    char path[300];
+    if(getenv("BIGFOSTON_PHONE_STATUS")) snprintf(path, sizeof path, "%s-sms.txt", state_path());
+    else snprintf(path, sizeof path, "/run/bfphone-sms.txt");
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if(fd < 0) return false;
+    size_t n = strlen(text);
+    bool ok = write(fd, text, n) == (ssize_t)n;
+    close(fd);
+    return ok && ph_cmd("sms %s", num);
 }
 
 /* ------------------------------------------------ chamada recebida */

@@ -19,6 +19,37 @@ histórico e as mensagens podem ser importados do celular.
 |---|---|
 | ![Volume](../images/ui/45h-telefone-volume.png) | ![Teclado](../images/ui/45i-telefone-teclado.png) |
 
+O visual segue o Foston Glass (cartões de vidro sobre o papel de parede, ícones em degradê,
+iniciais coloridas nos contatos e conversas), nos dois modos da tela inicial.
+
+### Mensagens: conversas, resposta e importação automática
+
+| Conversas | Importação automática | Conversa | Responder |
+|---|---|---|---|
+| ![Conversas](../images/ui/45k-telefone-mensagens-auto.png) | ![Automática](../images/ui/45l-telefone-importacao-automatica.png) | ![Conversa](../images/ui/45m-telefone-conversa.png) | ![Responder](../images/ui/45n-telefone-responder.png) |
+
+- Recebidas e enviadas ficam agrupadas por conversa (os 8 últimos dígitos do número), a mais
+  recente em cima, com a bolinha das não lidas. Tocar abre a conversa em balões (até as 60
+  últimas) com Ligar e o campo de resposta.
+- **Responder**: o texto vai pelo MAP (`PushMessage`, bMessage SMS em `telecom/msg/outbox`,
+  UTF-8); o celular envia o SMS. "Enviando…", "Enviada pelo celular" ou o erro aparecem no topo
+  da conversa; a mensagem enviada fica na conversa até a próxima importação trazê-la do celular.
+  Teclado com ç e acentos (tecla "áã").
+- **Importação automática** (engrenagem): Desligada; Só as novas (o celular avisa pelo MNS, ou a
+  cada 15 min, 20 por pasta); As mais recentes (50 por pasta, a cada 10 min); Todas (até 1024
+  por pasta, a cada 30 min). As novas são mescladas com as já importadas (pelo identificador do
+  MAP), sem apagar as antigas. A escolha fica em `/data/bigfoston/telefone-msg-auto`.
+
+#### Por que o celular não mostrava "acesso às mensagens"
+
+O Android só oferece a permissão de mensagens (e o interruptor em Bluetooth > aparelho) para quem
+usa o MAP de verdade. O `bfphone` agora registra no BlueZ o perfil **MNS** (Message Notification
+Server, UUID 0x1133, RFCOMM 17) e, com a importação automática ligada, mantém uma sessão MAP
+aberta pedindo avisos (`SetNotificationRegistration`): o celular passa a ver o BigFoston como
+cliente de mensagens, mostra o pedido "Permitir acesso às mensagens?" e conecta no MNS para
+avisar das que chegam (`NewMessage`). A primeira importação espera até 45 s pela resposta no
+celular (antes, 15 s: o pedido expirava sem que desse tempo de aceitar).
+
 ### Botões da ligação
 
 | Botão | O que faz |
@@ -49,7 +80,7 @@ histórico e as mensagens podem ser importados do celular.
 | Aviso de chamada recebida em qualquer tela | implementado (simulador); falta o teste real |
 | Agenda (PBAP) | **funcionando**: 5363 contatos em ~1 min |
 | Histórico de chamadas (PBAP) | **funcionando** |
-| Mensagens SMS (MAP) | implementado; o POCO responde "serviço indisponível" (0xD3) até que o acesso às mensagens seja permitido no celular |
+| Mensagens SMS (MAP) | implementado: listar, conversas, responder (`PushMessage`), importação automática e avisos (MNS registrado no BlueZ: "perfil MNS registrado"); o POCO responde "serviço indisponível" (0xD3) até que o acesso às mensagens seja permitido no celular — falta o teste com a permissão aceita |
 | **Voz da ligação no FOSTON** (alto-falante e microfone) | **funcionando** com os arquivos do aparelho no cartão ([02-audio-da-chamada.md](02-audio-da-chamada.md)) |
 
 ## Arquitetura
@@ -68,7 +99,7 @@ celular (AG) ──HFP/RFCOMM── BlueALSA (-p hfp-hf) ──RFCOMM1.Open (D-B
 | Peça | Papel |
 |---|---|
 | `src/bt/bfphone.c` | serviço (S43bfphone): canal AT, estado, comandos, sincronização, voz |
-| `src/bt/bfpbap.c` | cliente OBEX próprio (sem o obexd, que exige C++ no Buildroot): PBAP (agenda, histórico) e MAP (lista de mensagens); acha o canal pelo SDP |
+| `src/bt/bfpbap.c` | cliente OBEX próprio (sem o obexd, que exige C++ no Buildroot): PBAP (agenda, histórico) e MAP (lista de mensagens com mescla, envio `push`, sessão de avisos `notify`); acha o canal pelo SDP |
 | `rootfs-overlay/etc/init.d/S41bluealsa` | BlueALSA com `-p hfp-hf` (antes só A2DP: o celular não abria o HFP) |
 | `src/ui/core/phonestat.c` | leitura do estado, comandos e o aviso global de chamada recebida |
 | `src/ui/screens/scr_phone.c` | o app: Discador, Contatos (busca), Recentes, Mensagens e o painel da ligação |
@@ -81,7 +112,8 @@ O `bfphone` consulta `AT+CLCC` a cada 5 s parado e a cada 1 s com chamada, e log
 conectar só o A2DP, o `bfphone` pede o HFP uma vez (`Device1.ConnectProfile`).
 
 Comandos (`echo ... > /run/bigfoston-phone.cmd`): `dial NÚMERO`, `redial`, `answer`, `hangup`,
-`dtmf C`, `voice phone|foston`, `sync`, `erase`. `voice foston` só vale quando o firmware tiver
+`dtmf C`, `voice phone|foston`, `sync`, `syncmsg [MAX]` (só mensagens), `msgauto 0-3`,
+`sms NÚMERO` (texto em `/run/bfphone-sms.txt`, apagado depois do envio), `erase`. `voice foston` só vale quando o firmware tiver
 a voz do DSP (`voice_foston=1`); `voice foston-teste` deixa o canal de voz aberto para
 diagnóstico (a ligação fica muda).
 
@@ -104,8 +136,10 @@ diagnóstico (a ligação fica muda).
 4. Discador: digite um número e toque em Ligar. O celular disca e a voz fica nele.
 5. Contatos: Importar do celular, confirme no celular se ele pedir, e busque pelo nome ou
    número.
-6. Mensagens: no celular, em Bluetooth > BigFoston, permita o acesso às mensagens, e importe
-   de novo.
+6. Mensagens: toque em Importar e aceite no celular o pedido de acesso às mensagens (pode vir
+   como notificação). Se ele não aparecer, ligue a importação automática (engrenagem) e confira
+   em Bluetooth > BigFoston > engrenagem o interruptor de mensagens; em último caso, esqueça o
+   BigFoston no celular e pareie de novo.
 
 Diagnóstico (no terminal do FOSTON): `cat /run/bigfoston-phone` (tem números: não publicar),
 `logread | grep bfphone`.

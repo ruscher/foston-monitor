@@ -309,6 +309,14 @@ int screenshot_run(const char *dir)
             scr_phone_demo(2); pump(300); shot("45c-telefone-recentes");
             scr_phone_demo(3); pump(300); shot("45d-telefone-mensagens");
             pf = fopen(pp, "a");
+            if(pf) { fputs("msg_auto=1\nnotify=1\n", pf); fclose(pf); }
+            pump(600); shot("45k-telefone-mensagens-auto");
+            scr_phone_demo(15); pump(300); shot("45l-telefone-importacao-automatica");
+            dialog_close_all(); pump(100);
+            scr_phone_demo(14); pump(300); shot("45m-telefone-conversa");
+            scr_phone_demo(16); pump(300); shot("45n-telefone-responder");
+            scr_phone_demo(3); pump(100);
+            pf = fopen(pp, "a");
             if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\nvoice=foston\nvoice_foston=1\n"
                                  "voice_on=1\nsco=1\nmute=0\nvol=5\nrec=1\n", (long)time(NULL) - 83); fclose(pf); }
             pump(800); shot("45e-telefone-ligacao");
@@ -339,6 +347,38 @@ int screenshot_run(const char *dir)
             unsetenv("BIGFOSTON_PHONE_STATUS");
             go(SCR_HOME, 0); pump(100);
         }
+    }
+    {   /* TV com canais e uma gravação inventados (o simulador não roda o bftvd) */
+        char td[300], f[400], sp[300];
+        data_path(td, sizeof td, "tv-demo");
+        mkdir(td, 0755);
+        snprintf(f, sizeof f, "%s/gravacoes", td);
+        mkdir(f, 0755);
+        static const char *const tf[][2] = {
+            { "bftvd", "#!/bin/sh\n" }, { "isdbt_nova_12mhz_b0.inp", "x" },
+            { "canais.tsv", "15\t479.143\tTV Brasil 1seg\t19\t-62\n18\t497.143\tRede Vida\t15\t-70\n"
+                            "20\t509.143\tCultura\t21\t-58\n27\t551.143\t\t9\t-80\n" },
+            { "gravacoes/tv-20261122-203015-c15.ts", "" },
+        };
+        for(size_t i = 0; i < sizeof tf / sizeof tf[0]; i++) {
+            snprintf(f, sizeof f, "%s/%s", td, tf[i][0]);
+            FILE *o = fopen(f, "w");
+            if(o) { fputs(tf[i][1], o); fclose(o); }
+            if(i == 0) chmod(f, 0755);
+        }
+        data_path(sp, sizeof sp, "tv-demo-status");
+        FILE *o = fopen(sp, "w");
+        if(o) { fputs("state=tocando\nfreq=479.143\nlocked=1\nsnr=19\nrssi=-62\nfps=13.9\n", o); fclose(o); }
+        setenv("BIGFOSTON_TV_DIR", td, 1);
+        setenv("BIGFOSTON_TV_STATUS", sp, 1);
+        go(SCR_TV, 0); pump(300); shot("46-tv");
+        scr_tv_demo(1); pump(300); shot("46b-tv-canais");
+        scr_tv_demo(2); pump(300); shot("46c-tv-gravacoes");
+        scr_tv_demo(3); pump(300); shot("46d-tv-busca");
+        scr_tv_demo(4); pump(300); shot("46e-tv-entrada-av");
+        go(SCR_HOME, 0); pump(100);
+        unsetenv("BIGFOSTON_TV_DIR");
+        unsetenv("BIGFOSTON_TV_STATUS");
     }
     go(SCR_GALLERY, 0);             scr_gallery_demo(0); pump(200); shot("37-galeria");
     scr_gallery_demo(1); pump(300); shot("37b-galeria-foto");

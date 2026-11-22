@@ -26,10 +26,15 @@ typedef struct {
     int ncall;
     time_t since;                     /* início da ligação ativa (0 = nenhuma) */
     char sync[200];                   /* idle | andamento | ok ... | erro ... */
+    int msg_auto;                     /* importação automática das mensagens: 0 não, 1 novas, 2 recentes, 3 todas */
+    bool notify;                      /* sessão de avisos de mensagem nova aberta com o celular */
+    char sms[64];                     /* último envio de SMS: idle | andamento | ok ... | erro ... */
 } ph_info_t;
 
 void ph_read(ph_info_t *p);
 bool ph_cmd(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* responde/envia um SMS pelo celular (MAP): grava o texto e pede ao bfphone */
+bool ph_sms(const char *number, const char *text);
 /* pasta dos dados do último celular conectado ("" se nenhum) */
 const char *ph_last_data(void);
 /* chamada a cada segundo pelo app: aviso de chamada recebida em qualquer tela */

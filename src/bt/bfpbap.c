@@ -1,6 +1,11 @@
 /* bfpbap — agenda e histórico de chamadas do celular por PBAP (OBEX sobre RFCOMM), sem o obexd.
  *
- *   bfpbap ENDERECO CANAL REPOSITORIO SAIDA.tsv
+ *   bfpbap ENDERECO CANAL REPOSITORIO SAIDA.tsv [MAX]
+ *   bfpbap ENDERECO CANAL push NUMERO TEXTO.txt      (responde/envia um SMS pelo MAP)
+ *   bfpbap ENDERECO CANAL notify                     (mantém o MAP aberto com avisos de mensagem nova)
+ *
+ * Mensagens com MAX: pede só as MAX mais recentes de cada pasta e mescla com o TSV que já
+ * existe (pelo identificador), sem perder as antigas.
  *
  * REPOSITORIO: pb (agenda), ich (recebidas), och (feitas), mch (perdidas), cch (todas);
  * "sim1/pb" etc. para o chip; msg/inbox e msg/sent: lista de mensagens (SMS) pelo MAP.
@@ -102,7 +107,7 @@ static int obex_connect(void)
     }
     c[1] = (uint8_t)(n >> 8); c[2] = (uint8_t)n;
     if(!send_all(c, n)) return 0;
-    int len = recv_pkt(15000);
+    int len = recv_pkt(45000);                     /* o celular pode estar pedindo autorização ao usuário */
     if(len < 7 || pkt[0] != 0xa0) { obex_code = len >= 1 ? pkt[0] : -1; return 0; }
     for(int i = 7; i < len;) {
         uint8_t id = pkt[i];
@@ -387,6 +392,8 @@ static void emit_listing(void)
     }
 }
 
+static int list_max = 200;
+
 /* lista de mensagens de uma pasta (inbox, sent) */
 static int pull_msgs(const char *folder)
 {
@@ -403,7 +410,7 @@ static int pull_msgs(const char *folder)
     n += hdr(r + n, 0x01, u16, ul);
     static const char type[] = "x-bt/MAP-msg-listing";
     n += hdr(r + n, 0x42, type, sizeof type);
-    uint8_t ap[] = { 0x01, 2, 0x00, 0xc8,                    /* MaxListCount 200 */
+    uint8_t ap[] = { 0x01, 2, (uint8_t)(list_max >> 8), (uint8_t)list_max,  /* MaxListCount */
                      0x13, 1, 0xff };                        /* SubjectLength 255 */
     n += hdr(r + n, 0x4c, ap, sizeof ap);
     r[1] = (uint8_t)(n >> 8); r[2] = (uint8_t)n;
@@ -431,16 +438,137 @@ static int pull_msgs(const char *folder)
     return -1;
 }
 
+/* PUT simples (um pacote): devolve o código de resposta */
+static int put1(const char *name, const char *type, const uint8_t *ap, int apn, const void *body, int bn)
+{
+    int cap = 512 + bn;
+    uint8_t *r = malloc((size_t)cap);
+    if(!r) return -1;
+    int n = 3;
+    r[0] = 0x82;
+    if(have_cid) { r[n++] = 0xcb; memcpy(r + n, cid, 4); n += 4; }
+    if(name) {
+        uint8_t u16[64];
+        int ul = 0;
+        for(const char *c = name; *c && ul < 56; c++) { u16[ul++] = 0; u16[ul++] = (uint8_t)*c; }
+        u16[ul++] = 0; u16[ul++] = 0;
+        n += hdr(r + n, 0x01, u16, ul);
+    }
+    n += hdr(r + n, 0x42, type, (int)strlen(type) + 1);
+    if(apn) n += hdr(r + n, 0x4c, ap, apn);
+    n += hdr(r + n, 0x49, body, bn);
+    r[1] = (uint8_t)(n >> 8); r[2] = (uint8_t)n;
+    int ok = send_all(r, n);
+    free(r);
+    if(!ok) return -1;
+    int len = recv_pkt(30000);
+    return len >= 3 ? pkt[0] : -1;
+}
+
+/* envia um SMS (bMessage para telecom/msg/outbox) */
+static int push_sms(const char *number, const char *file)
+{
+    FILE *f = fopen(file, "r");
+    if(!f) return -1;
+    char text[2048];
+    size_t tl = fread(text, 1, sizeof text - 1, f);
+    fclose(f);
+    text[tl] = 0;
+    for(char *c = text; *c; c++) if(*c == '\r') *c = ' ';
+    char num[48];
+    size_t o = 0;
+    for(const char *c = number; *c && o + 1 < sizeof num; c++)
+        if((*c >= '0' && *c <= '9') || *c == '+' || *c == '*' || *c == '#') num[o++] = *c;
+    num[o] = 0;
+    if(!num[0] || !text[0]) return -1;
+    char msg[2200];
+    int ml = snprintf(msg, sizeof msg, "BEGIN:MSG\r\n%s\r\nEND:MSG\r\n", text);
+    char b[3000];
+    int bn = snprintf(b, sizeof b,
+        "BEGIN:BMSG\r\nVERSION:1.0\r\nSTATUS:READ\r\nTYPE:SMS_GSM\r\nFOLDER:telecom/msg/outbox\r\n"
+        "BEGIN:BENV\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nN:\r\nTEL:%s\r\nEND:VCARD\r\n"
+        "BEGIN:BBODY\r\nCHARSET:UTF-8\r\nLENGTH:%d\r\n%sEND:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n",
+        num, ml, msg);
+    if(bn <= 0 || bn >= (int)sizeof b) return -1;
+    int rc;
+    if((rc = setpath("telecom")) || (rc = setpath("msg"))) return rc;
+    static const uint8_t ap[] = { 0x14, 1, 0x01 };               /* Charset UTF-8 */
+    rc = put1("outbox", "x-bt/message", ap, sizeof ap, b, bn);
+    return rc == 0xa0 ? 0 : rc;
+}
+
+/* pede ao celular os avisos de mensagem nova (ele conecta no nosso MNS) e fica aberto */
+static int notify_session(void)
+{
+    static const uint8_t ap[] = { 0x0e, 1, 0x01 };               /* NotificationStatus = ligado */
+    static const uint8_t fill = 0x30;
+    int rc = put1(NULL, "x-bt/MAP-NotificationRegistration", ap, sizeof ap, &fill, 1);
+    if(rc != 0xa0) return rc;
+    printf("ok avisos\n");
+    fflush(stdout);
+    for(;;) {                                                    /* até o celular ou o bfphone fechar */
+        struct pollfd p = { sk, POLLIN, 0 };
+        if(poll(&p, 1, -1) < 0 && errno != EINTR) break;
+        if(p.revents & (POLLHUP | POLLERR)) break;
+        if(p.revents & POLLIN) {
+            uint8_t junk[512];
+            if(read(sk, junk, sizeof junk) <= 0) break;
+        }
+    }
+    return 0;
+}
+
+/* acrescenta ao TSV novo as linhas do antigo que não vieram agora (pelo identificador, última coluna) */
+static void merge_old(const char *newf, const char *oldf)
+{
+    FILE *o = fopen(oldf, "r");
+    if(!o) return;
+    FILE *n = fopen(newf, "r");
+    char **seen = NULL;
+    int ns = 0, cap = 0;
+    char line[1100];
+    while(n && fgets(line, sizeof line, n)) {
+        char *h = strrchr(line, '\t');
+        if(!h) continue;
+        h[strcspn(h, "\n")] = 0;
+        if(ns == cap) { cap = cap ? cap * 2 : 256; char **x = realloc(seen, sizeof *seen * (size_t)cap); if(!x) break; seen = x; }
+        seen[ns++] = strdup(h + 1);
+    }
+    if(n) fclose(n);
+    FILE *a = fopen(newf, "a");
+    long kept = 0;
+    while(a && fgets(line, sizeof line, o) && records + kept < 20000) {
+        char *h = strrchr(line, '\t');
+        if(!h) continue;
+        char hh[64];
+        snprintf(hh, sizeof hh, "%.*s", (int)strcspn(h + 1, "\n"), h + 1);
+        int dup = 0;
+        for(int i = 0; i < ns && !dup; i++) dup = seen[i] && !strcmp(seen[i], hh);
+        if(!dup) { fputs(line, a); kept++; }
+    }
+    if(a) fclose(a);
+    fclose(o);
+    for(int i = 0; i < ns; i++) free(seen[i]);
+    free(seen);
+    records += kept;
+}
+
 int main(int argc, char **argv)
 {
-    if(argc < 5) { fprintf(stderr, "uso: bfpbap ENDERECO CANAL(0=SDP) pb|ich|och|mch|cch|msg/inbox|msg/sent SAIDA.tsv\n"); return 2; }
+    if(argc < 4 || (argc < 5 && strcmp(argv[3], "notify"))) {
+        fprintf(stderr, "uso: bfpbap ENDERECO CANAL(0=SDP) pb|ich|och|mch|cch|msg/inbox|msg/sent SAIDA.tsv [MAX]\n"
+                        "     bfpbap ENDERECO CANAL push NUMERO TEXTO.txt | notify\n");
+        return 2;
+    }
     unsigned v[6];
     if(sscanf(argv[1], "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return 2;
     signal(SIGPIPE, SIG_IGN);
     pkt = malloc(MAXPKT + 1);
     if(!pkt) return 1;
     const char *repo = argv[3];
-    int is_msg = !strncmp(repo, "msg/", 4);
+    int is_push = !strcmp(repo, "push"), is_notify = !strcmp(repo, "notify");
+    if(is_push && argc < 6) return 2;
+    int is_msg = !strncmp(repo, "msg/", 4) || is_push || is_notify;
     is_history = !is_msg && strcmp(repo, "pb") && strcmp(repo, "sim1/pb");
     if(is_msg) target = MAP_TARGET;
     uint8_t bd[6];
@@ -459,6 +587,21 @@ int main(int argc, char **argv)
         else printf("erro obex %d\n", obex_code);
         return 1;
     }
+    if(is_push || is_notify) {
+        int rc = is_push ? push_sms(argv[4], argv[5]) : notify_session();
+        close(sk);
+        if(rc == 0) { if(is_push) printf("ok 1\n"); return 0; }
+        if(rc == 0xc3) printf("erro negado\n");
+        else printf("erro %d\n", rc);
+        return 1;
+    }
+    int merge = 0;
+    if(argc > 5 && is_msg) {
+        list_max = atoi(argv[5]);
+        if(list_max < 1) list_max = 1;
+        if(list_max > 1024) list_max = 1024;
+        merge = 1;
+    }
     char tmp[512];
     snprintf(tmp, sizeof tmp, "%s.tmp", argv[4]);
     out = fopen(tmp, "w");
@@ -472,6 +615,7 @@ int main(int argc, char **argv)
         else printf("erro %d\n", rc);
         return 1;
     }
+    if(merge) merge_old(tmp, argv[4]);
     if(rename(tmp, argv[4]) != 0) { printf("erro gravar %d\n", errno); unlink(tmp); return 1; }
     printf("ok %ld\n", records);
     return 0;

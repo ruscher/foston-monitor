@@ -1,13 +1,17 @@
 /* bftvd — TV digital 1seg do FOSTON: sintoniza, demultiplexa, decodifica e mostra.
  *
- *   bftvd [-f FW.inp] [-r X,Y,ESCALA] [-s STATE] MHZ
+ *   bftvd [-f FW.inp] [-r X,Y,ESCALA] [-s STATE] [-w GRAVACAO.ts] [-W PASTA] MHZ   assistir (e gravar)
+ *   bftvd [-r X,Y,ESCALA] [-s STATE] -p ARQUIVO.ts                       tocar uma gravação
+ *   bftvd [-f FW.inp] [-s STATE] -S CANAIS.tsv                           buscar canais (UHF 14-69)
+ *   bftvd -O                                                             desligar o sintonizador
  *
  * Threads: o sintonizador (siano.c) enche um anel de TS; o demux do ffmpeg lê dele; o vídeo
  * H.264 (320x180, 15 qps) é decodificado sem o filtro de desblocagem (~50 % de CPU a menos de
  * 70 %) e convertido para RGB565 ampliado 2x direto no framebuffer, na hora do relógio do áudio;
  * o áudio HE-AAC (LOAS/LATM) vai pela fdk-aac (ponto fixo: 14 % de CPU em vez de 59 %),
  * reamostrado de 48 para 32 kHz mono, no /dev/dsp. Estado em STATE (padrão /run/bigfoston-tv).
- * Termina com SIGTERM/SIGINT (desliga o sintonizador).
+ * Termina com SIGTERM/SIGINT (o sintonizador fica ligado para a troca de canal: -O desliga).
+ * SIGUSR1 começa/para de gravar o TS em PASTA/tv-AAAAMMDD-HHMMSS-cNN.ts sem parar a imagem.
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -15,6 +19,7 @@
 #include <linux/fb.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,10 +86,24 @@ static const char *state_path = "/run/bigfoston-tv";
 static double fps_shown, ts_kbps;
 static unsigned long frames_shown, frames_late;
 
+static FILE *rec;                              /* -w: o TS também vai para o cartão */
+static unsigned long rec_bytes;
+static const char *rec_dir;                    /* -W: pasta das gravações (SIGUSR1) */
+static char rec_name[256];
+static volatile sig_atomic_t rec_toggle;
+static void on_usr1(int s) { (void)s; rec_toggle = 1; }
+static const char *play_path;                  /* -p: toca um arquivo em vez da antena */
+static double play_pos, play_dur;
+
 static void on_data(const hdr_t *h, const uint8_t *d, int n)
 {
-    if(h->type == 607 || h->type == 729 || h->type == 693) ring_put(d, n);
-    else store(h, d, n);
+    if(h->type == 607 || h->type == 729 || h->type == 693) {
+        ring_put(d, n);
+        if(rec && n > 0) {
+            if(fwrite(d, 1, (size_t)n, rec) != (size_t)n) { fclose(rec); rec = NULL; }   /* cartão cheio */
+            else rec_bytes += (unsigned long)n;
+        }
+    } else store(h, d, n);
 }
 
 static void write_state(const char *st)
@@ -97,6 +116,8 @@ static void write_state(const char *st)
     if(last_stats.valid)
         fprintf(f, "locked=%d\nsnr=%d\nrssi=%d\n", last_stats.demod_locked, last_stats.snr, last_stats.rssi);
     fprintf(f, "ts_kbps=%.0f\ndrops=%lu\nfps=%.1f\nlate=%lu\n", ts_kbps, ts_drops, fps_shown, frames_late);
+    if(rec) fprintf(f, "rec_kb=%lu\nrec_file=%s\n", rec_bytes / 1024, rec_name);
+    if(play_path) fprintf(f, "file=%s\npos=%.0f\ndur=%.0f\n", play_path, play_pos, play_dur);
     fclose(f);
     rename(tmp, state_path);
 }
@@ -105,9 +126,25 @@ static void *tuner_thread(void *a)
 {
     (void)a;
     on_msg = on_data;
-    double next_stats = mono() + 1;
+    double next_stats = mono() + 1, t_start = mono();
     unsigned long last_bytes = 0;
     while(!quit) {
+        if(rec_toggle) {                                /* gravar / parar (SIGUSR1) */
+            rec_toggle = 0;
+            if(rec) { fclose(rec); rec = NULL; sync(); }
+            else if(rec_dir) {
+                time_t now = time(NULL);
+                struct tm tm;
+                localtime_r(&now, &tm);
+                char ts[32];
+                strftime(ts, sizeof ts, "%Y%m%d-%H%M%S", &tm);
+                int ch = (int)((freq_mhz - 473.142857) / 6 + 14.5);
+                snprintf(rec_name, sizeof rec_name, "%s/tv-%s-c%02d.ts", rec_dir, ts, ch);
+                rec_bytes = 0;
+                rec = fopen(rec_name, "wb");
+            }
+            write_state(last_stats.valid && last_stats.demod_locked ? "tocando" : "sem_sinal");
+        }
         unsigned long before = ts_bytes;
         poll_read();
         if(ts_bytes == before) msleep(3);           /* nada chegando: não gira à toa */
@@ -116,10 +153,15 @@ static void *tuner_thread(void *a)
             stats();
             on_msg = on_data;
             unsigned long b = ts_bytes;                  /* taxa do TS no intervalo */
-            ts_kbps = (b - last_bytes) * 8 / 1000.0 / 2;
+            ts_kbps = (b - last_bytes) * 8 / 1000.0;   /* por segundo */
             last_bytes = b;
-            write_state(last_stats.valid && last_stats.demod_locked ? "tocando" : "sem_sinal");
-            next_stats = mono() + 2;
+            static int ever_locked;
+            int lk = last_stats.valid && last_stats.demod_locked;
+            ever_locked |= lk;
+            /* antes de travar a 1ª vez (até 6 s) ainda é sintonia, não falta de sinal */
+            write_state(lk ? (frames_shown ? "tocando" : mono() - t_start < 20 ? "abrindo" : "sem_imagem")
+                           : (!ever_locked && mono() - t_start < 6) ? "sintonizando" : "sem_sinal");
+            next_stats = mono() + 1;
         }
     }
     return NULL;
@@ -150,9 +192,14 @@ static inline uint16_t px(int y, int rv, int g, int bu)
     return (uint16_t)((r >> 3) << 11 | (gg >> 2) << 5 | b >> 3);
 }
 
+static int fb_w = 800, fb_h = 480;
+
 static void blit(const AVFrame *f)
 {
     int w = f->width, h = f->height;
+    if(w > (fb_w - out_x) / 2) w = (fb_w - out_x) / 2 & ~1;  /* nunca fora do retângulo da tela */
+    if(h > (fb_h - out_y) / 2) h = (fb_h - out_y) / 2 & ~1;
+    if(w <= 0 || h <= 0) return;
     for(int y = 0; y < h; y += 2) {
         const uint8_t *y0 = f->data[0] + y * f->linesize[0], *y1 = y0 + f->linesize[0];
         const uint8_t *u = f->data[1] + (y / 2) * f->linesize[1], *v = f->data[2] + (y / 2) * f->linesize[2];
@@ -183,6 +230,12 @@ static int fb_open(void)
     if(m == MAP_FAILED) return -1;
     fb = (uint16_t *)(m + off);
     fb_stride = (int)fx.line_length / 2;
+    struct fb_var_screeninfo vi;
+    int fd2 = open("/dev/fb0", O_RDONLY | O_CLOEXEC);
+    if(fd2 >= 0) {
+        if(ioctl(fd2, FBIOGET_VSCREENINFO, &vi) == 0) { fb_w = (int)vi.xres; fb_h = (int)vi.yres; }
+        close(fd2);
+    }
     return 0;
 }
 
@@ -242,7 +295,9 @@ static void audio_out(const INT_PCM *pcm, int frames, int chans, double pts)
 
 /* ------------------------------------------------------------ fila de quadros (mostrar na hora) */
 
-#define QN 6
+/* 2 s de vídeo: em alguns canais o vídeo vem no fluxo bem à frente do áudio; com fila curta o
+ * decodificador parava esperando o mostrador, que esperava o áudio que não chegava */
+#define QN 32
 static AVFrame *q[QN];
 static double q_pts[QN];
 static int q_r, q_w;
@@ -259,7 +314,16 @@ static void *show_thread(void *a)
         AVFrame *f = q[q_r % QN];
         double pts = q_pts[q_r % QN];
         pthread_mutex_unlock(&q_mx);
-        double ac = audio_clock();
+        double ac = audio_clock(), now = mono();
+        /* relógio do áudio parado (sem áudio chegando): o vídeo segue no próprio ritmo */
+        static double last_ac = -1, ac_moved, free_next;
+        if(ac != last_ac) { last_ac = ac; ac_moved = now; }
+        bool stalled = ac < 0 || now - ac_moved > 0.4;
+        if(stalled) {
+            if(now < free_next) { usleep(5000); continue; }
+            free_next = now + 1.0 / 15;
+            ac = -1;
+        }
         if(ac >= 0 && pts > ac + 0.02 && pts < ac + 2) { usleep(5000); continue; }   /* cedo: espera */
         if(ac >= 0 && pts < ac - 0.25) frames_late++;          /* atrasado: descarta */
         else { blit(f); frames_shown++; }
@@ -273,50 +337,134 @@ static void *show_thread(void *a)
     return NULL;
 }
 
-/* ------------------------------------------------------------ principal */
+/* ------------------------------------------------------------ busca de canais */
 
-int main(int argc, char **argv)
+/* UHF 14-69 no Brasil: centro = 473 + 6 (canal - 14) + 1/7 MHz */
+static double ch_mhz(int ch) { return 473.0 + 6.0 * (ch - 14) + 1.0 / 7.0; }
+
+static char sdt_name[96];
+static uint8_t sdt_sec[1024];
+static int sdt_len, sdt_want;
+
+/* nome do serviço (descritor 0x48) de uma seção SDT; o 1seg (tipo 0xC0) tem preferência */
+static void sdt_parse(const uint8_t *s, int n)
 {
-    int opt;
-    while((opt = getopt(argc, argv, "f:r:s:")) != -1) {
-        if(opt == 'f') fw_path = optarg;
-        else if(opt == 's') state_path = optarg;
-        else if(opt == 'r') sscanf(optarg, "%d,%d,%d", &out_x, &out_y, &scale2);
+    if(n < 11 || s[0] != 0x42) return;
+    int end = 3 + ((s[1] & 0x0f) << 8 | s[2]) - 4;              /* sem o CRC */
+    if(end > n) end = n;
+    char best[96] = "";
+    int best_1seg = 0;
+    for(int i = 11; i + 5 <= end;) {
+        int dl = (s[i + 3] & 0x0f) << 8 | s[i + 4];
+        int j = i + 5, dend = j + dl;
+        if(dend > end) break;
+        while(j + 2 <= dend) {
+            int tag = s[j], len = s[j + 1];
+            if(j + 2 + len > dend) break;
+            if(tag == 0x48 && len >= 3) {
+                int type = s[j + 2], pl = s[j + 3];
+                if(4 + pl < len + 2) {
+                    int nl = s[j + 4 + pl];
+                    const uint8_t *nm = s + j + 5 + pl;
+                    if(j + 5 + pl + nl <= dend && (!best[0] || (type == 0xc0 && !best_1seg))) {
+                        /* ABNT NBR 15606-1: ISO 8859-15 (o 1º byte pode escolher a tabela) -> UTF-8 */
+                        size_t o = 0;
+                        for(int k = 0; k < nl && o + 3 < sizeof best; k++) {
+                            uint8_t c = nm[k];
+                            if(c < 0x20 || (c >= 0x7f && c < 0xa0)) continue;
+                            if(c < 0x80) best[o++] = (char)c;
+                            else { best[o++] = (char)(0xc0 | c >> 6); best[o++] = (char)(0x80 | (c & 0x3f)); }
+                        }
+                        best[o] = 0;
+                        while(o && best[o - 1] == ' ') best[--o] = 0;
+                        best_1seg = type == 0xc0;
+                    }
+                }
+            }
+            j += 2 + len;
+        }
+        i = dend;
     }
-    if(optind >= argc) { fprintf(stderr, "uso: bftvd [-f FW] [-r X,Y,2] [-s STATE] MHZ\n"); return 2; }
-    freq_mhz = atof(argv[optind]);
-    signal(SIGTERM, on_sig);
-    signal(SIGINT, on_sig);
-    signal(SIGPIPE, SIG_IGN);
-    if(map()) return 1;
-    tables();
-    if(fb_open()) { fprintf(stderr, "sem /dev/fb0\n"); return 1; }
+    if(best[0]) snprintf(sdt_name, sizeof sdt_name, "%s", best);
+}
 
-    /* sintonizador: liga e carrega o firmware se ainda não respondeu */
-    clk_div = 7;
-    spi_setup();
-    on_msg = store;
-    if(send_msg(668, 150, NULL, 0) || wait_msg(669, 500)) {
-        write_state("ligando");
-        power_on();
-        clk_div = 15;
-        spi_setup();
-        if(fw_download(fw_path)) { write_state("erro_firmware"); return 1; }
+static void scan_data(const hdr_t *h, const uint8_t *d, int n)
+{
+    if(!(h->type == 607 || h->type == 729 || h->type == 693)) { store(h, d, n); return; }
+    for(int p = 0; p + 188 <= n; p += 188) {
+        const uint8_t *t = d + p;
+        if(t[0] != 0x47 || ((t[1] & 0x1f) << 8 | t[2]) != 0x11) continue;
+        int off = 4;
+        if(t[3] & 0x20) off += 1 + t[4];                       /* campo de adaptação */
+        if(off >= 188 || !(t[3] & 0x10)) continue;
+        if(t[1] & 0x40) {                                      /* início de seção */
+            off += 1 + t[off];
+            if(off + 3 > 188) continue;
+            sdt_len = 0;
+            sdt_want = 3 + ((t[off + 1] & 0x0f) << 8 | t[off + 2]);
+        } else if(!sdt_want) continue;
+        int k = 188 - off;
+        if(sdt_len + k > (int)sizeof sdt_sec) k = (int)sizeof sdt_sec - sdt_len;
+        memcpy(sdt_sec + sdt_len, t + off, (size_t)k);
+        sdt_len += k;
+        if(sdt_len >= sdt_want) { if(sdt_sec[0] == 0x42) sdt_parse(sdt_sec, sdt_want); sdt_want = 0; }
     }
-    write_state("sintonizando");
-    if(set_mode_tune(freq_mhz, 1)) { write_state("erro_sintonia"); return 1; }
-    pthread_t tt, st;
-    pthread_create(&tt, NULL, tuner_thread, NULL);
+}
 
-    /* demux */
-    AVFormatContext *fc = avformat_alloc_context();
-    uint8_t *iob = av_malloc(32768);
-    fc->pb = avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL);
-    fc->probesize = 400000;
-    fc->max_analyze_duration = 2 * AV_TIME_BASE;
-    const AVInputFormat *ts = av_find_input_format("mpegts");
-    if(avformat_open_input(&fc, NULL, ts, NULL) < 0) { write_state("erro_fluxo"); quit = 1; }
-    if(!quit) avformat_find_stream_info(fc, NULL);
+static int found;
+static int scan_ch;
+
+static void scan_state(const char *st)
+{
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s.tmp", state_path);
+    FILE *f = fopen(tmp, "w");
+    if(!f) return;
+    fprintf(f, "state=%s\nscan_ch=%d\nscan_found=%d\n", st, scan_ch, found);
+    fclose(f);
+    rename(tmp, state_path);
+}
+
+static int scan(const char *out)
+{
+    char tmp[256];
+    snprintf(tmp, sizeof tmp, "%s.tmp", out);
+    FILE *o = fopen(tmp, "w");
+    if(!o) { scan_state("erro_arquivo"); return 1; }
+    for(scan_ch = 14; scan_ch <= 69 && !quit; scan_ch++) {
+        scan_state("busca");
+        double f = ch_mhz(scan_ch);
+        on_msg = store;
+        if(set_mode_tune(f, 1)) continue;
+        int locked = 0;
+        for(int i = 0; i < 6 && !quit && !locked; i++) {        /* trava em ~0,5-1 s quando há sinal */
+            msleep(300);
+            if(!stats() && last_stats.valid && last_stats.demod_locked) locked = 1;
+        }
+        if(!locked) continue;
+        sdt_name[0] = 0;
+        sdt_want = 0;
+        on_msg = scan_data;
+        long end = now_ms() + 4000;
+        while(now_ms() < end && !sdt_name[0] && !quit) { if(!poll_read()) msleep(2); }
+        on_msg = store;
+        stats();
+        fprintf(o, "%d\t%.3f\t%s\t%d\t%d\n", scan_ch, f, sdt_name, last_stats.snr, last_stats.rssi);
+        fflush(o);
+        found++;
+    }
+    fclose(o);
+    if(quit) { unlink(tmp); scan_state("parado"); return 1; }
+    rename(tmp, out);
+    scan_ch = 0;
+    scan_state("busca_fim");
+    return 0;
+}
+
+/* demux já aberto: decodifica e mostra até o fim ou SIGTERM */
+static void run_player(AVFormatContext *fc, pthread_t *st)
+{
+    double next_state = 0, start_s = fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time / (double)AV_TIME_BASE;
     int vi = quit ? -1 : av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
     int ai = quit ? -1 : av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, vi, NULL, 0);
     AVCodecContext *vc = NULL;
@@ -331,8 +479,8 @@ int main(int argc, char **argv)
     HANDLE_AACDECODER aac = ai >= 0 ? aacDecoder_Open(TT_MP4_LOAS, 1) : NULL;
     if(aac) dsp_open();
     for(int i = 0; i < QN; i++) q[i] = av_frame_alloc();
-    pthread_create(&st, NULL, show_thread, NULL);
-    write_state(vi >= 0 ? "tocando" : "sem_video");
+    pthread_create(st, NULL, show_thread, NULL);
+    write_state(vi < 0 ? "sem_video" : play_path ? "tocando" : "abrindo");
 
     AVPacket *pk = av_packet_alloc();
     AVFrame *fr = av_frame_alloc();
@@ -374,11 +522,104 @@ int main(int argc, char **argv)
             }
         }
         av_packet_unref(pk);
+        if(play_path) {                                    /* arquivo: posição para a barra do shell */
+            if(audio_pts >= 0) play_pos = audio_pts - start_s;
+            double t = mono();
+            if(t >= next_state) { write_state("tocando"); next_state = t + 1; }
+        }
     }
+}
+
+static int play_file(void)
+{
+    AVFormatContext *fc = NULL;
+    if(avformat_open_input(&fc, play_path, NULL, NULL) < 0) { write_state("erro_arquivo"); return 1; }
+    avformat_find_stream_info(fc, NULL);
+    play_dur = fc->duration > 0 ? fc->duration / (double)AV_TIME_BASE : 0;
+    write_state("tocando");
+    pthread_t st;
+    run_player(fc, &st);
+    int done = !quit;
+    quit = 1;
+    pthread_join(st, NULL);
+    if(dsp >= 0) close(dsp);
+    avformat_close_input(&fc);
+    write_state(done ? "fim" : "parado");
+    return 0;
+}
+
+/* ------------------------------------------------------------ principal */
+
+int main(int argc, char **argv)
+{
+    av_log_set_level(AV_LOG_QUIET);                     /* avisos de quadro com erro: nada de log */
+    int opt, off = 0;
+    const char *scan_out = NULL, *rec_path = NULL;
+    while((opt = getopt(argc, argv, "f:r:s:S:w:W:p:O")) != -1) {
+        if(opt == 'f') fw_path = optarg;
+        else if(opt == 's') state_path = optarg;
+        else if(opt == 'r') sscanf(optarg, "%d,%d,%d", &out_x, &out_y, &scale2);
+        else if(opt == 'S') scan_out = optarg;
+        else if(opt == 'w') rec_path = optarg;
+        else if(opt == 'W') rec_dir = optarg;
+        else if(opt == 'p') play_path = optarg;
+        else if(opt == 'O') off = 1;
+    }
+    if(!off && !scan_out && !play_path && optind >= argc) {
+        fprintf(stderr, "uso: bftvd [-f FW] [-r X,Y,2] [-s STATE] [-w REC.ts] MHZ | -p ARQ.ts | -S CANAIS.tsv | -O\n");
+        return 2;
+    }
+    if(optind < argc) freq_mhz = atof(argv[optind]);
+    signal(SIGTERM, on_sig);
+    signal(SIGINT, on_sig);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGUSR1, on_usr1);
+    if(!play_path && map()) return 1;
+    if(off) { power_off(); return 0; }
+    tables();
+    if(!scan_out && fb_open()) { fprintf(stderr, "sem /dev/fb0\n"); return 1; }
+    if(play_path) return play_file();
+
+    /* sintonizador: liga e carrega o firmware se ainda não respondeu */
+    clk_div = 7;
+    spi_setup();
+    on_msg = store;
+    if(send_msg(668, 150, NULL, 0) || wait_msg(669, 500)) {
+        write_state("ligando");
+        power_on();
+        clk_div = 15;
+        spi_setup();
+        if(fw_download(fw_path)) {                         /* travado de antes: desliga, liga e tenta de novo */
+            power_off();
+            msleep(300);
+            power_on();
+            spi_setup();
+            if(fw_download(fw_path)) { write_state("erro_firmware"); return 1; }
+        }
+    }
+    if(scan_out) return scan(scan_out);
+    write_state("sintonizando");
+    if(set_mode_tune(freq_mhz, 1)) { write_state("erro_sintonia"); return 1; }
+    if(rec_path) { rec = fopen(rec_path, "wb"); snprintf(rec_name, sizeof rec_name, "%s", rec_path); }
+    pthread_t tt;
+    pthread_create(&tt, NULL, tuner_thread, NULL);
+
+    /* demux */
+    AVFormatContext *fc = avformat_alloc_context();
+    uint8_t *iob = av_malloc(32768);
+    fc->pb = avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL);
+    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg: abre o canal mais rápido */
+    fc->max_analyze_duration = AV_TIME_BASE;
+    const AVInputFormat *ts = av_find_input_format("mpegts");
+    if(avformat_open_input(&fc, NULL, ts, NULL) < 0) { write_state("erro_fluxo"); quit = 1; }
+    if(!quit) avformat_find_stream_info(fc, NULL);
+    pthread_t st;
+    run_player(fc, &st);
     quit = 1;
     pthread_join(st, NULL);
     pthread_join(tt, NULL);
     if(dsp >= 0) close(dsp);
+    if(rec) { fclose(rec); rec = NULL; }
     write_state("parado");
     return 0;
 }
