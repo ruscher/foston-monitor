@@ -1,0 +1,68 @@
+# BigFoston OS com Bluetooth (BlueZ + BlueALSA): bibliotecas compartilhadas (teste, docs/hardware-enablement/08)
+BR2_arm=y
+BR2_arm1176jz_s=y
+BR2_ARM_EABI=y
+BR2_ARM_INSTRUCTIONS_ARM=y
+# MT3351 defect: odd-address STRH after a copy-on-write fault loses a byte (docs/04-linux-port.md)
+BR2_TARGET_OPTIMIZATION="-mno-unaligned-access"
+BR2_DL_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/../build/dl"
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# shared libraries: BlueZ and BlueALSA need them (dlopen)
+BR2_SHARED_LIBS=y
+BR2_TARGET_GENERIC_HOSTNAME="bigfoston"
+BR2_TARGET_GENERIC_ISSUE="BigFoston OS"
+BR2_INIT_BUSYBOX=y
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/busybox.fragment"
+BR2_SYSTEM_DHCP=""
+# login on the USB serial console (CDC-ACM, /dev/ttyACM0 on the PC)
+BR2_TARGET_GENERIC_GETTY=y
+BR2_TARGET_GENERIC_GETTY_PORT="ttyGS0"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_KEEP=y
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/rootfs-overlay"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/post-image.sh"
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.12.117"
+BR2_KERNEL_HEADERS_AS_KERNEL=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/patches"
+BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
+BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/linux.config"
+BR2_LINUX_KERNEL_ZIMAGE=y
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="mediatek/mt3351-foston-fs707dc"
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_XZ=y
+# BR2_TARGET_ROOTFS_TAR is not set
+BR2_PACKAGE_BIGFOSTON_BIGSCREEN=y
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/post-build.sh"
+BR2_PACKAGE_BIGFOSTON_BRINGUP=y
+# SSH over the USB network (192.168.7.2); key-only login, see post-build.sh
+BR2_PACKAGE_DROPBEAR=y
+# sem DNS reverso: o aparelho não tem servidor DNS e cada login esperava 5 s
+BR2_PACKAGE_DROPBEAR_DISABLE_REVERSEDNS=y
+BR2_PACKAGE_DOSFSTOOLS=y
+BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
+BR2_PACKAGE_BIGFOSTON_SHELL=y
+BR2_PACKAGE_BIGFOSTON_GPS=y
+BR2_PACKAGE_BIGFOSTON_BT=y
+BR2_PACKAGE_BIGFOSTON_ESPEAK_NG=y
+BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/users.table"
+# audio without alsa-lib (static build: every user would carry its own ~600 KB copy;
+# tinyalsa needs shared libs): mpg123 plays through the kernel OSS emulation and the
+# shell sets the volume with the OSS mixer ioctl
+# MP3 playback (fixed-point arm_nofpu decoder, OSS output) for the Multimedia app
+BR2_PACKAGE_MPG123=y
+BR2_LINUX_KERNEL_XZ=y
+# Reiniciar com kexec (bigfoston-reboot)
+BR2_PACKAGE_KEXEC=y
+# Bluetooth: BlueZ (bluetoothd + D-Bus), áudio A2DP com BlueALSA
+BR2_PACKAGE_BLUEZ5_UTILS=y
+BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
+BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
+BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
+BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
+BR2_PACKAGE_BLUEZ_ALSA=y
+BR2_PACKAGE_ALSA_UTILS=y
+BR2_PACKAGE_ALSA_UTILS_APLAY=y
