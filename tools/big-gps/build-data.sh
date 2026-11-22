@@ -2,10 +2,10 @@
 # build-data.sh IN.osm.pbf SAIDA NOME [BBOX] — dados do Big GPS para o cartão, a partir de um
 # extrato do OpenStreetMap (Geofabrik). BBOX = MINLON,MINLAT,MAXLON,MAXLAT (recorte; para o
 # Brasil: -74.1,-34.0,-28.5,5.4). Gera em SAIDA/big-gps:
-#   mapas/NOME.bgm (+ NOME-2.bgm… se passar de 3,9 GB)   rotas/NOME-carro.bgr, -bicicleta, -ape
-#   busca/NOME.bgs   voz/espeak-ng-data   SHA256SUMS
+#   mapas/NOME.bgm (+ NOME-2.bgm… se passar de 3,9 GB)   rotas/NOME-carro.bgr, -moto, -bicicleta,
+#   -ape, -carro-sem-pedagio   busca/NOME.bgs (formato 3)   voz/espeak-ng-data   SHA256SUMS
 # O oceano vem de firmware/build/osm/agua/water-polygons-split-4326.zip se existir
-# (osmdata.openstreetmap.de, ODbL). Moto usa o arquivo de carro (mesmas regras hoje).
+# (osmdata.openstreetmap.de, ODbL). Semáforos e cabines de pedágio vêm dos nós do extrato.
 # Para regiões grandes o mapa é feito em blocos (uma leitura do extrato).
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -eu
@@ -34,10 +34,12 @@ rm -f "$D/mapas/$NAME"*.bgm
 rm -rf "$OUT/tmp/spill"
 echo "== busca"
 "$B/bgsearch-build" "$IN" "$D/busca/$NAME.bgs" $BB
-for p in car:carro bike:bicicleta foot:ape; do
+for p in car:carro moto:moto bike:bicicleta foot:ape; do
     echo "== rotas ${p#*:}"
     "$B/bgroute-build" "$IN" "$D/rotas/$NAME-${p#*:}.bgr" --profile "${p%%:*}"
 done
+echo "== rotas carro sem pedágio"
+"$B/bgroute-build" "$IN" "$D/rotas/$NAME-carro-sem-pedagio.bgr" --profile car --avoid-toll
 echo "== voz"
 "$HERE/make-voice-data.sh" "$D/voz" >/dev/null
 rm -rf "$OUT/tmp"

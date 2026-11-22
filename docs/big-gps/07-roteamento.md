@@ -33,8 +33,7 @@ ferramenta [src/ui/biggps/bgroute-cli.c](../../src/ui/biggps/bgroute-cli.c).
   em delta, peso, e o id da aresta expandida — ou, num atalho, só o nó do meio, desempacotado
   procurando os dois arcos no bloco dele, como numa CH clássica). Grade de encaixe esparsa
   (só as células com vias, busca binária). DF: carro 58,3 → **37,4 MB**, a pé 92,6 →
-  **55,1 MB**; leituras por rota 318 → 219. Moto sem arquivo próprio usa o de carro (mesmas
-  regras hoje).
+  **55,1 MB**; leituras por rota 318 → 219. Moto sem arquivo próprio usa o de carro.
 - **Localidade no SD:** nós numerados pela curva de Hilbert e arcos na ordem da origem; ids
   da CH na ordem espacial para a parte baixa da hierarquia e o topo (2 %) junto, em ordem
   de nível. Leitura com `pread` por páginas de 8 KB e cache de 8 MB (funciona com arquivos
@@ -84,9 +83,27 @@ tempo total (~1 s); 8 KB ficou ligeiramente melhor.
 Evolução da localidade (leituras por rota, PC, cache frio): numeração do RoutingKit 454;
 ordem espacial pura 597; espacial + topo de 2 % em ordem de nível **425** (páginas de 4 KB).
 
+## Semáforos, pedágios e moto (22/11/2026)
+
+- **Semáforos:** o construtor lê os nós do OSM (libosmium; o RoutingKit não entrega tags de
+  nós). `highway=traffic_signals` e `crossing=traffic_signals` a menos de 30 m formam um
+  cruzamento; a espera (carro 10 s, moto 8 s, bicicleta 6 s, a pé 0; `BGR_SIGNAL_DS`) entra no
+  `ARC_TIME` do trecho que entra no cruzamento, uma vez — vias duplas não contam duas vezes.
+- **Cabines de pedágio** (`barrier=toll_booth`) marcam a via como pedágio, como `toll=yes`.
+- **Evitar pedágios:** `--avoid-toll` gera `NOME-carro-sem-pedagio.bgr` (`BGR_F_TOLLPEN`): cada
+  trecho de via com pedágio custa +1 h (`BGR_TOLL_PENALTY_DS`) só na hierarquia; o aparelho
+  subtrai a penalidade de cada trecho de pedágio percorrido, então o tempo mostrado é o real.
+  A rota informa quantos trechos de pedágio tem (`toll_arcs`).
+- **Moto:** perfil próprio (`NOME-moto.bgr`): máximo 110 km/h, 70 % (até 50 km/h) em terra e
+  cascalho, trilhas até 25 km/h, conversões esquerda 6 s / direita 2 s / retorno 25 s.
+
+| Conferência (300 consultas CH × Dijkstra, DF) | Resultado |
+|---|---|
+| carro, carro sem pedágio, moto, bicicleta | 0 diferentes em cada |
+
 ## Pendências
 
 - **Tamanho:** formato 2 = 177 MB para os quatro perfis do DF (290 MB no formato 1). O
   Brasil: ver [13-dados-brasil.md](13-dados-brasil.md).
-- Semáforos (`highway=traffic_signals`) ainda não somam tempo.
+- Arquivos nacionais com semáforos, moto e sem pedágio ainda não gerados no cartão.
 - Rotas **não aprovadas para uso no trânsito real**: precisam de testes de campo.
