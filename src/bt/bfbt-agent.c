@@ -21,9 +21,11 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <syslog.h>
@@ -40,7 +42,7 @@
 
 typedef struct {
     char path[96], addr[18], name[64], icon[32];
-    int paired, connected, trusted, rssi, has_rssi;
+    int paired, connected, trusted, rssi, has_rssi, resolved;
 } dev_t_;
 
 static DBusConnection *bus;
@@ -374,6 +376,7 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
             else if(!strcmp(k, "Paired")) var_bool(&var, &d->paired);
             else if(!strcmp(k, "Connected")) var_bool(&var, &d->connected);
             else if(!strcmp(k, "Trusted")) var_bool(&var, &d->trusted);
+            else if(!strcmp(k, "ServicesResolved")) var_bool(&var, &d->resolved);
             else if(!strcmp(k, "RSSI")) { dbus_int16_t r = 0; var_get(&var, DBUS_TYPE_INT16, &r); d->rssi = r; d->has_rssi = 1; }
         } else if(is_tr) {
             char st[12] = "";
@@ -610,6 +613,75 @@ static void fix_inquiry_scan(void)
     hci_raw(policy, sizeof policy, "politica de enlace: sem troca de papel");
 }
 
+/* Com a conexão pronta, o celular passa a ser o mestre do enlace: o mestre controla o AFH (fugir
+ * dos canais com interferência) e o MT6611 faz isso mal. Com o FOSTON mestre, a qualidade do enlace
+ * caía de 255 para 8 com Wi-Fi por perto, o celular usava pacotes DH5 sem EDR e o áudio chegava a
+ * 18,7 KB/s (59 % do tempo real: cortes e trechos pulados); com o celular mestre: 41,9 KB/s,
+ * qualidade 255 (22/11/2026). A troca é pedida só depois dos perfis conectados, porque durante a
+ * abertura do áudio o chip perdia a resposta do AVDTP (política padrão sem troca de papel). */
+#define HCIGETCONNINFO _IOR('H', 213, int)
+struct conn_info { uint16_t handle; uint8_t bdaddr[6], type, out; uint16_t state; uint32_t link_mode; };
+struct conn_info_req { uint8_t bdaddr[6], type; struct conn_info info; };
+
+static void become_peripheral(const char *addr)
+{
+    unsigned v[6];
+    if(sscanf(addr, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;
+    struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };
+    int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);
+    if(s < 0) return;
+    struct conn_info_req r;
+    memset(&r, 0, sizeof r);
+    for(int i = 0; i < 6; i++) r.bdaddr[i] = (uint8_t)v[5 - i];
+    r.type = 1;                                          /* ACL */
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && ioctl(s, HCIGETCONNINFO, &r) == 0) {
+        if(!(r.info.link_mode & 0x0001)) {               /* HCI_LM_MASTER: já é escravo */
+            close(s);
+            return;
+        }
+        uint16_t h = r.info.handle;
+        unsigned char pol[] = { 0x01, 0x0d, 0x08, 0x04, (uint8_t)h, (uint8_t)(h >> 8), 0x05, 0x00 };
+        unsigned char sw[] = { 0x01, 0x0b, 0x08, 0x07, r.bdaddr[0], r.bdaddr[1], r.bdaddr[2], r.bdaddr[3],
+                               r.bdaddr[4], r.bdaddr[5], 0x01 };
+        if(write(s, pol, sizeof pol) == (ssize_t)sizeof pol && write(s, sw, sizeof sw) == (ssize_t)sizeof sw)
+            syslog(LOG_INFO, "troca de papel pedida: o celular passa a mestre do enlace");
+    }
+    close(s);
+}
+
+/* um pedido por conexão, 2 s depois de os perfis estarem conectados */
+#define MAXRS 8
+static struct { char addr[18]; long since; int done; } rs[MAXRS];
+
+static void role_switch_tick(const state_t *st, long now)
+{
+    for(int k = 0; k < MAXRS; k++) {                     /* esquece quem desconectou */
+        if(!rs[k].addr[0]) continue;
+        int still = 0;
+        for(int i = 0; i < st->ndev; i++)
+            if(!strcmp(st->dev[i].addr, rs[k].addr) && st->dev[i].connected && st->dev[i].resolved) still = 1;
+        if(!still) rs[k].addr[0] = 0;
+    }
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->connected || !d->resolved) continue;
+        int k, freek = -1;
+        for(k = 0; k < MAXRS && strcmp(rs[k].addr, d->addr); k++)
+            if(!rs[k].addr[0] && freek < 0) freek = k;
+        if(k == MAXRS) {
+            if(freek < 0) continue;
+            k = freek;
+            snprintf(rs[k].addr, sizeof rs[k].addr, "%s", d->addr);
+            rs[k].since = now;
+            rs[k].done = 0;
+        }
+        if(!rs[k].done && now - rs[k].since >= 2000) {
+            rs[k].done = 1;
+            become_peripheral(d->addr);
+        }
+    }
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
@@ -655,6 +727,7 @@ int main(int argc, char **argv)
             read_state(&st);
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
+            role_switch_tick(&st, now);
             if(!st.powered) powered_at = 0;
             else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
             /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,
@@ -682,6 +755,8 @@ int main(int argc, char **argv)
         int timeout = dirty ? 250 : (int)(next_full - now);
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
         if(scan_until && timeout > 1000) timeout = 1000;
+        for(int k = 0; k < MAXRS; k++)
+            if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;
         if(dbus_connection_get_dispatch_status(bus) == DBUS_DISPATCH_DATA_REMAINS) timeout = 0;
         if(dbus_connection_has_messages_to_send(bus)) p[0].events |= POLLOUT;

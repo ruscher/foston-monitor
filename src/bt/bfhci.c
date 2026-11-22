@@ -4,6 +4,7 @@
  *   bfhci up|down    liga/desliga o adaptador (HCIDEVUP/HCIDEVDOWN)
  *   bfhci scan on|off  visível e conectável / invisível (HCISETSCAN)
  *   bfhci lp N       política de enlace padrão (comando HCI 0x080F): 1 troca de papel, 4 sniff
+ *   bfhci raw OGF OCF [bytes hex...]   comando HCI cru (para diagnóstico; resposta: bfsnoop)
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
@@ -53,6 +54,21 @@ int main(int argc, char **argv)
         int r = socket(AF_BT, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
         if(r < 0 || bind(r, (struct sockaddr *)&a, sizeof a) < 0 || write(r, cmd, sizeof cmd) != (ssize_t)sizeof cmd) {
             perror("Write Default Link Policy");
+            return 1;
+        }
+        close(r);
+    } else if(argc > 3 && !strcmp(argv[1], "raw")) {
+        unsigned ogf = (unsigned)strtoul(argv[2], NULL, 0), ocf = (unsigned)strtoul(argv[3], NULL, 0);
+        unsigned char cmd[260];
+        int n = 0;
+        unsigned op = (ogf << 10) | ocf;
+        cmd[0] = 0x01; cmd[1] = (unsigned char)op; cmd[2] = (unsigned char)(op >> 8);
+        for(int i = 4; i < argc && n < 255; i++) cmd[4 + n++] = (unsigned char)strtoul(argv[i], NULL, 16);
+        cmd[3] = (unsigned char)n;
+        struct { unsigned short family, dev, channel; } a = { AF_BT, 0, 0 };
+        int r = socket(AF_BT, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
+        if(r < 0 || bind(r, (struct sockaddr *)&a, sizeof a) < 0 || write(r, cmd, (size_t)(4 + n)) != 4 + n) {
+            perror("comando HCI");
             return 1;
         }
         close(r);
