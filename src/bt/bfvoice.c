@@ -293,6 +293,13 @@ static int start(void)
     stall_us(250);
     lo16(W_ANA, 0x10C, 0);
     lo16(W_ANA, 0x204, 0x1240);
+    /* microfone: com 0x80061108 = 0x80 (valor do modo de ligação do CE) o ADC do microfone fica
+     * desligado e o DSP recebe zeros. Os valores da gravação de fábrica do CE (0x3C1A980)
+     * ligam o microfone — medido numa ligação real em 22/11/2026: o nível vai de ~60 a ~31000
+     * e a outra pessoa passa a ouvir. */
+    lo16(W_ANA, 0x104, 0x2A00);
+    lo16(W_ANA, 0x10C, 0x6220);
+    lo16(W_ANA, 0x108, 0x0000);
     /* liga a voz */
     w16(W_MBOX, 0x94, 0x0110);
     w16(W_YM, 0x7F2C, 0);
@@ -358,18 +365,22 @@ static volatile sig_atomic_t quit;
 static void on_sig(int s) { (void)s; quit = 1; }
 static unsigned long served, bad;
 
+/* A voz do celular (PCM do MT6611 pelo DAI) chega ao DSP no anel Y+0x7400 (2 x 160 amostras,
+ * medido em 22/11/2026: só muda com o canal de voz Bluetooth aberto). O bloco que o CE copia
+ * (Y[+0x9A*2]) fica em ruído neste modo, então a ponte leva o anel ao lado do alto-falante,
+ * alternando as metades — a versão aprovada pelo usuário numa ligação real. */
+#define BT_RX_RING 0x7400
+static unsigned ring_n;
+
 static void serve_once(void)
 {
     if(r16(W_MBOX, 0x0A) != 0x14) return;
-    uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2, rd = (uint32_t)r16(W_MBOX, 0x9C) * 2,
-             wr = (uint32_t)r16(W_MBOX, 0x9E) * 2;
-    uint16_t buf[0x140];
-    if(rd > sizeof buf || wr > sizeof buf || off + 0x280 + wr > 0x8000 || off + rd > 0x8000) {
+    uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2, wr = (uint32_t)r16(W_MBOX, 0x9E) * 2;
+    if(wr > 0x140 || off + 0x280 + wr > 0x8000) {
         bad++;
     } else {
-        for(uint32_t i = 0; i < rd; i += 2) buf[i / 2] = r16(W_YM, off + i);
-        for(uint32_t i = rd; i < wr; i += 2) buf[i / 2] = 0;
-        for(uint32_t i = 0; i < wr; i += 2) w16(W_YM, off + 0x280 + i, buf[i / 2]);
+        uint32_t src = BT_RX_RING + (ring_n++ & 1) * 0x140;
+        for(uint32_t i = 0; i < wr; i += 2) w16(W_YM, off + 0x280 + i, r16(W_YM, src + i));
         served++;
     }
     w16(W_MBOX, 0x0A, 0);
@@ -421,6 +432,91 @@ int main(int argc, char **argv)
         if(load_text(img)) return 1;
         setvbuf(stderr, NULL, _IOLBF, 0);
         return run();
+    }
+    if(!strcmp(c, "phase")) {                     /* só lê: qual metade do anel muda logo após o pedido */
+        int h0 = 0, h1 = 0, tries = 0;
+        while(tries < 60) {
+            if(r16(W_MBOX, 0x0A) != 0x14) { stall_us(200); continue; }
+            uint16_t a0[8], a1[8];
+            for(int i = 0; i < 8; i++) { a0[i] = r16(W_YM, 0x7400 + 0x40 * i); a1[i] = r16(W_YM, 0x7540 + 0x40 * i); }
+            stall_us(8000);
+            int c0 = 0, c1 = 0;
+            for(int i = 0; i < 8; i++) { c0 += a0[i] != r16(W_YM, 0x7400 + 0x40 * i); c1 += a1[i] != r16(W_YM, 0x7540 + 0x40 * i); }
+            if(c0 > c1) h0++; else if(c1 > c0) h1++;
+            tries++;
+            while(r16(W_MBOX, 0x0A) == 0x14) stall_us(200);
+        }
+        printf("depois do pedido muda: metade 0 em %d, metade 1 em %d de 60\n", h0, h1);
+        return 0;
+    }
+    if(!strcmp(c, "bridge")) {                    /* teste: alto-falante <- buffer Y[SRC] (anel de 2 blocos) */
+        uint32_t src = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 0) : 0x7400;
+        int secs = argc > 3 ? atoi(argv[3]) : 10, swap = argc > 4 ? atoi(argv[4]) : 0, shift = argc > 5 ? atoi(argv[5]) : 0;
+        unsigned phase = argc > 6 ? (unsigned)atoi(argv[6]) : 0;
+        signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
+        long end = now_ms() + secs * 1000;
+        unsigned n = 0;
+        while(!quit && now_ms() < end) {
+            if(r16(W_MBOX, 0x0A) == 0x14) {
+                uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2, wr = (uint32_t)r16(W_MBOX, 0x9E) * 2;
+                /* phase 0/1: metades alternadas; 2: amostras pares das 320; 3: ímpares; 4: só a metade 1 */
+                uint32_t s0 = src + ((n++ + phase) & 1) * 0x140;
+                for(uint32_t i = 0; i < wr && i < 0x140 && off + 0x280 + i < 0x8000 && s0 + i < 0x8000; i += 2) {
+                    uint32_t at = phase == 2 ? src + i * 2 : phase == 3 ? src + i * 2 + 2 : phase == 4 ? src + 0x140 + i : s0 + i;
+                    uint16_t v = r16(W_YM, at);
+                    if(swap) v = (uint16_t)(v >> 8 | v << 8);
+                    int x = (int16_t)v;
+                    x = shift >= 0 ? x >> shift : x << -shift;
+                    w16(W_YM, off + 0x280 + i, (uint16_t)x);
+                }
+                w16(W_MBOX, 0x0A, 0);
+            }
+            stall_us(1000);
+        }
+        printf("%u blocos\n", n);
+        return 0;
+    }
+    if(!strcmp(c, "mrec")) {                      /* só lê: pico por segundo de cada pedaço de 32 amostras (X e Y) */
+        int secs = argc > 2 ? atoi(argv[2]) : 60;
+        enum { CH = 32, NC = 0x8000 / CH };
+        static int pk[NC];
+        setvbuf(stdout, NULL, _IOFBF, 1 << 16);
+        for(int t = 0; t < secs; t++) {
+            memset(pk, 0, sizeof pk);
+            for(int k = 0; k < 20; k++) {
+                for(int i = 0; i < 0x8000; i++) {
+                    int v = (int16_t)(i < 0x4000 ? r16(W_XM, i * 2) : r16(W_YM, (i - 0x4000) * 2));
+                    if(abs(v) > pk[i / CH]) pk[i / CH] = abs(v);
+                }
+                stall_us(50000);
+            }
+            printf("%d", t);
+            for(int c = 0; c < NC; c++) printf(" %d", pk[c]);
+            printf("\n");
+            fflush(stdout);
+        }
+        return 0;
+    }
+    if(!strcmp(c, "scan")) {                      /* procura voz na memória de dados X e Y do DSP */
+        int secs = argc > 2 ? atoi(argv[2]) : 10;
+        enum { CH = 64, NX = 0x8000 / 2 / CH, NC = NX * 2 };   /* pedaços de 64 amostras, X e Y */
+        static int16_t prev[0x8000];
+        static long act[NC]; static int peak[NC];
+        for(int i = 0; i < 0x4000; i++) { prev[i] = (int16_t)r16(W_XM, i * 2); prev[0x4000 + i] = (int16_t)r16(W_YM, i * 2); }
+        for(int k = 0; k < secs * 10; k++) {
+            stall_us(100000);
+            for(int i = 0; i < 0x8000; i++) {
+                int16_t v = (int16_t)(i < 0x4000 ? r16(W_XM, i * 2) : r16(W_YM, (i - 0x4000) * 2));
+                int c = i / CH;
+                if(v != prev[i]) { act[c]++; if(abs(v) > peak[c]) peak[c] = abs(v); }
+                prev[i] = v;
+            }
+        }
+        for(int c = 0; c < NC; c++)
+            if(act[c] > secs * 10 && peak[c] > 300)
+                printf("%s +0x%04x  mudancas %6ld  pico %5d\n", c < NX ? "X" : "Y", (c % NX) * CH * 2, act[c], peak[c]);
+        printf("fim\n");
+        return 0;
     }
     if(!strcmp(c, "peek")) {                      /* só lê: pico/média do bloco de origem, 10x por segundo */
         int secs = argc > 2 ? atoi(argv[2]) : 10;

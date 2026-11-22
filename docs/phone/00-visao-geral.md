@@ -31,7 +31,7 @@ histórico e as mensagens podem ser importados do celular.
 | Agenda (PBAP) | **funcionando**: 5363 contatos em ~1 min |
 | Histórico de chamadas (PBAP) | **funcionando** |
 | Mensagens SMS (MAP) | implementado; o POCO responde "serviço indisponível" (0xD3) até que o acesso às mensagens seja permitido no celular |
-| **Voz da ligação no FOSTON** | **não**: o aparelho tem microfone e alto-falante, mas a voz passa pelo DSP, ainda não portado (ver [02-audio-da-chamada.md](02-audio-da-chamada.md)) |
+| **Voz da ligação no FOSTON** (alto-falante e microfone) | **funcionando** com os arquivos do aparelho no cartão ([02-audio-da-chamada.md](02-audio-da-chamada.md)) |
 
 ## Arquitetura
 

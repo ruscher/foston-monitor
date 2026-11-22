@@ -1,4 +1,39 @@
-# Voz da ligação: por que ainda fica no celular
+# Voz da ligação no FOSTON (alto-falante e microfone)
+
+**FUNCIONANDO (22/11/2026, ligação real com o POCO X4):** a voz do celular sai no alto-falante do
+FOSTON e o microfone do FOSTON chega ao celular. Escolha no painel da ligação: "Falar pelo:
+Celular | FOSTON".
+
+## Como funciona
+
+1. **Chip Bluetooth (MT6611)**, como o `Radio_Init` do CE: versão (`0xFCD1`), `SetE2BaseAddr`
+   (`0xFCD0 {0x01000124 = 0x01005900}`), patch da ROM (`0xFCC4`, 7388 bytes), HCI Reset,
+   endereço, máscara LMP sem eSCO (`0xFC1E`). Sem a máscara o canal de voz não abre; sem o
+   `SetE2BaseAddr` e o reset o patch para a música.
+2. **Canal de voz (SCO)** aberto pelo celular, ou pedido pelo FOSTON com um socket SCO do kernel.
+   A voz não passa pelo HCI: vai pelos pinos PCM (DAI) ao DSP do MT3351.
+3. **DSP** (programa carregado pelo CE no boot, continua no Linux): `bfvoice run` repete o
+   `MM_GSMPCM_2WAY_START` do `wavedev_drv` e atende o DSP a cada 20 ms.
+4. **Alto-falante:** a voz do celular chega ao anel `Y+0x7400` (2 × 160 amostras); a ponte a
+   copia para o bloco do alto-falante (`Y[+0x9A*2] + 0x280`) e responde `+0x0A = 0`.
+5. **Microfone:** os valores do modo de ligação do CE deixam o ADC do microfone desligado
+   (`0x80061108 = 0x80`); com os da gravação de fábrica do CE (`0x80061104 = 0x2A00`,
+   `0x8006110C = 0x6220`, `0x80061108 = 0`) o microfone entra no DSP (nível ~60 → ~31000) e o
+   DSP o manda ao celular.
+
+Arquivos do próprio aparelho no cartão (não vão para o git, são da MediaTek), tirados do backup
+do CE com `tools/bigfoston/voice-extract.py OUT --patch PATCH`:
+`BigFoston/voz/wavedev-text.bin` e `BigFoston/bt/mt6611-patch.bin`.
+
+Como a busca foi feita (para casos parecidos): `bfvoice scan` compara a memória de dados do DSP
+com e sem o canal Bluetooth (achou `Y+0x7400`); `bfvoice mrec` grava o nível de cada região
+segundo a segundo enquanto o usuário alterna silêncio e fala; `bfvoice bridge` testa uma
+origem pelo ouvido; `bfvoice tone` confirma o caminho do alto-falante.
+
+---
+
+# Histórico da investigação
+
 
 Resumo: no FOSTON, a voz de uma ligação Bluetooth **não passa pelo Linux**. O chip Bluetooth
 (MT6611) entrega o canal de voz (SCO) pelos seus pinos PCM ao DSP do MT3351, como no Windows

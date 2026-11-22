@@ -48,8 +48,7 @@
 #define BFVOICE  "/usr/sbin/bfvoice"
 #define VOICE_IMG "/mnt/sd/BigFoston/voz/wavedev-text.bin"
 #define VOICE_PREF "/data/bigfoston/telefone-voz"
-/* a voz pelo DSP ainda não sai de ponta a ponta (docs/phone/02): só com esta marca */
-#define VOICE_EXPERIMENTAL "/data/bigfoston/voz-experimental"
+/* a voz pelo DSP funciona com a imagem do DSP e o patch do MT6611 no cartão (docs/phone/02) */
 
 /* ------------------------------------------------------------------ estado */
 
@@ -429,7 +428,7 @@ static int run_bfvoice(const char *what)
 
 static void voice_check(void)
 {
-    st.voice_avail = !access(BFVOICE, X_OK) && !access(VOICE_IMG, R_OK) && !access(VOICE_EXPERIMENTAL, F_OK);
+    st.voice_avail = !access(BFVOICE, X_OK) && !access(VOICE_IMG, R_OK);
 }
 
 /* canal de voz pedido pelo FOSTON no meio da ligação: um socket SCO do kernel para o celular
