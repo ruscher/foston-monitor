@@ -371,11 +371,20 @@ int screenshot_run(const char *dir)
         if(o) { fputs("state=tocando\nfreq=479.143\nlocked=1\nsnr=19\nrssi=-62\nfps=13.9\n", o); fclose(o); }
         setenv("BIGFOSTON_TV_DIR", td, 1);
         setenv("BIGFOSTON_TV_STATUS", sp, 1);
+        bf_settings_t *ts = settings();              /* o FOSTON usa o Foston Glass */
+        int was = ts->home_mode;
+        ts->home_mode = BF_HOME_GLASS;
+        app_rebuild_now(); pump(50);
         go(SCR_TV, 0); pump(300); shot("46-tv");
+        scr_tv_demo(5); pump(300); shot("46f-tv-volume");
         scr_tv_demo(1); pump(300); shot("46b-tv-canais");
         scr_tv_demo(2); pump(300); shot("46c-tv-gravacoes");
         scr_tv_demo(3); pump(300); shot("46d-tv-busca");
         scr_tv_demo(4); pump(300); shot("46e-tv-entrada-av");
+        go(SCR_HOME, 0); pump(600); shot("46h-inicio-depois-da-tv");     /* papel de parede e barra voltam */
+        ts->home_mode = was;
+        app_rebuild_now(); pump(50);
+        go(SCR_TV, 0); pump(300); shot("46g-tv-classico");
         go(SCR_HOME, 0); pump(100);
         unsetenv("BIGFOSTON_TV_DIR");
         unsetenv("BIGFOSTON_TV_STATUS");

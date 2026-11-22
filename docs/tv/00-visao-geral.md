@@ -22,24 +22,39 @@ Os arquivos proprietários (firmware `.inp` da Siano) ficam só no cartão do us
 
 ## O app TV
 
-| Ao vivo | Canais | Gravações | Busca | Entrada AV |
-|---|---|---|---|---|
-| ![TV](../images/ui/46-tv.png) | ![Canais](../images/ui/46b-tv-canais.png) | ![Gravações](../images/ui/46c-tv-gravacoes.png) | ![Busca](../images/ui/46d-tv-busca.png) | ![AV](../images/ui/46e-tv-entrada-av.png) |
+| Ao vivo | Volume (rodapé) | Canais | Gravações |
+|---|---|---|---|
+| ![TV](../images/ui/46-tv.png) | ![Volume](../images/ui/46f-tv-volume.png) | ![Canais](../images/ui/46b-tv-canais.png) | ![Gravações](../images/ui/46c-tv-gravacoes.png) |
+
+| Busca | Entrada AV | Modo clássico |
+|---|---|---|
+| ![Busca](../images/ui/46d-tv-busca.png) | ![AV](../images/ui/46e-tv-entrada-av.png) | ![Clássico](../images/ui/46g-tv-classico.png) |
 
 (Capturas do simulador: o vídeo só aparece no aparelho.)
 
 - Abre pelo dock do Foston Glass (TV) ou pela grade Apps. Na primeira vez, sem canais, abre a
-  lista com **Buscar**.
-- O `bftvd` desenha o vídeo direto no framebuffer, num retângulo de 640×360 colado à esquerda,
-  que a tela deixa preto e nunca redesenha enquanto o vídeo toca; os controles ficam na coluna
-  da direita (fonte: TV / Gravações / AV; canal −/+; Canais; Gravar). No Foston Glass sobra uma
-  faixa sob o vídeo com o nome do canal grande. Tudo que cobriria o vídeo (listas, busca) para o
-  vídeo antes.
-- Trocar de canal reinicia o `bftvd` com o firmware já carregado: a imagem volta em ~5-8 s (o
-  1seg só mostra a imagem limpa no próximo quadro-chave).
+  lista com a busca.
+- Tudo sobre preto (o papel de parede some e a barra de cima fica preta enquanto a TV está
+  aberta; ao sair, voltam como eram). Sem cartões, bordas ou cores: só ícones e textos brancos.
+- O `bftvd` desenha o vídeo direto no framebuffer: 640×360 no Foston Glass (512×288 centrado no
+  modo clássico, que tem a barra de baixo), num retângulo que a tela deixa preto e nunca
+  redesenha enquanto o vídeo toca.
+- **Coluna da direita, como um controle remoto**: fonte (TV, Gravações, AV); Play, Stop, Gravar;
+  VOL +/−, Canais, Tela cheia, CH ▲/▼. A fonte atual fica acesa e as outras apagadas; o que
+  não se aplica fica apagado (por exemplo Tela cheia sem imagem).
+- **Rodapé**: nome do canal; embaixo, menor e mais escuro, "Região: Brasil · Canal N ·
+  situação"; à direita, a força do sinal (SNR).
+- **Volume**: VOL +/− e o ícone de som da barra de cima mostram a barra de volume na horizontal
+  no rodapé, por 4 s, sem cobrir o vídeo (o painel de volume normal ficava por baixo da imagem).
+- **Tela cheia**: o vídeo vai para 800×450 (faixas pretas em cima e embaixo); uma camada preta
+  cobre a tela e o LVGL para de desenhar (`lv_display_enable_invalidation`), então nada pisca
+  por cima. Tocar em qualquer lugar volta. Sai sozinha se o vídeo parar ou se algo precisar
+  aparecer (chamada recebida, aviso). Medido: 13,8 qps em tela cheia.
+- **Stop** para o vídeo (o sintonizador continua ligado); **Play** volta.
+- Trocar de canal reinicia o `bftvd` com o firmware já carregado: a imagem volta em ~5-8 s.
 - **Gravar** manda `SIGUSR1` ao `bftvd`: começa/para de gravar o TS em
-  `BigFoston/tv/gravacoes/tv-AAAAMMDD-HHMMSS-cNN.ts` sem parar a imagem. As gravações tocam pelo
-  próprio app (`bftvd -p`), com posição e duração.
+  `BigFoston/tv/gravacoes/tv-AAAAMMDD-HHMMSS-cNN.ts` sem parar a imagem (ponto vermelho
+  enquanto grava). As gravações tocam pelo próprio app (`bftvd -p`), com posição e duração.
 - Sair do app desliga o sintonizador (`bftvd -O`).
 - Último canal: `/data/bigfoston/tv-canal`. Canais: `BigFoston/tv/canais.tsv` (canal, MHz, nome,
   SNR, RSSI).
@@ -63,11 +78,15 @@ Os arquivos proprietários (firmware `.inp` da Siano) ficam só no cartão do us
 (reprodutível: o mesmo binário que está no aparelho).
 
 ```
-bftvd [-f FW.inp] [-r X,Y,2] [-s STATE] [-w REC.ts] [-W PASTA] MHZ   assistir (SIGUSR1: gravar/parar)
-bftvd [-r X,Y,2] [-s STATE] -p ARQUIVO.ts                            tocar uma gravação
+bftvd [-f FW.inp] [-r X,Y,L,A] [-F X,Y,L,A] [-s STATE] [-w REC.ts] [-W PASTA] MHZ   assistir
+bftvd [-r X,Y,L,A] [-F X,Y,L,A] [-s STATE] -p ARQUIVO.ts                            tocar uma gravação
 bftvd [-f FW.inp] [-s STATE] -S CANAIS.tsv                           buscar canais
 bftvd -O                                                             desligar o sintonizador
 ```
+
+Sinais: `SIGUSR1` grava/para; `SIGUSR2` vai para o retângulo de tela cheia (`-F`), `SIGWINCH`
+volta. `-r` com o dobro do quadro usa o caminho rápido (2×); outros tamanhos convertem cada
+linha do quadro uma vez e esticam (vizinho mais próximo).
 
 Estado em `/run/bigfoston-tv`: `state` (ligando, sintonizando, abrindo, tocando, sem_sinal, sem_imagem (travado, mas nada decodificado em 20 s), busca,
 busca_fim, fim, parado, erro_*), `freq`, `locked`, `snr`, `rssi`, `ts_kbps`, `fps`, `late`,

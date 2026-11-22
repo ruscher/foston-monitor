@@ -11,6 +11,8 @@
  * o áudio HE-AAC (LOAS/LATM) vai pela fdk-aac (ponto fixo: 14 % de CPU em vez de 59 %),
  * reamostrado de 48 para 32 kHz mono, no /dev/dsp. Estado em STATE (padrão /run/bigfoston-tv).
  * Termina com SIGTERM/SIGINT (o sintonizador fica ligado para a troca de canal: -O desliga).
+ * -r X,Y,L,A / -F X,Y,L,A: retângulo do vídeo e o da tela cheia; SIGUSR2 vai para a tela cheia,
+ * SIGWINCH volta.
  * SIGUSR1 começa/para de gravar o TS em PASTA/tv-AAAAMMDD-HHMMSS-cNN.ts sem parar a imagem.
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
@@ -170,7 +172,12 @@ static void *tuner_thread(void *a)
 /* ------------------------------------------------------------ vídeo: YUV420 -> RGB565 2x */
 
 static uint16_t *fb;
-static int fb_stride = 800, out_x = 80, out_y = 60, scale2 = 1;
+static int fb_stride = 800, out_x = 80, out_y = 60, out_w, out_h;    /* out_w 0: 2x do quadro */
+static int alt_x, alt_y, alt_w, alt_h;          /* -F: retângulo da tela cheia (SIGUSR2 alterna) */
+static volatile sig_atomic_t want_full;        /* SIGUSR2: tela cheia; SIGWINCH: volta à janela */
+static int is_full;
+static void on_usr2(int s) { (void)s; want_full = 1; }
+static void on_winch(int s) { (void)s; want_full = 0; }
 static int16_t t_rv[256], t_gu[256], t_gv[256], t_bu[256];
 static uint8_t clip[1024];
 
@@ -194,8 +201,48 @@ static inline uint16_t px(int y, int rv, int g, int bu)
 
 static int fb_w = 800, fb_h = 480;
 
+/* qualquer tamanho: converte cada linha de origem uma vez e estica (vizinho mais próximo) */
+static void blit_scaled(const AVFrame *f, int ox, int oy, int W, int H)
+{
+    static uint16_t line[1024];
+    static int xmap[1024];
+    int w = f->width, h = f->height;
+    if(w > 1024) w = 1024;
+    if(ox < 0) ox = 0;
+    if(oy < 0) oy = 0;
+    if(W > fb_w - ox) W = fb_w - ox;
+    if(H > fb_h - oy) H = fb_h - oy;
+    if(W <= 0 || H <= 0 || W > 1024 || w <= 0 || h <= 0) return;
+    for(int x = 0; x < W; x++) xmap[x] = x * w / W;
+    int last = -1;
+    for(int y = 0; y < H; y++) {
+        int sy = y * h / H;
+        if(sy != last) {
+            const uint8_t *yy = f->data[0] + sy * f->linesize[0];
+            const uint8_t *u = f->data[1] + (sy / 2) * f->linesize[1], *v = f->data[2] + (sy / 2) * f->linesize[2];
+            for(int x = 0; x + 1 < w; x += 2) {
+                int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
+                line[x] = px(yy[x], rv, g, bu);
+                line[x + 1] = px(yy[x + 1], rv, g, bu);
+            }
+            last = sy;
+        }
+        uint16_t *d = fb + (oy + y) * fb_stride + ox;
+        for(int x = 0; x < W; x++) d[x] = line[xmap[x]];
+    }
+}
+
 static void blit(const AVFrame *f)
 {
+    if(want_full != is_full && alt_w > 0) {            /* tela cheia <-> janela */
+        is_full = want_full;
+        int t;
+        t = out_x; out_x = alt_x; alt_x = t;
+        t = out_y; out_y = alt_y; alt_y = t;
+        t = out_w; out_w = alt_w; alt_w = t;
+        t = out_h; out_h = alt_h; alt_h = t;
+    }
+    if(out_w > 0 && (out_w != f->width * 2 || out_h != f->height * 2)) { blit_scaled(f, out_x, out_y, out_w, out_h); return; }
     int w = f->width, h = f->height;
     if(w > (fb_w - out_x) / 2) w = (fb_w - out_x) / 2 & ~1;  /* nunca fora do retângulo da tela */
     if(h > (fb_h - out_y) / 2) h = (fb_h - out_y) / 2 & ~1;
@@ -555,10 +602,14 @@ int main(int argc, char **argv)
     av_log_set_level(AV_LOG_QUIET);                     /* avisos de quadro com erro: nada de log */
     int opt, off = 0;
     const char *scan_out = NULL, *rec_path = NULL;
-    while((opt = getopt(argc, argv, "f:r:s:S:w:W:p:O")) != -1) {
+    while((opt = getopt(argc, argv, "f:r:F:s:S:w:W:p:O")) != -1) {
         if(opt == 'f') fw_path = optarg;
         else if(opt == 's') state_path = optarg;
-        else if(opt == 'r') sscanf(optarg, "%d,%d,%d", &out_x, &out_y, &scale2);
+        else if(opt == 'r') {                          /* X,Y,2 (o dobro do quadro) ou X,Y,L,A */
+            int a = 0, b = 0;
+            if(sscanf(optarg, "%d,%d,%d,%d", &out_x, &out_y, &a, &b) == 4) { out_w = a; out_h = b; }
+        }
+        else if(opt == 'F') sscanf(optarg, "%d,%d,%d,%d", &alt_x, &alt_y, &alt_w, &alt_h);
         else if(opt == 'S') scan_out = optarg;
         else if(opt == 'w') rec_path = optarg;
         else if(opt == 'W') rec_dir = optarg;
@@ -574,6 +625,8 @@ int main(int argc, char **argv)
     signal(SIGINT, on_sig);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGUSR1, on_usr1);
+    signal(SIGUSR2, on_usr2);
+    signal(SIGWINCH, on_winch);
     if(!play_path && map()) return 1;
     if(off) { power_off(); return 0; }
     tables();

@@ -9,6 +9,7 @@
 #include "../assets/logo/bf_logo.h"
 #include "../core/nav.h"
 #include "bottombar.h"
+#include "../screens/screens.h"
 #include "glass.h"
 #include <string.h>
 #include <stdio.h>
@@ -49,6 +50,7 @@ static void glass_nav(lv_obj_t *bar_)
 
 static void vol_click(lv_event_t *e)
 {
+    if(nav_current().scr == SCR_TV && scr_tv_volume()) return;   /* TV: sem cobrir o vídeo */
     lv_area_t a;
     lv_obj_get_coords(lv_event_get_current_target(e), &a);
     volpop_open((a.x1 + a.x2) / 2, a.y2 + 6);
