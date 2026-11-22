@@ -9,6 +9,7 @@
 #include "fx.h"
 #include "clock.h"
 #include "devwatch.h"
+#include "powerkey.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
@@ -85,6 +86,7 @@ void app_init(lv_display_t *d)
     tick = lv_timer_create(tick_cb, 1000, NULL);
     fx_init();
     devwatch_init();
+    powerkey_init();
     fx_sound(FX_STARTUP);
 }
 
@@ -108,6 +110,10 @@ void app_rebuild(void) { lv_async_call(rebuild_async, NULL); }
 static void power_err_cb(int b, void *ud) { (void)b; (void)ud; }
 
 static bool shutting_down;
+
+/* Reiniciar sem desligar: o reset do watchdog deixa o aparelho desligado,
+ * então o Linux reinicia a si mesmo com kexec (firmware/.../bigfoston-reboot) */
+#define REBOOT_KEXEC "/usr/sbin/bigfoston-reboot"
 bool app_shutting_down(void) { return shutting_down; }
 
 /* Tela de encerramento (como a de abertura): fica até o aparelho apagar. O
@@ -128,7 +134,8 @@ lv_obj_t *app_bye_screen(bool reboot)
     lv_obj_t *l = bf_label(o, tr(reboot ? S_BYE_REBOOT : S_BYE_OFF), BF_FONT_L, lv_color_hex(0xeef1ff));
     lv_obj_align(l, LV_ALIGN_TOP_MID, 0, 330);
     if(reboot) {
-        lv_obj_t *h = bf_label(o, tr(S_BYE_REBOOT_HINT), BF_FONT_S, lv_color_hex(0x8d9cc8));
+        lv_obj_t *h = bf_label(o, tr(access(REBOOT_KEXEC, X_OK) == 0 ? S_BYE_REBOOT_KEXEC : S_BYE_REBOOT_HINT),
+                               BF_FONT_S, lv_color_hex(0x8d9cc8));
         lv_obj_align(h, LV_ALIGN_TOP_MID, 0, 386);
     }
     return o;
@@ -142,15 +149,30 @@ void app_power(bool reboot)
         exit(0);
     }
     const char *cmd = getenv(reboot ? "BIGFOSTON_REBOOT_CMD" : "BIGFOSTON_POWEROFF_CMD");
-    if(!cmd || !*cmd) cmd = reboot ? "/sbin/reboot" : "/sbin/poweroff";
+    if(!cmd || !*cmd)
+        cmd = !reboot ? "/sbin/poweroff" : access(REBOOT_KEXEC, X_OK) == 0 ? REBOOT_KEXEC : "/sbin/reboot";
     lv_obj_t *bye = app_bye_screen(reboot);      /* camada do sistema: cobre o diálogo */
     lv_refr_now(NULL);
     shutting_down = true;
+    int pfd[2] = { -1, -1 };
+    if(pipe(pfd) != 0) pfd[0] = pfd[1] = -1;
     pid_t pid = fork();
     if(pid == 0) {
+        if(pfd[1] >= 0) { dup2(pfd[1], 2); close(pfd[0]); close(pfd[1]); }
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     }
+    if(pfd[1] >= 0) close(pfd[1]);
+    /* a mensagem de erro do comando (stderr), para mostrar no diálogo */
+    static char err[320];
+    size_t n = 0;
+    if(pfd[0] >= 0) {
+        ssize_t r;
+        while(n < sizeof err - 1 && (r = read(pfd[0], err + n, sizeof err - 1 - n)) > 0) n += (size_t)r;
+        close(pfd[0]);
+    }
+    err[n] = 0;
+    while(n && (err[n - 1] == '\n' || err[n - 1] == ' ')) err[--n] = 0;
     int st = -1;
     if(pid > 0) waitpid(pid, &st, 0);
     if(pid < 0 || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
@@ -158,7 +180,7 @@ void app_power(bool reboot)
         lv_obj_delete(bye);
         static const char *btn[1];
         btn[0] = tr(S_CLOSE);
-        dialog_open(BF_SYMBOL_ALERT, pal()->warning, tr(S_RUN_FAILED), cmd, btn, 1, 0, -1,
+        dialog_open(BF_SYMBOL_ALERT, pal()->warning, tr(S_RUN_FAILED), n ? err : cmd, btn, 1, 0, -1,
                     power_err_cb, NULL);
     }
 }

@@ -9,7 +9,7 @@ extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, sc
        scr_monitor_def, scr_calibrate_def, scr_backlight_def, scr_volume_def,
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
        scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def,
-       scr_appearance_def, scr_bigscreen_def, scr_gallery_def, scr_gps_def;
+       scr_appearance_def, scr_bigscreen_def, scr_gallery_def, scr_gps_def, scr_map_def, scr_perf_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {
@@ -29,6 +29,7 @@ void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
 void scr_gallery_demo(int step); /* 0 espera as miniaturas, 1 abre a 1ª, 2 fecha */
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar */
+void scr_map_demo(int step);     /* Big GPS: 0 destino e rota, 1 simular, 2 avançar 60 s, 3-5 busca */
 void music_play_file(const char *path);   /* Arquivos -> Multimídia */
 enum { MUSIC_TOGGLE, MUSIC_PREV, MUSIC_NEXT };
 bool music_has_queue(void);               /* há faixas na fila do Multimídia */

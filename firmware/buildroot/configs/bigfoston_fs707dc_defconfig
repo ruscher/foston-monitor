@@ -45,6 +45,7 @@ BR2_PACKAGE_DOSFSTOOLS=y
 BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
 BR2_PACKAGE_BIGFOSTON_SHELL=y
 BR2_PACKAGE_BIGFOSTON_GPS=y
+BR2_PACKAGE_BIGFOSTON_ESPEAK_NG=y
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/users.table"
 # audio without alsa-lib (static build: every user would carry its own ~600 KB copy;
 # tinyalsa needs shared libs): mpg123 plays through the kernel OSS emulation and the
@@ -52,3 +53,5 @@ BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/use
 # MP3 playback (fixed-point arm_nofpu decoder, OSS output) for the Multimedia app
 BR2_PACKAGE_MPG123=y
 BR2_LINUX_KERNEL_XZ=y
+# Reiniciar com kexec (bigfoston-reboot)
+BR2_PACKAGE_KEXEC=y

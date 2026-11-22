@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <termios.h>
@@ -172,6 +173,20 @@ static void wstr(char *out, size_t n, u32 p)
     else w16_to_utf8(out, n, W(p));
 }
 
+/* \ResidentFlash em RAM (docs/performance/03-cpu-profiling.md): o motor abre
+ * BEE.BIN e ARC.BIN para leitura e escrita ~2 vezes por segundo, e no cartão
+ * (FAT montado com "flush") cada fechamento de um arquivo aberto para escrita
+ * dorme ~100 ms: a thread do GPS ficava ~200 ms/s bloqueada. Os arquivos são
+ * copiados para RAM ao iniciar e só voltam ao cartão quando mudam, no máximo
+ * a cada MIRROR_SYNC_S e ao sair (SIGTERM). Sem RAM, usa o cartão direto. */
+static void mkparents(const char *path);
+#define MIRROR_DIR    "/run/bfgps-flash"
+#define MIRROR_SYNC_S 120
+#define MIRROR_MAXF   32
+static int mirror_on;
+static struct { char name[64]; time_t mtime; off_t size; } mirror_f[MIRROR_MAXF];
+static int mirror_n;
+
 /* caminho do CE -> pasta de dados ("\ResidentFlash\x" -> <dados>/ResidentFlash/x) */
 static void ce_path(char *out, size_t n, const char *ce)
 {
@@ -182,7 +197,102 @@ static void ce_path(char *out, size_t n, const char *ce)
     tmp[o] = 0;
     const char *t = tmp;
     while(*t == '/') t++;
-    snprintf(out, n, "%s/root/%s", data_dir, t);
+    if(mirror_on && !strncasecmp(t, "ResidentFlash/", 14) && !strchr(t + 14, '/'))
+        snprintf(out, n, MIRROR_DIR "/%s", t + 14);
+    else
+        snprintf(out, n, "%s/root/%s", data_dir, t);
+}
+
+static int copy_file(const char *from, const char *to)
+{
+    int in = open(from, O_RDONLY), out = -1, ok = 0;
+    char tmp[600];
+    snprintf(tmp, sizeof tmp, "%s.tmp", to);
+    if(in >= 0) out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if(out >= 0) {
+        static char buf[16384];
+        ssize_t r;
+        ok = 1;
+        while((r = read(in, buf, sizeof buf)) > 0)
+            if(write(out, buf, (size_t)r) != r) { ok = 0; break; }
+        if(r < 0) ok = 0;
+        if(close(out)) ok = 0;
+        if(ok && rename(tmp, to)) ok = 0;
+        if(!ok) unlink(tmp);
+    }
+    if(in >= 0) close(in);
+    return ok;
+}
+
+static int mirror_find(const char *name)
+{
+    for(int i = 0; i < mirror_n; i++) if(!strcmp(mirror_f[i].name, name)) return i;
+    return -1;
+}
+
+static void mirror_init(void)
+{
+    char src[512], from[600], to[600];
+    snprintf(src, sizeof src, "%s/root/ResidentFlash", data_dir);
+    mkparents(src);
+    mkdir(src, 0755);
+    if(mkdir(MIRROR_DIR, 0755) && errno != EEXIST) { logf_("espelho: %s: %s", MIRROR_DIR, strerror(errno)); return; }
+    DIR *d = opendir(src);
+    if(!d) return;
+    struct dirent *e;
+    int ok = 1;
+    while((e = readdir(d)) && ok) {
+        size_t l = strlen(e->d_name);
+        if(e->d_name[0] == '.' || l >= sizeof mirror_f[0].name || (l > 4 && !strcmp(e->d_name + l - 4, ".tmp"))) continue;
+        snprintf(from, sizeof from, "%s/%s", src, e->d_name);
+        snprintf(to, sizeof to, MIRROR_DIR "/%s", e->d_name);
+        struct stat st;
+        if(stat(from, &st) || !S_ISREG(st.st_mode)) continue;
+        if(!copy_file(from, to) || mirror_n >= MIRROR_MAXF) { ok = 0; break; }
+        struct stat mt;
+        stat(to, &mt);
+        snprintf(mirror_f[mirror_n].name, sizeof mirror_f[0].name, "%s", e->d_name);
+        mirror_f[mirror_n].mtime = mt.st_mtime;
+        mirror_f[mirror_n].size = mt.st_size;
+        mirror_n++;
+    }
+    closedir(d);
+    if(!ok) { logf_("espelho: cópia para a RAM falhou, usando o cartão"); return; }
+    mirror_on = 1;
+    logf_("espelho: %d arquivos de \\ResidentFlash em %s", mirror_n, MIRROR_DIR);
+}
+
+/* grava no cartão os arquivos do espelho que mudaram (e os novos). Um arquivo
+ * alterado há menos de 3 s fica para a próxima volta (o motor pode estar no
+ * meio de uma gravação); final = 1 ao sair grava tudo. */
+static void mirror_sync(int final)
+{
+    if(!mirror_on) return;
+    DIR *d = opendir(MIRROR_DIR);
+    if(!d) return;
+    struct dirent *e;
+    time_t now = time(NULL);
+    while((e = readdir(d))) {
+        size_t l = strlen(e->d_name);
+        if(e->d_name[0] == '.' || l >= sizeof mirror_f[0].name || (l > 4 && !strcmp(e->d_name + l - 4, ".tmp"))) continue;
+        char from[600], to[600];
+        snprintf(from, sizeof from, MIRROR_DIR "/%s", e->d_name);
+        struct stat st;
+        if(stat(from, &st) || !S_ISREG(st.st_mode)) continue;
+        int i = mirror_find(e->d_name);
+        if(i >= 0 && mirror_f[i].mtime == st.st_mtime && mirror_f[i].size == st.st_size) continue;
+        if(!final && now - st.st_mtime < 3) continue;
+        snprintf(to, sizeof to, "%s/root/ResidentFlash/%s", data_dir, e->d_name);
+        if(!copy_file(from, to)) { logf_("espelho: gravar %s no cartão falhou", e->d_name); continue; }
+        if(i < 0 && mirror_n < MIRROR_MAXF) i = mirror_n++;
+        if(i >= 0) {
+            snprintf(mirror_f[i].name, sizeof mirror_f[0].name, "%s", e->d_name);
+            mirror_f[i].mtime = st.st_mtime;
+            mirror_f[i].size = st.st_size;
+        }
+        LOGV("espelho: %s gravado no cartão (%ld bytes)", e->d_name, (long)st.st_size);
+    }
+    closedir(d);
 }
 
 static void mkparents(const char *path)
@@ -1602,6 +1712,7 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
     signal(SIGPIPE, SIG_IGN);
+    if(!getenv("BFGPS_NO_MIRROR")) mirror_init();
     char defbfx[512];
     if(!bfx) { snprintf(defbfx, sizeof defbfx, "%s/gps.bfx", data_dir); bfx = defbfx; }
 
@@ -1718,6 +1829,7 @@ int main(int argc, char **argv)
     static char app[1024];
     struct timespec ts0, ts1;
     clock_gettime(CLOCK_MONOTONIC, &ts0);
+    time_t last_sync = ts0.tv_sec;
     long total = 0;
     for(;;) {
         clock_gettime(CLOCK_MONOTONIC, &ts1);
@@ -1728,7 +1840,9 @@ int main(int argc, char **argv)
             LOGV("COM_Read: %u bytes", n);
         }
         else usleep(50000);
+        if(ts1.tv_sec - last_sync >= MIRROR_SYNC_S) { last_sync = ts1.tv_sec; mirror_sync(0); }
     }
+    mirror_sync(1);
     logf_("COM_Read: %ld bytes de NMEA em %ld s", total, (long)(ts1.tv_sec - ts0.tv_sec));
     if(status_path) unlink(status_path);
     if(pty_link) unlink(pty_link);

@@ -1,0 +1,51 @@
+# Big GPS — visão geral
+
+Navegação offline para todo o Brasil no FOSTON FS-707DC com BigFoston OS: mapa, rotas para
+carro, moto, bicicleta e a pé, navegação curva a curva com voz em português, busca offline,
+favoritos e recálculo de rota. Usa o GPS que já funciona no Linux (`bfgps`, ver
+[docs/gps.md](../gps.md)) e dados do OpenStreetMap preparados no PC.
+
+**Estado (2026-11-21):** fases 1 e 2 feitas (auditoria e provas de viabilidade). O motor de
+mapas próprio desenha o DF no aparelho (tela do mapa no shell); o roteamento (quatro perfis,
+Contraction Hierarchies) funciona e foi conferido contra Dijkstra; a navegação curva a curva
+funciona com rota simulada no aparelho (falta teste dirigindo); a voz em português (eSpeak NG)
+fala as instruções; a busca offline (ruas, lugares, locais, endereços, categorias, favoritos)
+funciona.
+Nada aqui está aprovado para uso no trânsito real.
+
+## Princípios
+
+- O aparelho não tem FPU, tem ~100 MB livres e um SD de 2,7 ms por leitura aleatória
+  ([02-analise-hardware.md](02-analise-hardware.md)): tudo o que puder é pré-processado no
+  PC; no aparelho só aritmética inteira e leitura em blocos.
+- Toda decisão vem de medição no aparelho ([01-pesquisa-tecnologias.md](01-pesquisa-tecnologias.md)).
+- Dados OSM sob ODbL 1.0, com atribuição visível; nada de mapas proprietários nem
+  download em massa de servidores públicos de tiles.
+
+## Documentos
+
+| Arquivo | Conteúdo |
+|---|---|
+| [01-pesquisa-tecnologias.md](01-pesquisa-tecnologias.md) | candidatos, medições do libosmscout, decisão |
+| [02-analise-hardware.md](02-analise-hardware.md) | orçamento de CPU, RAM, SD, ponto flutuante |
+| [03-arquitetura.md](03-arquitetura.md) | componentes, fluxo de dados, organização do SD |
+| [04-formatos.md](04-formatos.md) | formatos dos arquivos de mapa, rotas, busca e voz |
+| [05-construtor-mapas.md](05-construtor-mapas.md) | `bgmap-build` no PC |
+| [06-renderizacao.md](06-renderizacao.md) | rasterizador, estilos, medições de quadro |
+| [07-roteamento.md](07-roteamento.md) | grafo, perfis, CH, conferência, medições |
+| [08-navegacao.md](08-navegacao.md) | uso, manobras, acompanhamento, avisos, testes |
+| [09-voz.md](09-voz.md) | eSpeak NG: escolha medida, funcionamento, dados no cartão |
+| [10-busca.md](10-busca.md) | índice, normalização, ordenação, favoritos, medições |
+| [11-interface.md](11-interface.md) | a tela do mapa, destino, navegação, busca, relógio |
+| [12-integracao-gps.md](12-integracao-gps.md) | como o Big GPS usa o serviço de GPS existente |
+| [13-dados-brasil.md](13-dados-brasil.md) | construção dos dados nacionais, tamanhos, tempos |
+| [15-testes.md](15-testes.md) | conferências, robustez (arquivos corrompidos, sanitizadores) |
+| [16-licencas.md](16-licencas.md) | auditoria de licenças de código, dados, voz e fontes |
+| [14-desempenho.md](14-desempenho.md) | desempenho medido no aparelho |
+| [17-instalacao-sd.md](17-instalacao-sd.md) | gerar os dados e instalar no cartão |
+| [18-uso.md](18-uso.md) | como usar |
+| [19-problemas-conhecidos.md](19-problemas-conhecidos.md) | limitações e o que falta verificar |
+| [20-proximos-passos.md](20-proximos-passos.md) | próximos passos recomendados |
+| [21-relatorio-entrega.md](21-relatorio-entrega.md) | relatório de entrega |
+
+

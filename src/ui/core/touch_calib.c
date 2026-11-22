@@ -137,8 +137,13 @@ lv_indev_t *touch_create(const char *dev)
     lv_indev_t *in = lv_indev_create();
     lv_indev_set_type(in, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(in, ts_read);
+    /* por evento: o laço principal espera no fd (poll) e lê na hora em que o kernel
+     * entrega o toque; enquanto o dedo está na tela o LVGL lê pelo próprio timer */
+    lv_indev_set_mode(in, LV_INDEV_MODE_EVENT);
     return in;
 }
+
+int touch_fd(void) { return ts.fd; }
 
 bool touch_last_raw(bf_pt_t *out)
 {

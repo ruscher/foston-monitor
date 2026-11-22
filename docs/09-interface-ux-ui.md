@@ -81,7 +81,14 @@ mais — … • “ ” € e os símbolos LVGL/Font Awesome usados — ver
   tela que já está na pilha volta até ela; **Início** zera a pilha.
 - **Recentes**: últimas 6 telas visitadas (sem a inicial), em diálogo com botões grandes.
 - **Terminal** (barra inferior) abre o Run em modo `sh -c` com o teclado já aberto.
-- **Desligar** sempre pede confirmação (Cancelar · Reiniciar · Desligar).
+- **Desligar** sempre pede confirmação (Cancelar · Hibernar · Reiniciar · Desligar). O mesmo
+  diálogo abre com um toque curto no botão de energia do aparelho; outro toque o fecha.
+- **Hibernar** cobre a tela de preto, baixa a luz de fundo ao mínimo que o hardware aceita
+  (`bl_power`, nível 3 de 19) e engole os toques; um toque na tela ou no botão de energia
+  acorda. Não é suspensão: o kernel deste aparelho não suspende o processador, então
+  música, GPS e rotas continuam rodando e a bateria continua sendo gasta.
+- **Reiniciar** reinicia o Linux sem desligar o aparelho (kexec com os arquivos da última
+  atualização no cartão); o reset de hardware deste aparelho o deixaria desligado.
 - Diálogos e teclado ficam na camada superior com fundo escurecido que bloqueia
   toques atrás. A calibração ocupa a tela inteira.
 - Ao voltar para Ajustes, a lista mantém a posição de rolagem.

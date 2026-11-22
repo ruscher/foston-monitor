@@ -11,8 +11,9 @@
  * até desligar.
  *
  * Atualização automática: o ntpd do BusyBox ("-n -q", 12 s por servidor)
- * numa thread, ao iniciar e depois a cada 60 min (10 min após falha). No
- * simulador nada disso mexe no relógio do PC. */
+ * numa thread, ao iniciar e depois a cada 60 min (10 min após falha); sem NTP nas
+ * últimas 2 h, a hora UTC do GPS (só com posição) acerta o relógio quando difere
+ * mais de 2 s. No simulador nada disso mexe no relógio do PC. */
 #ifndef BF_CLOCK_H
 #define BF_CLOCK_H
 #include <stdbool.h>
@@ -27,7 +28,7 @@ typedef struct {
     bool rules;           /* tem regra de horário de verão */
 } clock_zone_t;
 
-typedef enum { CLK_UNSET, CLK_SYSTEM, CLK_BOOT, CLK_MANUAL, CLK_NTP } clock_src_t;
+typedef enum { CLK_UNSET, CLK_SYSTEM, CLK_BOOT, CLK_MANUAL, CLK_NTP, CLK_GPS } clock_src_t;
 
 int                 clock_zone_count(void);
 const clock_zone_t *clock_zone(int i);

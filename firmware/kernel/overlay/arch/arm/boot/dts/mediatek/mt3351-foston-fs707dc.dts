@@ -137,6 +137,20 @@
 			reg = <0x80061308 0x4>;
 		};
 
+		/*
+		 * Power button: key 8 of the keypad controller (CE keypad_Us.dll maps
+		 * 0x80036000, 0x1a bytes, IRQ 38): +0 bit0 = a key is down, +4..+0x14
+		 * one bit per key, 0 = pressed. Measured on the device: each press
+		 * clears key 8 (0x80036004 bit 8) and its ghosts 17, 26, 35, 44, 53, 62,
+		 * 71, which CE skips. Only this word is read.
+		 */
+		power-button@80036004 {
+			compatible = "foston,fs707dc-pwrkey";
+			reg = <0x80036004 0x4>;
+			mediatek,bit = <8>;
+			mediatek,active-low;
+		};
+
 		/* watchdog: used only to restart, as the CE OAL does (nk.exe OALIoCtlHalReboot) */
 		watchdog@80003000 {
 			compatible = "mediatek,mt3351-wdt-reboot";

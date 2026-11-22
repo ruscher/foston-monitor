@@ -1,6 +1,6 @@
 # Estado da implementação — BigFoston OS no FOSTON FS-707DC
 
-Atualizado em 20/11/2026. Cada linha diz o que foi **medido no aparelho** (não no
+Atualizado em 21/11/2026 (BigFoston OS 0.2.0). Cada linha diz o que foi **medido no aparelho** (não no
 simulador), com a evidência e onde está o detalhe. Legenda:
 
 - **FUNCIONANDO** — testado no hardware e em uso.
@@ -15,8 +15,7 @@ abertura do kernel mostra o logotipo FOSTONOS; em 6,2 s a interface LVGL está n
 tela, com toque, som, cartão SD com gravação, rede USB com SSH e relógio certo.
 Ajustes, calibração e livros ficam no cartão SD.
 
-Ficam de fora, por falta de driver: GPS, Bluetooth, TV, transmissor FM e
-microfone. Parcial: reiniciar (o aparelho fica desligado).
+Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone.
 
 ## Boot e sistema
 
@@ -29,7 +28,9 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | Tela de abertura do kernel | **FUNCIONANDO** | logotipo sobre degradê calculado pelo kernel, barra 5→100 % | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | Kernel 6.12 + initramfs XZ (BusyBox, musl estático) | **FUNCIONANDO** | interface em 6,2 s após o kernel; 5 MB de 122 MB usados | [04-linux-port.md](04-linux-port.md) |
 | Desligar | **FUNCIONANDO** | watchdog como handler de POWER_OFF; tela "Desligando…" até apagar | [04-linux-port.md](04-linux-port.md) |
-| Reiniciar | **PARCIAL** | o reset do watchdog deixa o aparelho **desligado** (o CE faz igual); liga no botão | [04-linux-port.md](04-linux-port.md) |
+| Botão de energia → diálogo (Cancelar · Hibernar · Reiniciar · Desligar) | **FUNCIONANDO** | conferido no aparelho em 21/11/2026; driver `mt3351-pwrkey` (tecla 8 do teclado `0x80036000`) + `core/powerkey.c`; Hibernar só apaga a tela (sem suspensão do processador) | [04-linux-port.md](04-linux-port.md) |
+| Reiniciar | **FUNCIONANDO** | por kexec: o Linux carrega a si mesmo de novo, sem desligar (~13 s até a interface), conferido em 21/11/2026; com atualização pendente no cartão ele recusa e pede para desligar e ligar | [04-linux-port.md](04-linux-port.md) |
+| Desempenho (mapa, interface, GPS) | **FUNCIONANDO** | arrasto do mapa 3,6 → 17,4 quadros/s, GPS sem bloqueio no cartão (iowait 20 % → 0 %), toque por evento; Ajustes > Desempenho escolhe o detalhe do mapa | [performance/20-final-report.md](performance/20-final-report.md) |
 | Relógio | **PARCIAL** | sem driver de RTC no Linux; vem do relógio do CE (que guarda a hora desligado), do PC, do ajuste manual ou do NTP | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | Log do kernel após reset (ramoops) | **PARCIAL** | só sobrevive a reset com energia; desligar apaga a RAM (pstore vazio no boot seguinte) | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 
@@ -50,7 +51,8 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | USB ao ligar sem cabo | **FUNCIONANDO** | sem cabo no boot o CE deixa o bloco USB desligado; o glue o liga como o CE (conferido 21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
-| GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026) | [gps.md](gps.md) |
+| GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026); relógio acertado pela hora do GPS sem NTP | [gps.md](gps.md) |
+| Big GPS (mapa, rotas, navegação, voz, busca offline) | **FUNCIONANDO** (simulado; falta teste dirigindo) | motor próprio sem FPU; mapa do Brasil inteiro no aparelho; rotas carro/moto/bicicleta/a pé com Contraction Hierarchies; voz pt-BR (eSpeak NG); busca com favoritos e recentes | [big-gps/00-visao-geral.md](big-gps/00-visao-geral.md) |
 | Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
@@ -70,7 +72,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 | Avisos de dispositivos (fone, carregador, USB, SD) | **FUNCIONANDO** | |
 | Galeria (JPEG, PNG, GIF, BMP, SVG) | **FUNCIONANDO** | miniaturas numa thread com cache no cartão; visualizador com zoom, ◀ ▶ e GIF animado | [apps.md](apps.md) |
 | Controle de volume (barra superior e Multimídia) | **FUNCIONANDO** (simulador; ícone no aparelho) | barra vertical, mudo | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
-| GPS, GpsInfo, TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
+| TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
 
 ## Ferramentas no PC
 
@@ -86,7 +88,7 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 ## Limitações que o usuário percebe
 
 1. **Não deixar horas no Linux com a bateria baixa:** quem carrega é o CE.
-2. **Reiniciar desliga o aparelho**; é preciso ligar no botão (a tela avisa).
+2. **`reboot` pelo terminal desliga o aparelho** (watchdog); o Reiniciar da interface reinicia por kexec.
 3. **A hora do Linux vem do relógio do CE**; se ele perder a hora (bateria
    totalmente descarregada), acerte pelo PC (`bfagent.py settime`) ou em Ajustes > Data.
 4. **Liberar a gravação do SD reinicia o cartão** e soma ~1,3 s ao boot.
@@ -97,5 +99,5 @@ microfone. Parcial: reiniciar (o aparelho fica desligado).
 
 | # | Item | Valor | Risco / esforço |
 |---|---|---|---|
-| 1 | GPS: mapa/navegação offline sobre a posição | navegação | alto |
+| 1 | Big GPS: teste dirigindo; rotas nacionais de bicicleta e a pé | navegação | médio |
 | 2 | Bluetooth (UART2), TV, FM | — | alto: drivers novos |

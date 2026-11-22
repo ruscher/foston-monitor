@@ -38,9 +38,13 @@ typedef struct {
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */
     int  book_theme;    /* 0 escuro, 1 sépia, 2 claro */
+    bool nav_voice;     /* Big GPS: instruções faladas */
+    int  map_detail;    /* Big GPS: BF_DETAIL_* (Ajustes > Desempenho) */
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
+/* detalhe do mapa: automático escolhe pela situação e pelo tempo de cada quadro */
+enum { BF_DETAIL_AUTO, BF_DETAIL_ECONOMIC, BF_DETAIL_BALANCED, BF_DETAIL_DETAILED, BF_DETAIL__N };
 enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME__N };
 /* Multimídia, Livro, GPS, Arquivos, Monitor, Ajustes */
 #define BF_HOME_APPS_DEFAULT ((1u << 0) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10))

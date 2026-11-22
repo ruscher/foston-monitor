@@ -1,6 +1,7 @@
 /* clock.c — ver clock.h. */
 #define _DEFAULT_SOURCE
 #include "clock.h"
+#include "gpsstat.h"
 #include "settings.h"
 #include "status.h"
 #include <errno.h>
@@ -270,6 +271,38 @@ int clock_sync_result(time_t *when, char *err, size_t n)
     return r;
 }
 
+/* hora do GPS: "hhmmss.sss" e "ddmmyy" (UTC) do bfgps, só publicados com posição */
+static void gps_clock(void)
+{
+    static long last_try;
+    long now_m = mono_s();
+    if(now_m - last_try < 30) return;
+    last_try = now_m;
+    pthread_mutex_lock(&lock);
+    bool ntp_recent = src == CLK_NTP && time(NULL) - src_when < 2 * 3600;
+    pthread_mutex_unlock(&lock);
+    if(ntp_recent) return;
+    gps_info_t g;
+    gps_read(&g);
+    if(!g.running || g.state < GPS_FIX2D || strlen(g.time) < 6 || strlen(g.date) != 6) return;
+    struct tm t = {0};
+    if(sscanf(g.time, "%2d%2d%2d", &t.tm_hour, &t.tm_min, &t.tm_sec) != 3
+       || sscanf(g.date, "%2d%2d%2d", &t.tm_mday, &t.tm_mon, &t.tm_year) != 3) return;
+    t.tm_mon -= 1;
+    t.tm_year += 100;                         /* 20yy */
+    time_t utc = timegm(&t);
+    if(utc < EPOCH_2024) return;
+    time_t cur = time(NULL);
+    if(cur - utc <= 2 && utc - cur <= 2) {    /* já certo: só registra a origem */
+        if(src != CLK_GPS && src != CLK_NTP) set_source(CLK_GPS, "GPS");
+        return;
+    }
+    struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
+    if(settimeofday(&tv, NULL)) return;
+    set_source(CLK_GPS, "GPS");
+    fprintf(stderr, "relogio: acertado pelo GPS para %ld (diferença %ld s)\n", (long)utc, (long)(utc - cur));
+}
+
 void clock_tick(void)
 {
     if(!settings()->auto_time || !clock_can_set()) return;
@@ -277,4 +310,5 @@ void clock_tick(void)
     bool due = !busy && mono_s() >= next_sync;
     pthread_mutex_unlock(&lock);
     if(due) clock_sync_now();
+    gps_clock();
 }

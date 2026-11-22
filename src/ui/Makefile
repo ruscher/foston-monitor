@@ -14,11 +14,13 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.1.0
+VERSION   := 0.2.0
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
 APP_SRCS  := main.c $(wildcard core/*.c) $(wildcard screens/*.c) $(wildcard widgets/*.c)
+# Big GPS engine (biggps/README.md): hot loops, built with -O2 even on the target
+BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c
 ASSET_SRCS:= $(wildcard assets/fonts/*.c) $(wildcard assets/icons/*.c) $(wildcard assets/logo/*.c)
 
 INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iassets/icons -Iassets/logo
@@ -89,7 +91,7 @@ endif
 
 CFLAGS_BASE := -std=gnu11 $(OPT) $(DEFS) $(INCLUDES) $(EXTRA_CF) $(CFLAGS)
 
-APP_OBJS   := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS))
+APP_OBJS   := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS) $(BIGGPS_SRCS))
 LVGL_OBJS  := $(patsubst %.c,$(BUILD)/%.o,$(LVGL_SRCS) $(ASSET_SRCS) $(EXTRA_SRCS))
 DEPS       := $(APP_OBJS:.o=.d)
 
@@ -118,6 +120,11 @@ $(BUILD)/%.o: %.c lv_conf.h
 	@mkdir -p $(dir $@)
 	@echo "  CC  $<"
 	@$(CC) $(CFLAGS_BASE) $(WARN) -MMD -MP -c $< -o $@
+
+$(BUILD)/biggps/%.o: biggps/%.c
+	@mkdir -p $(dir $@)
+	@echo "  CC  $<"
+	@$(CC) $(subst -Os,-O2,$(CFLAGS_BASE)) $(WARN) -Wno-unused-parameter -MMD -MP -c $< -o $@
 
 # LVGL, fontes, ícones e lodepng: sem -Wextra
 $(BUILD)/$(LVGL_DIR)/%.o: $(LVGL_DIR)/%.c lv_conf.h
