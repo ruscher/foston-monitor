@@ -1,9 +1,16 @@
 /* bfbt-attach — liga o Bluetooth MediaTek MT6611 do FOSTON e entrega a UART ao kernel.
  *
- *   bfbt-attach [-f]     liga, confere com HCI Reset, anexa /dev/ttyS1 como hci (H4) e fica
+ *   bfbt-attach [-f] [-b BAUD]
+ *                        liga, confere com HCI Reset, anexa /dev/ttyS1 como hci (H4) e fica
  *                        em segundo plano segurando a porta (-f: em primeiro plano);
  *                        SIGTERM/SIGINT desanexam e cortam a alimentação
  *   bfbt-attach off      só corta a alimentação
+ *
+ * -b BAUD (230400, 460800, 921600): troca a velocidade como o mtk_bthuart.dll
+ * (Radio_ChangeControllerUART): comando 0xFC77 {código, 0x40 = RTS/CTS}, o chip responde
+ * "Command Status" na velocidade antiga, o lado do Linux muda a UART, manda o byte 0xFF
+ * (acordar) e espera "Command Complete" do opcode 0xFCC0. Os 3,2 Mbaud do CE precisam do modo
+ * de alta velocidade da UART da MediaTek, que o driver 8250 daqui não usa.
  *
  * Sequência do mtk_bthuart.dll do Windows CE (docs/hardware-enablement/06): LDO_EN = GPIO 104,
  * RST = GPIO 3, os dois como saída sem pull em 0; LDO_EN = 1; 3 ms; RST = 1; 1 s; HCI Reset a
@@ -100,11 +107,62 @@ static int hci_reset(int fd)
     return 0;
 }
 
+static speed_t bconst(int b)
+{
+    return b == 230400 ? B230400 : b == 460800 ? B460800 : b == 921600 ? B921600 : B115200;
+}
+
+/* lê bytes até achar a sequência want (até ms) */
+static int expect(int fd, const unsigned char *want, int n, int ms_)
+{
+    unsigned char b[64];
+    int k = 0;
+    struct pollfd p = { fd, POLLIN, 0 };
+    while(k < (int)sizeof b && poll(&p, 1, ms_) > 0) {
+        ssize_t r = read(fd, b + k, sizeof b - (size_t)k);
+        if(r <= 0) break;
+        k += (int)r;
+        for(int i = 0; i + n <= k; i++) if(!memcmp(b + i, want, (size_t)n)) return 1;
+    }
+    return 0;
+}
+
+static int set_baud(int fd, int baud)
+{
+    int code = baud == 230400 ? 9 : baud == 460800 ? 0xa : baud == 921600 ? 0xb : 0;
+    if(!code) { fprintf(stderr, "bfbt-attach: velocidade %d não suportada\n", baud); return 0; }
+    const unsigned char cmd[] = { 0x01, 0x77, 0xfc, 0x02, (unsigned char)code, 0x40 };
+    static const unsigned char status[] = { 0x04, 0x0f, 0x04, 0x00, 0x01, 0x77, 0xfc };
+    static const unsigned char done[] = { 0x04, 0x0e, 0x04, 0x01, 0xc0, 0xfc, 0x00 };
+    if(write(fd, cmd, sizeof cmd) != sizeof cmd || !expect(fd, status, sizeof status, 1000)) {
+        fprintf(stderr, "bfbt-attach: o chip não aceitou a troca de velocidade\n");
+        return 0;
+    }
+    tcdrain(fd);
+    struct termios t;
+    tcgetattr(fd, &t);
+    cfsetispeed(&t, bconst(baud));
+    cfsetospeed(&t, bconst(baud));
+    tcsetattr(fd, TCSANOW, &t);
+    ms(10);
+    tcflush(fd, TCIFLUSH);
+    static const unsigned char wake = 0xff;
+    if(write(fd, &wake, 1) != 1 || !expect(fd, done, sizeof done, 1000)) {
+        fprintf(stderr, "bfbt-attach: sem resposta a %d baud\n", baud);
+        return 0;
+    }
+    return 1;
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
 {
-    int fg = argc > 1 && !strcmp(argv[1], "-f");
+    int fg = 0, baud = 115200;
+    for(int i = 1; i < argc; i++) {
+        if(!strcmp(argv[i], "-f")) fg = 1;
+        else if(!strcmp(argv[i], "-b") && i + 1 < argc) baud = atoi(argv[++i]);
+    }
     int mfd = open("/dev/mem", O_RDWR | O_SYNC);
     if(mfd < 0) { perror("/dev/mem"); return 1; }
     void *m = mmap(NULL, 0x1000, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0x80002000);
@@ -128,6 +186,12 @@ int main(int argc, char **argv)
         power(0);
         return 1;
     }
+    if(baud != 115200 && (!set_baud(fd, baud) || !hci_reset(fd))) {
+        syslog(LOG_ERR, "troca para %d baud falhou", baud);
+        close(fd);
+        power(0);
+        return 1;
+    }
     int ld = N_HCI;
     if(ioctl(fd, TIOCSETD, &ld) < 0) { perror("TIOCSETD N_HCI (kernel sem CONFIG_BT_HCIUART?)"); power(0); return 1; }
     if(ioctl(fd, HCIUARTSETFLAGS, 0) < 0 || ioctl(fd, HCIUARTSETPROTO, HCI_UART_H4) < 0) {
@@ -136,7 +200,7 @@ int main(int argc, char **argv)
         return 1;
     }
     int dev = ioctl(fd, HCIUARTGETDEVICE, 0);
-    printf("bfbt-attach: MT6611 anexado como hci%d (%s, 115200, H4)\n", dev, TTY);
+    printf("bfbt-attach: MT6611 anexado como hci%d (%s, %d baud, H4)\n", dev, TTY, baud);
     syslog(LOG_INFO, "MT6611 anexado como hci%d", dev);
     fflush(stdout);
     if(!fg && daemon(0, 0) < 0) { perror("daemon"); return 1; }
