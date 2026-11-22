@@ -28,7 +28,7 @@ static size_t in_func(JDEC *jd, uint8_t *buf, size_t n)
     return n;
 }
 
-/* bloco RGB888 decodificado -> pixels da miniatura que caem nele */
+/* bloco BGR888 decodificado -> pixels da miniatura que caem nele */
 static int out_func(JDEC *jd, void *bitmap, JRECT *r)
 {
     src_t *s = jd->device;
@@ -43,7 +43,8 @@ static int out_func(JDEC *jd, void *bitmap, JRECT *r)
             unsigned sx = tx * s->w / s->dw;
             if(sx < r->left || sx > r->right) continue;
             const uint8_t *p = rgb + 3 * ((sy - r->top) * bw + (sx - r->left));
-            s->out[ty * s->dw + tx] = (uint16_t)(((p[0] >> 3) << 11) | ((p[1] >> 2) << 5) | (p[2] >> 3));
+            /* o TJpgDec do LVGL entrega B, G, R (tjpgd.c, mcu_output) */
+            s->out[ty * s->dw + tx] = (uint16_t)(((p[2] >> 3) << 11) | ((p[1] >> 2) << 5) | (p[0] >> 3));
         }
     }
     return 1;
