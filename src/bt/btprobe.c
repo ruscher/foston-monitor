@@ -9,6 +9,8 @@
  *   btprobe probe [baud]    on + reset; se não responder, off
  *   btprobe cmd HEX...      manda um comando HCI (bytes em hexa, sem o 01) a 115200 e
  *                           mostra o evento de resposta
+ *   btprobe scan [s]        procura aparelhos (HCI Inquiry com RSSI, ~s segundos, padrão
+ *                           10): mostra classe, RSSI e o fim do endereço (-a: inteiro)
  *
  * Pinos (OALIoCtlHalGetBTHWPin do CE): LDO_EN = GPIO 104, RST = GPIO 3, EINT = 11.
  * Registradores do GPIO (os mesmos do bfgps e do driver GIO1: do CE): 0x80002000 +
@@ -146,6 +148,85 @@ static int hci_cmd(int argc, char **argv)
     return 0;
 }
 
+static int open_uart(void)
+{
+    int fd = open("/dev/ttyS1", O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if(fd < 0) { perror("/dev/ttyS1"); return -1; }
+    struct termios t;
+    tcgetattr(fd, &t);
+    cfmakeraw(&t);
+    cfsetispeed(&t, B115200);
+    cfsetospeed(&t, B115200);
+    t.c_cflag |= CLOCAL | CREAD | CRTSCTS;
+    tcsetattr(fd, TCSANOW, &t);
+    tcflush(fd, TCIOFLUSH);
+    return fd;
+}
+
+/* lê um evento HCI inteiro (04 code len params), espera até ms */
+static int read_event(int fd, unsigned char *b, int max, int ms_)
+{
+    int k = 0, need = 3;
+    struct pollfd p = { fd, POLLIN, 0 };
+    while(k < need && poll(&p, 1, ms_) > 0) {
+        ssize_t r = read(fd, b + k, (size_t)(need - k));
+        if(r <= 0) break;
+        if(k == 0 && b[0] != 0x04) continue;          /* só eventos */
+        k += (int)r;
+        if(k >= 3) need = 3 + b[2];
+        if(need > max) return -1;
+    }
+    return k == need ? k : 0;
+}
+
+static int scan(int secs, int full)
+{
+    int fd = open_uart();
+    if(fd < 0) return 1;
+    unsigned char b[300];
+    static const unsigned char mode[] = { 0x01, 0x45, 0x0c, 0x01, 0x01 };   /* Write Inquiry Mode: RSSI */
+    if(write(fd, mode, sizeof mode) != sizeof mode) return 1;
+    read_event(fd, b, sizeof b, 500);
+    int len = secs * 100 / 128;
+    if(len < 1) len = 1;
+    if(len > 0x30) len = 0x30;
+    unsigned char inq[] = { 0x01, 0x01, 0x04, 0x05, 0x33, 0x8b, 0x9e, (unsigned char)len, 0x00 };   /* GIAC */
+    if(write(fd, inq, sizeof inq) != sizeof inq) return 1;
+    int found = 0, done = 0;
+    char seen[64][6];
+    while(!done) {
+        int n = read_event(fd, b, sizeof b, (secs + 5) * 1000);
+        if(n <= 0) break;
+        unsigned char ev = b[1];
+        if(ev == 0x0f && b[3] != 0) { printf("inquiry recusado: status %02x\n", b[3]); break; }
+        if(ev == 0x01) { done = 1; break; }                        /* Inquiry Complete */
+        if(ev == 0x02 || ev == 0x22 || ev == 0x2f) {
+            int nr = ev == 0x2f ? 1 : b[3];
+            for(int i = 0; i < nr; i++) {
+                const unsigned char *a, *cod;
+                int rssi = 0;
+                if(ev == 0x02) { a = b + 4 + 6 * i; cod = b + 4 + 6 * nr + 3 * nr + 3 * i; }
+                else if(ev == 0x22) { a = b + 4 + 6 * i; cod = b + 4 + 9 * nr + 3 * i; rssi = (signed char)b[4 + 14 * nr + i]; }
+                else { a = b + 4; cod = b + 4 + 6 + 3; rssi = (signed char)b[4 + 6 + 3 + 3 + 2]; }
+                int dup = 0;
+                for(int k = 0; k < found && k < 64; k++) if(!memcmp(seen[k], a, 6)) dup = 1;
+                if(dup) continue;
+                if(found < 64) memcpy(seen[found], a, 6);
+                found++;
+                unsigned major = (cod[1] & 0x1f);
+                static const char *mj[] = { "diverso", "computador", "telefone", "rede", "áudio/vídeo", "periférico",
+                                            "imagem", "vestível", "brinquedo", "saúde" };
+                if(full) printf("  %02x:%02x:%02x:%02x:%02x:%02x", a[5], a[4], a[3], a[2], a[1], a[0]);
+                else printf("  ..:..:..:..:%02x:%02x", a[1], a[0]);
+                printf("  classe %02x%02x%02x (%s)  RSSI %d dBm\n", cod[2], cod[1], cod[0], major < 10 ? mj[major] : "?", rssi);
+            }
+        }
+    }
+    printf("%d aparelho(s) encontrados%s\n", found, done ? "" : " (sem Inquiry Complete)");
+    close(fd);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if(argc < 2) { fprintf(stderr, "uso: %s read|on|off|reset [baud]|probe [baud]\n", argv[0]); return 2; }
@@ -160,6 +241,7 @@ int main(int argc, char **argv)
     else if(!strcmp(argv[1], "off")) { hw(0); show(); }
     else if(!strcmp(argv[1], "reset")) return hci_reset(baud, 1) == 1 ? 0 : 1;
     else if(!strcmp(argv[1], "cmd")) return hci_cmd(argc - 2, argv + 2);
+    else if(!strcmp(argv[1], "scan")) return scan(argc > 2 && argv[2][0] != '-' ? atoi(argv[2]) : 10, argc > 2 && !strcmp(argv[argc - 1], "-a"));
     else if(!strcmp(argv[1], "probe")) {
         hw(1);
         show();
