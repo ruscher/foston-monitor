@@ -278,7 +278,10 @@ typedef struct {
     char name[64];
     dev_t_ dev[MAXDEV];
     int ndev;
-    char pl_status[16], pl_title[96], pl_artist[96], pl_dev[96], pl_path[128];
+    char pl_status[16], pl_title[96], pl_artist[96], pl_album[96], pl_dev[96], pl_path[128];
+    unsigned pl_dur, pl_pos;              /* ms (AVRCP Track.Duration, Position) */
+    long pl_pos_at;                       /* CLOCK_MONOTONIC (ms) da leitura da posição */
+    char stream[12];                      /* MediaTransport1.State: idle, pending, active */
 } state_t;
 
 static void var_get(DBusMessageIter *var, int type, void *out)
@@ -306,15 +309,15 @@ static void var_bool(DBusMessageIter *var, int *out)
 static void read_iface(state_t *s, const char *path, const char *iface, DBusMessageIter *props)
 {
     int is_ad = !strcmp(iface, "org.bluez.Adapter1"), is_dev = !strcmp(iface, "org.bluez.Device1"),
-        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1");
-    if(!is_ad && !is_dev && !is_pl) return;
+        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1");
+    if(!is_ad && !is_dev && !is_pl && !is_tr) return;
     dev_t_ *d = NULL;
     if(is_ad) {
         if(adapter[0] && strcmp(adapter, path)) return;
         s->present = 1;
         snprintf(adapter, sizeof adapter, "%s", path);
     }
-    if(is_pl) snprintf(s->pl_path, sizeof s->pl_path, "%s", path);
+    if(is_pl) { snprintf(s->pl_path, sizeof s->pl_path, "%s", path); s->pl_pos_at = mono_ms(); }
     if(is_dev) {
         if(s->ndev >= MAXDEV) return;
         d = &s->dev[s->ndev++];
@@ -343,8 +346,14 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
             else if(!strcmp(k, "Connected")) var_bool(&var, &d->connected);
             else if(!strcmp(k, "Trusted")) var_bool(&var, &d->trusted);
             else if(!strcmp(k, "RSSI")) { dbus_int16_t r = 0; var_get(&var, DBUS_TYPE_INT16, &r); d->rssi = r; d->has_rssi = 1; }
+        } else if(is_tr) {
+            char st[12] = "";
+            if(!strcmp(k, "State")) var_str(&var, st, sizeof st);
+            /* um transporte ativo vale mais que outro parado (dois aparelhos) */
+            if(st[0] && (strcmp(s->stream, "active") || !strcmp(st, "active"))) snprintf(s->stream, sizeof s->stream, "%s", st);
         } else {
             if(!strcmp(k, "Status")) var_str(&var, s->pl_status, sizeof s->pl_status);
+            else if(!strcmp(k, "Position")) var_get(&var, DBUS_TYPE_UINT32, &s->pl_pos);
             else if(!strcmp(k, "Device")) var_str(&var, s->pl_dev, sizeof s->pl_dev);
             else if(!strcmp(k, "Track") && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
                 DBusMessageIter te;
@@ -358,6 +367,8 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
                     dbus_message_iter_recurse(&tkv, &tv);
                     if(!strcmp(tk, "Title")) var_str(&tv, s->pl_title, sizeof s->pl_title);
                     else if(!strcmp(tk, "Artist")) var_str(&tv, s->pl_artist, sizeof s->pl_artist);
+                    else if(!strcmp(tk, "Album")) var_str(&tv, s->pl_album, sizeof s->pl_album);
+                    else if(!strcmp(tk, "Duration")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_dur);
                 }
             }
         }
@@ -439,8 +450,10 @@ static void write_state(const state_t *s)
         const char *who = "";
         for(int i = 0; i < s->ndev; i++)
             if(!strncmp(s->pl_dev, s->dev[i].path, strlen(s->dev[i].path))) who = s->dev[i].name;
-        fprintf(f, "player=%s|%s|%s|%s\n", s->pl_status, s->pl_title, s->pl_artist, who);
+        fprintf(f, "player=%s|%s|%s|%s|%s|%u|%u|%ld\n", s->pl_status, s->pl_title, s->pl_artist, who, s->pl_album,
+                s->pl_dur, s->pl_pos, s->pl_pos_at);
     }
+    if(s->stream[0]) fprintf(f, "stream=%s\n", s->stream);
     if(last_result[0]) fprintf(f, "result=%s\n", last_result);
     fclose(f);
     rename(tmp, STATE);

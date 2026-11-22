@@ -66,7 +66,13 @@ void bt_read(bt_info_t *b)
             const char *s = field(v, b->pl_status, sizeof b->pl_status);
             s = field(s, b->pl_title, sizeof b->pl_title);
             s = field(s, b->pl_artist, sizeof b->pl_artist);
-            field(s, b->pl_dev, sizeof b->pl_dev);
+            s = field(s, b->pl_dev, sizeof b->pl_dev);
+            s = field(s, b->pl_album, sizeof b->pl_album);
+            s = field(s, t, sizeof t); b->pl_dur = (unsigned)strtoul(t, NULL, 10);
+            s = field(s, t, sizeof t); b->pl_pos = (unsigned)strtoul(t, NULL, 10);
+            field(s, t, sizeof t); b->pl_pos_at = atol(t);
+        } else if(!strcmp(line, "stream")) {
+            b->streaming = !strcmp(v, "active");
         } else if(!strcmp(line, "result")) {
             const char *s = field(v, b->res_op, sizeof b->res_op);
             s = field(s, b->res_state, sizeof b->res_state);
@@ -76,6 +82,19 @@ void bt_read(bt_info_t *b)
     fclose(f);
     /* o agente reescreve pelo menos a cada 10 s; no simulador o arquivo é fixo */
     b->available = getenv("BIGFOSTON_BT_STATUS") || labs((long)time(NULL) - updated) < 30;
+}
+
+unsigned bt_position_ms(const bt_info_t *b)
+{
+    unsigned p = b->pl_pos;
+    if(!strcmp(b->pl_status, "playing") && b->pl_pos_at > 0) {
+        struct timespec t;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        long now = t.tv_sec * 1000L + t.tv_nsec / 1000000L, d = now - b->pl_pos_at;
+        if(d > 0) p += (unsigned)d;
+    }
+    if(b->pl_dur && p > b->pl_dur) p = b->pl_dur;
+    return p;
 }
 
 bool bt_cmd(const char *fmt, ...)

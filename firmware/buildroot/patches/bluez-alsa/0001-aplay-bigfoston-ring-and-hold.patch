@@ -1,0 +1,101 @@
+From: ruscher <rruscher@gmail.com>
+Subject: [PATCH] aplay: ring de amostras para o espectro e pausa para a voz (BigFoston)
+
+O bluealsa-aplay copia as amostras decodificadas, em mono, para
+/run/bluealsa-ring (mmap), que o espectro da Multimidia do BigFoston le sem
+decodificar o SBC de novo. SIGUSR1 solta o dispositivo de som e descarta o
+audio (voz do Big GPS); SIGUSR2 volta a tocar.
+
+Signed-off-by: ruscher <rruscher@gmail.com>
+---
+--- a/utils/aplay/aplay.c
++++ b/utils/aplay/aplay.c
+@@ -26,7 +26,9 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <syslog.h>
++#include <fcntl.h>
+ #include <sys/eventfd.h>
++#include <sys/mman.h>
+ #include <sys/param.h>
+ #include <unistd.h>
+ 
+@@ -104,6 +106,45 @@
+ static size_t workers_count = 0;
+ static size_t workers_size = 0;
+ 
++/* BigFoston: amostras recentes em mono para o espectro do shell (sem decodificar
++ * de novo) e pausa da saída para a voz do Big GPS. */
++#define BF_RING_PATH "/run/bluealsa-ring"
++#define BF_RING_N 2048
++struct bf_ring {
++	uint32_t magic;          /* 'BFR1' */
++	uint32_t rate;           /* Hz das amostras */
++	volatile uint32_t w;     /* amostras escritas (índice & (BF_RING_N - 1)) */
++	volatile uint32_t hold;  /* 1: saída solta para outra parte (voz do GPS) */
++	int16_t s[BF_RING_N];
++};
++static struct bf_ring *bf_ring = NULL;
++static volatile sig_atomic_t bf_hold = 0;
++static void bf_hold_signal(int sig) { bf_hold = sig == SIGUSR1; }
++static void bf_ring_open(void) {
++	int fd = open(BF_RING_PATH, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
++	if (fd == -1)
++		return;
++	if (ftruncate(fd, sizeof(*bf_ring)) == 0) {
++		void *m = mmap(NULL, sizeof(*bf_ring), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++		if (m != MAP_FAILED) {
++			bf_ring = m;
++			bf_ring->magic = 0x31524642;
++		}
++	}
++	close(fd);
++}
++static void bf_ring_push(const int16_t *x, size_t samples, unsigned channels, unsigned rate) {
++	if (bf_ring == NULL || channels == 0)
++		return;
++	uint32_t w = bf_ring->w;
++	for (size_t i = 0; i + channels <= samples; i += channels) {
++		int v = channels == 2 ? (x[i] + x[i + 1]) / 2 : x[i];
++		bf_ring->s[w++ & (BF_RING_N - 1)] = (int16_t)v;
++	}
++	bf_ring->rate = rate;
++	bf_ring->w = w;
++}
++
+ static int main_loop_quit_event_fd = -1;
+ static void main_loop_stop(int sig) {
+ 	eventfd_write(main_loop_quit_event_fd, sig);
+@@ -682,6 +723,20 @@
+ 		if (read_samples == 0)
+ 			continue;
+ 
++		if (pcm_format == SND_PCM_FORMAT_S16_LE)
++			bf_ring_push((const int16_t *)buffer.tail, read_samples, w->ba_pcm.channels, w->ba_pcm.sampling);
++		if (bf_ring != NULL)
++			bf_ring->hold = bf_hold;
++		if (bf_hold) {
++			/* a voz do Big GPS precisa do dispositivo: solta e descarta o áudio */
++			if (w->snd_pcm != NULL) {
++				snd_pcm_drop(w->snd_pcm);
++				snd_pcm_close(w->snd_pcm);
++				w->snd_pcm = NULL;
++			}
++			continue;
++		}
++
+ 		/* If current worker is not active and the single playback mode was
+ 		 * enabled, we have to check if there is any other active worker. */
+ 		if (force_single_playback && !w->active) {
+@@ -1317,6 +1372,11 @@
+ 	sigaction(SIGTERM, &sigact, NULL);
+ 	sigaction(SIGINT, &sigact, NULL);
+ 
++	struct sigaction bf_sig = { .sa_handler = bf_hold_signal };
++	sigaction(SIGUSR1, &bf_sig, NULL);
++	sigaction(SIGUSR2, &bf_sig, NULL);
++	bf_ring_open();
++
+ 	debug("Starting main loop");
+ 	for (;;) {
+ 
