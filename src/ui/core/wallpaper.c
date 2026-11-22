@@ -90,13 +90,13 @@ bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow
 
 /* ------------------------------------------------ imagem do usuário */
 
-#define CACHE_MAGIC "BFWP3"   /* muda junto com o tratamento da imagem */
+#define CACHE_MAGIC "BFWP4"   /* muda junto com o tratamento da imagem */
 
 typedef struct {
     char magic[8];
     char path[256];
     long long mtime, size;
-    int dark, height;
+    int dark, height, original;
 } cache_hdr_t;
 
 static void fill_dsc(lv_image_dsc_t *dsc)
@@ -121,6 +121,7 @@ static void cache_key(cache_hdr_t *h, const char *path, const struct stat *st, b
     h->size = (long long)st->st_size;
     h->dark = dark;
     h->height = BF_WALL_H;
+    h->original = theme_glass();
 }
 
 bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palette_t *p)
@@ -160,13 +161,15 @@ bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palett
     /* no escuro, 80 % do brilho; no claro, só 30 % da imagem sobre a cor de fundo (com 70 %,
      * uma imagem escura deixava o texto escuro do tema claro ilegível) */
     unsigned mul = p->dark ? 205 : 77, br = p->bg.red, bgc = p->bg.green, bb = p->bg.blue;
+    bool original = theme_glass();
     for(int y = 0; y < BF_WALL_H; y++) {
         const uint16_t *srow = src + (size_t)(oy + y * ch / BF_WALL_H) * is + ox;
         uint16_t *row = buf + (size_t)y * BF_WALL_W;
         for(int x = 0; x < BF_WALL_W; x++) {
             uint16_t c = srow[x * cw / BF_WALL_W];
             unsigned r = (c >> 11) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
-            if(p->dark) { r = r * mul >> 8; g = g * mul >> 8; b = b * mul >> 8; }
+            if(original) { /* Foston Glass: a imagem como é (os cartões de vidro dão o contraste) */ }
+            else if(p->dark) { r = r * mul >> 8; g = g * mul >> 8; b = b * mul >> 8; }
             else { r = (r * mul + br * (256 - mul)) >> 8; g = (g * mul + bgc * (256 - mul)) >> 8; b = (b * mul + bb * (256 - mul)) >> 8; }
             unsigned thr = bayer[y & 3][x & 3];
             row[x] = (uint16_t)(q(r << 8, 31, thr) << 11 | q(g << 8, 63, thr) << 5 | q(b << 8, 31, thr));
