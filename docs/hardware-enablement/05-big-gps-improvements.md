@@ -42,6 +42,11 @@ Taguatinga 21 min 21 s → 22 min 02 s, mesmo caminho. Conferência CH × Dijkst
 | Cuiabá → Rondonópolis | 218 km, 2 h 51, 49 trechos | 307 km, 5 h 16, nenhum |
 | Goiânia → Rio Verde | 231 km, 2 h 22, nenhum | igual |
 
+Conferência do desconto da penalidade: com uma penalidade de só 5 s (a rota passa pelo
+pedágio), o arquivo "sem pedágio" deu exatamente o mesmo tempo da rota normal nas três rotas
+pedagiadas (2 h 27 min 28 s, 19 min 48 s, 2 h 51 min 09 s): o tempo mostrado é o real mesmo
+quando não há alternativa.
+
 Limite: o que o OSM não marca como pedágio não é evitado; a tela diz "pode ter pedágio"
 quando faltam os dados e nunca garante uma rota sem pedágio além do que os dados dizem.
 
