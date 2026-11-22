@@ -1,0 +1,7 @@
+config BR2_PACKAGE_BIGFOSTON_BT
+	bool "bigfoston-bt"
+	help
+	  Bluetooth of the FOSTON FS-707DC (MediaTek MT6611 on UART2):
+	  bfbt-attach powers the chip like the Windows CE driver and hands the
+	  UART to the kernel HCI layer (H4); btprobe sends raw HCI commands for
+	  tests (docs/hardware-enablement/06-bluetooth-hardware.md).

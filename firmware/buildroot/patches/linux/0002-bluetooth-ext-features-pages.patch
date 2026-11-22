@@ -1,0 +1,33 @@
+From: ruscher <rruscher@gmail.com>
+Subject: [PATCH] Bluetooth: tolerate a rejected extended features page above 1
+
+The MediaTek MT6611 of the FOSTON FS-707DC reports max_page 2 in Read Local
+Extended Features but answers page 2 with status 0x30, which aborted the
+controller setup. Pages above 1 hold features of later Bluetooth versions:
+stop reading there instead.
+
+Signed-off-by: ruscher <rruscher@gmail.com>
+---
+--- a/net/bluetooth/hci_sync.c
++++ b/net/bluetooth/hci_sync.c
+@@ -4456,8 +4456,18 @@
+ 	for (page = 2; page < HCI_MAX_PAGES && page <= hdev->max_page;
+ 	     page++) {
+ 		err = hci_read_local_ext_features_sync(hdev, page);
+-		if (err)
+-			return err;
++		if (err) {
++			/* The MediaTek MT6611 (Bluetooth 2.1) reports max_page 2
++			 * but rejects page 2 with "parameter out of range"
++			 * (0x30): pages above 1 only hold features of later
++			 * Bluetooth versions, so stop reading instead of
++			 * failing the whole controller setup.
++			 */
++			bt_dev_warn(hdev, "ext features page %u failed (%d), ignored",
++				    page, err);
++			hdev->max_page = page - 1;
++			break;
++		}
+ 	}
+ 
+ 	return 0;
