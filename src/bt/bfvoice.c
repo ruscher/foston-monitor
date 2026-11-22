@@ -422,6 +422,26 @@ int main(int argc, char **argv)
         setvbuf(stderr, NULL, _IOLBF, 0);
         return run();
     }
+    if(!strcmp(c, "tone")) {                      /* start + tom de 1 kHz no lado do alto-falante */
+        if(load_text(img)) return 1;
+        signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
+        if(start()) { stop(); return 1; }
+        long end = now_ms() + (argc > 3 ? atol(argv[3]) : 6) * 1000;
+        unsigned ph = 0;
+        static const int16_t sine8[8] = { 0, 5792, 8191, 5792, 0, -5792, -8191, -5792 };   /* 1 kHz a 8 kHz */
+        while(!quit && now_ms() < end) {
+            if(r16(W_MBOX, 0x0A) == 0x14) {
+                uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2, wr = (uint32_t)r16(W_MBOX, 0x9E) * 2;
+                for(uint32_t i = 0; i < wr && off + 0x280 + i < 0x8000; i += 2)
+                    w16(W_YM, off + 0x280 + i, (uint16_t)sine8[ph++ & 7]);
+                w16(W_MBOX, 0x0A, 0);
+                served++;
+            }
+            stall_us(1000);
+        }
+        printf("%lu blocos com tom\n", served);
+        return stop() ? 1 : 0;
+    }
     if(!strcmp(c, "meter")) {                     /* atendimento + pico por segundo dos dois blocos */
         signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
         long end = now_ms() + (argc > 2 ? atol(argv[2]) : 30) * 1000, sec = now_ms() + 1000;

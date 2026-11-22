@@ -82,6 +82,16 @@ firmware deste aparelho, o comando que troca a voz de PCM para HCI; nenhum dos D
 | Patch da ROM do MT6611 | o CE lê a versão (`0xFCD1 {04 00 00 80}` → `03 8B`) e manda 7388 bytes pelo `0xFCC4`; o `bfbt-attach` faz o mesmo (patch do backup do aparelho no cartão, `BigFoston/bt/mt6611-patch.bin`); aceito |
 | **Som** | **não sai**: os blocos do DSP ficam em ruído de fundo (pico ~60 de 32767) com a outra pessoa falando e com o usuário falando; nenhum pacote SCO pelo HCI. A voz não chega ao DSP pelos pinos PCM |
 
+| Tom de 1 kHz escrito pelo ARM no bloco de destino da ponte (`bfvoice tone`, sem ligação) | **o usuário ouviu no alto-falante**: DSP → DAC de voz → amplificador funciona. Logo o destino é o alto-falante e a origem (que fica em ruído) é a voz que deveria chegar do MT6611 pelos pinos PCM |
+| Clocks (`bus.dll`, `0x3D231A0`) | ids 0–23: PDN0 bit id; 24–44: PDN1 bit id−24 (42 = bit 18, conferido); id 45 (DSP) = bit 2 de `0x80001204` (0 = ligado, está ligado no Linux) |
+
+**Bloqueio atual:** a voz do celular não chega do MT6611 ao MT3351 pela interface PCM (DAI).
+O app Bluetooth do CE não manda nenhum comando de fabricante para isso (só a API da pilha da
+Microsoft); a OAL (`nk.exe`) e o `uart.dll` têm a tabela de nomes dos grupos de pinos
+(CONB, CONA, JTAG, SPI, UT0–4, **DAI_CTL**, PWM, MC0/1, CAM0/1, NLD, EP, DPI), sem ligação
+direta no código: falta achar onde a OAL liga os pinos do DAI ou se o MT6611 precisa de
+outra configuração de PCM.
+
 Por segurança, "Falar pelo FOSTON" só aparece com a marca `/data/bigfoston/voz-experimental`
 (sem ela a ligação ficaria muda).
 
