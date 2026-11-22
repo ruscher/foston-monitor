@@ -61,8 +61,12 @@ Melhorou, mas ainda é pesado para navegar com música ao mesmo tempo.
 Se ainda faltar CPU, o passo seguinte é a **recepção por DMA** (o CE usa o canal GDMA 0x11
 para esta UART; o driver `8250_mt3351` hoje só o desliga).
 
-Botões do celular: com `CONFIG_INPUT_UINPUT` o BlueZ cria o dispositivo de entrada
-"<celular> (AVRCP)" (`/dev/input/event*`).
+Controle da música (AVRCP): o FOSTON comanda o celular pelo D-Bus
+(`org.bluez.MediaPlayer1`: `Next`, `Pause`, `Play`, `Previous`; propriedades `Status` e
+`Track`). Testado: "próxima" trocou a faixa e "pausa" deixou o celular em `paused`; título e
+artista chegam. Com `CONFIG_INPUT_UINPUT` o BlueZ também cria o dispositivo de entrada
+"<celular> (AVRCP)", que só recebe teclas quando o outro lado controla o FOSTON (fones,
+controles); os botões do próprio celular só param o envio do áudio.
 
 Ligação do chip: a troca de velocidade falhava às vezes logo depois de ligar (o HCI Reset
 lia só 7 bytes); o `bfbt-attach` agora espera 100 ms com o chip desligado, lê a resposta
