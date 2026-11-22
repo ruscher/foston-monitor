@@ -143,12 +143,13 @@ static void refresh(void)
         busy_addr[0] = 0;
     }
 
-    if(lv_obj_has_state(sw, LV_STATE_CHECKED) != cur.enabled) {
-        if(cur.enabled) lv_obj_add_state(sw, LV_STATE_CHECKED);
+    bool on = cur.enabled || cur.adapter;          /* ligado pelo app ou por fora (S35bluetooth) */
+    if(lv_obj_has_state(sw, LV_STATE_CHECKED) != on) {
+        if(on) lv_obj_add_state(sw, LV_STATE_CHECKED);
         else lv_obj_remove_state(sw, LV_STATE_CHECKED);
     }
     const char *name = cur.name[0] ? cur.name : "BigFoston";
-    if(!cur.enabled) set_text(st_lbl, tr(S_BT_ST_OFF));
+    if(!on) set_text(st_lbl, tr(S_BT_ST_OFF));
     else if(!cur.powered) set_text(st_lbl, switched_at && time(NULL) - switched_at > 20 ? tr(S_BT_ST_FAIL) : tr(S_BT_ST_STARTING));
     else {
         snprintf(b, sizeof b, tr(cur.discoverable ? S_BT_ST_VISIBLE : S_BT_ST_ON), name);
@@ -204,7 +205,7 @@ static void create(lv_obj_t *parent, int arg)
         page_unavailable(pg, tr(S_BT_NOAGENT));
         return;
     }
-    sw = page_switch_row(pg, tr(S_APP_BLUETOOTH), cur.enabled, on_switch, NULL);
+    sw = page_switch_row(pg, tr(S_APP_BLUETOOTH), cur.enabled || cur.adapter, on_switch, NULL);
     st_lbl = bf_label(pg, "", BF_FONT_S, p->text_dim);
     lv_obj_set_width(st_lbl, LV_PCT(100));
     lv_label_set_long_mode(st_lbl, LV_LABEL_LONG_WRAP);
