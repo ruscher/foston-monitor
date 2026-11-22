@@ -1,0 +1,13 @@
+#!/bin/sh
+# BlueALSA: áudio Bluetooth A2DP (o FOSTON toca em fones e caixas; o celular toca no FOSTON)
+PIDFILE=/run/bluealsa.pid
+case "$1" in
+start)
+    command -v bluealsa >/dev/null || exit 0
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x "$(command -v bluealsa)" -- -p a2dp-source -p a2dp-sink
+    ;;
+stop)
+    start-stop-daemon -K -p "$PIDFILE" 2>/dev/null
+    rm -f "$PIDFILE"
+    ;;
+esac
