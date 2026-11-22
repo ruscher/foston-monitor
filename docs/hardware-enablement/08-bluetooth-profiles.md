@@ -45,16 +45,33 @@ Assim não dá para navegar e ouvir música por Bluetooth ao mesmo tempo.
 (LCR = 0xBF, EFR bits 0x40/0x80) e FIFO de recepção com gatilho de 8 bytes quando a porta
 usa RTS/CTS (o GPS, sem RTS/CTS, continua com 1 byte). Medido no kernel novo: 1,2 MB
 recebidos em 88 mil interrupções (**~14 bytes por interrupção** contra 1), nenhum erro de
-remontagem; GPS na ttyS0 normal. **A medir:** CPU com música tocando.
+remontagem; GPS na ttyS0 normal.
+
+| Música do celular no FOSTON (A2DP, 10 s, `/proc/stat`) | Antes | Com controle de fluxo |
+|---|---|---|
+| Interrupções da ttyS1 | ~48 mil/s | **3.142/s** (43,5 KB/s, ~14 bytes cada) |
+| Erros de remontagem | 4 no início | 0 |
+| CPU livre | 8 % | **23 %** |
+| `bluealsa` (SBC) | 26 % | 21 % |
+| `bluealsa-aplay` | — | 9 % |
+| Kernel fora dos processos (UART, tty, HCI) | ~43 % | ~28 % |
+
+Melhorou, mas ainda é pesado para navegar com música ao mesmo tempo.
 
 Se ainda faltar CPU, o passo seguinte é a **recepção por DMA** (o CE usa o canal GDMA 0x11
 para esta UART; o driver `8250_mt3351` hoje só o desliga).
 
+Botões do celular: com `CONFIG_INPUT_UINPUT` o BlueZ cria o dispositivo de entrada
+"<celular> (AVRCP)" (`/dev/input/event*`).
+
+Ligação do chip: a troca de velocidade falhava às vezes logo depois de ligar (o HCI Reset
+lia só 7 bytes); o `bfbt-attach` agora espera 100 ms com o chip desligado, lê a resposta
+inteira e repete a sequência até 3 vezes: 6/6 de primeira em religações seguidas.
+
 ## Falta
 
-- Medir CPU com música e o controle de fluxo novo; DMA da UART se ainda precisar.
+- DMA de recepção da UART (o kernel ainda gasta ~28 % só recebendo o áudio).
 - Conexão iniciada pelo celular (hoje só a iniciada pelo FOSTON funciona).
-- `S35bluetooth start force` não deixou o `bfbt-attach` rodando num teste (manual funciona).
 - Agente de pareamento na interface (hoje o teste usa `bluetoothctl`), app Bluetooth
   (ligar/desligar, parear, conectar, esquecer).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
