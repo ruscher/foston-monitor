@@ -73,9 +73,9 @@ Brasil, rotas e voz.
 | 💾 | Cartão SD vigiado por aviso do kernel, não por consulta | CPU com o aparelho parado: 10,9 → 8,3 % |
 | 🔄 | `reboot` no Terminal também reinicia por kexec | — |
 
-> 🔵 O Bluetooth precisa do firmware com bibliotecas compartilhadas
-> (`bigfoston_fs707dc_bt_defconfig`: +3 MB no initrd). Fones e caixas, viva-voz e teclados
-> Bluetooth ainda não estão prontos. Detalhes em
+> 🔵 Desde a 0.3.0 o firmware oficial usa bibliotecas compartilhadas por causa do BlueZ e do
+> BlueALSA (initrd 3,7 MB; a variante estática sem Bluetooth é `bigfoston_fs707dc_static_defconfig`).
+> Fones e caixas, viva-voz e teclados Bluetooth ainda não estão prontos. Detalhes em
 > [recuperação do hardware](docs/hardware-enablement/00-overview.md).
 
 <details>

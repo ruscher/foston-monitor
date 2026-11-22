@@ -22,6 +22,7 @@ Toda a recuperação abaixo é reversível e não exige abrir o aparelho.
 | O PC vê porta serial em vez de pendrive logo no boot | com o agente aberto: `bfagent.py usb-default mass` (o driver USB do CE às vezes grava a troca do agente como padrão de boot) |
 | `reboot` (Linux ou `bfagent.py reboot`) **desliga** o aparelho | comportamento do próprio hardware com o watchdog (o CE faz igual): é só ligar no botão; o agente abre sozinho |
 | Agente não abre / tela branca | reset; conferir `BigFoston\bfagent.exe` no cartão e o hash em `bfagent.exe.sha256` |
+| BigFoston OS novo não funciona e quero a versão anterior | copiar `BigFoston/recuperacao/linux-0.2.0/` (no cartão) para `BigFoston/update` e desligar/ligar: o agente reinstala a 0.2.0 (estática, sem Bluetooth). Cópia fiel também no PC: `backup/2026-11-22-linux-instalado-0.2.0/` |
 | Cartão SD corrompido | o sistema original não depende dele; restaurar os arquivos de `backup/2026-11-18-volume/volume-files.tar` (conferir `files.sha256`) |
 
 ## O que está salvo (no PC, fora do git)

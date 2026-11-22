@@ -114,12 +114,19 @@ tools/bigfoston/linux-update.py status         # update.log e o kernel em execu�
    `drop_caches`) e só então renomeia a pasta para `BigFoston/update`. Exige o cartão
    montado com gravação (`bigfoston-sd status` = `rw`).
 2. No boot, antes da contagem do autoboot, o agente confere cada arquivo pelo
-   `SHA256SUMS`, copia para `linux\<nome>.new`, confere a cópia, guarda a versão atual
+   `SHA256SUMS`, apaga a versão anterior (`<nome>.old`, nunca usada no boot; desde o
+   agente 0.6.1), copia para `linux\<nome>.new`, confere a cópia, guarda a versão atual
    como `<nome>.old` e só então troca. Resultado em `BigFoston/update.log` no cartão; a
    pasta vira `update.ok` ou, se algo não conferir, `update.bad` (o Linux instalado
    continua igual).
 3. Se faltar algum arquivo depois da troca (energia cortada no meio), o agente não faz o
    boot automático e fica no Windows CE; `install-linux` pelo PC refaz a instalação.
+
+**Limite de espaço.** A `\ResidentFlash` tem 12 MB, com ~0,55 MB do GPS e do agente.
+Durante a atualização ficam nela a versão instalada e a nova: zImage + initrd precisam
+ficar em **~5,9 MB** (0.3.0 com Bluetooth: 2,10 + 3,71 = 5,81 MB). A 0.3.0 de 4,9 MB de
+initrd foi recusada em 22/11/2026 por isso; o initrd agora usa XZ com o filtro ARM e o
+firmware não leva ferramentas que o aparelho não usa.
 
 O cartão traz `BigFoston/bfagent-0.5.1.exe`, a versão anterior do agente, como rota de
 recuperação (abre pelo menu do CE, em "caminho da navegação").
