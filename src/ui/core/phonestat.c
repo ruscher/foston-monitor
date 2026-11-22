@@ -51,6 +51,7 @@ void ph_read(ph_info_t *p)
         else if(!strcmp(line, "service")) p->service = atoi(v);
         else if(!strcmp(line, "voice")) p->voice_phone = strcmp(v, "foston") != 0;
         else if(!strcmp(line, "sco")) p->sco = atoi(v);
+        else if(!strcmp(line, "voice_foston")) p->voice_foston = atoi(v);
         else if(!strcmp(line, "since")) p->since = (time_t)atol(v);
         else if(!strcmp(line, "sync")) snprintf(p->sync, sizeof p->sync, "%s", v);
         else if(!strcmp(line, "call") && p->ncall < PH_MAXCALLS) {

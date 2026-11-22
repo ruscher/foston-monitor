@@ -311,6 +311,8 @@ int screenshot_run(const char *dir)
             pf = fopen(pp, "a");
             if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\n", (long)time(NULL) - 83); fclose(pf); }
             pump(800); shot("45e-telefone-ligacao");
+            scr_phone_demo(10); pump(300); shot("45g-telefone-falar-pelo-foston");
+            dialog_close_all();
             go(SCR_HOME, 0); pump(100);
             pf = fopen(pp, "w");
             if(pf) {

@@ -45,6 +45,7 @@
 #define DATADIR  "/mnt/sd/BigFoston/telefone"
 #define HFP_AG   "0000111f-0000-1000-8000-00805f9b34fb"
 #define MAXCALLS 6
+#define VOICE_FOSTON_OK 0                /* 1 quando o caminho de voz do DSP existir */
 
 /* ------------------------------------------------------------------ estado */
 
@@ -91,7 +92,9 @@ static void write_state(void)
     }
     if(st.op[0]) fprintf(f, "operator=%s\n", st.op);
     fprintf(f, "signal=%d\nbattery=%d\nservice=%d\nroam=%d\n", st.signal, st.battery, st.service, st.roam);
-    fprintf(f, "voice=%s\nsco=%d\n", st.voice_phone ? "phone" : "foston", st.sco);
+    /* voice_foston: o FOSTON sabe tocar a voz e captar o microfone (falta o caminho do DSP:
+     * docs/phone/02-audio-da-chamada.md); até lá a voz fica no celular */
+    fprintf(f, "voice=%s\nvoice_foston=%d\nsco=%d\n", st.voice_phone ? "phone" : "foston", VOICE_FOSTON_OK, st.sco);
     for(int i = 0; i < st.ncall; i++)
         fprintf(f, "call=%d|%d|%d|%s|%s\n", st.call[i].idx, st.call[i].dir, st.call[i].stat, st.call[i].num,
                 st.call[i].name);
@@ -292,6 +295,8 @@ static void on_ind(int pos, int v)
 
 static void on_line(char *l)
 {
+    /* o BlueALSA repassa as respostas finais com ':' na frente (":OK", ":ERROR") */
+    while(*l == ':' || *l == ' ') l++;
     if(!strncmp(l, "+CLCC:", 6)) {
         if(nnew >= MAXCALLS) return;
         call_t *c = &newcall[nnew];
@@ -556,6 +561,8 @@ static void command(char *l)
     if(arg) *arg++ = 0;
     if(!strcmp(l, "voice") && arg) {
         st.voice_phone = strcmp(arg, "foston") != 0;
+        /* "foston-teste" deixa o canal de voz aberto mesmo sem o DSP (diagnóstico) */
+        if(!st.voice_phone && !VOICE_FOSTON_OK && strcmp(arg, "foston-teste")) st.voice_phone = 1;
         write_state();
         return;
     }

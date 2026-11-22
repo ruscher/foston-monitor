@@ -39,10 +39,25 @@ Tudo na cópia local da ROM (`backup/wince-referencia`, fora do git):
    `speech_via_BT`, `Input_Data_from_BT` e `Speech_Via_loudspeaker` confirmam o caminho
    MT6611 → PCM → DSP → alto-falante, e microfone → DSP → PCM → MT6611.
 
+## Mapa de memória do DSP (do `wavedev_drv`, rotinas em `0x03C17444` e `0x03C166DC`)
+
+| Físico | Tamanho mapeado | Uso provável |
+|---|---|---|
+| `0x8004F000` | 0x50 | controle do DSP |
+| `0xA0000000` | 0x1A0 | caixa postal ARM↔DSP: o driver espera `0x5555`, escreve `0x6666`, passa 22 blocos de parâmetros (`0xA5xx`/`0x5Axx`), espera `0x1111` e responde `0x2222` (rotina `0x03C17F18`) |
+| `0x80051000` | 4 KB | janela de dados |
+| `0xA2000000`, `0xA2010000` | 64 KB cada | memória do DSP (bancos 0 e 1) |
+| `0xA2100000`, `0xA2200000` | 32 KB cada | memória do DSP |
+| `0x8004D000` | 0x15C | front-end de voz (ADC do microfone, DAC de voz); o mesmo bloco da rotina de teste de fábrica do microfone |
+| `0x80001000` | 0x400 | clocks e energia (ids 37, 42, 43, 45 ligados para a voz) |
+
+A caixa postal mostra que o DSP roda um programa próprio e conversa com o ARM: o Linux terá
+de iniciá-lo (ou encontrá-lo já rodando depois do CE) e repetir esse diálogo.
+
 ## O que falta para a voz no FOSTON
 
-1. Achar os endereços físicos das janelas de memória do DSP (o driver as recebe mapeadas;
-   procurar o `VirtualCopy`/`MmMapIoSpace` da inicialização do `wavedev_drv`).
+1. Ler, só dentro dessas janelas e com os clocks do CE ligados, o estado do DSP depois do boot
+   pelo CE (sem ligação aberta: um acesso errado já travou o aparelho uma vez).
 2. Descobrir se o DSP precisa de código carregado pelo ARM (o `.text` do `wavedev_drv` tem
    313 KB, grande o bastante para conter imagens do DSP) e como ele é iniciado.
 3. Reproduzir no driver ALSA `mt3351-audio` a sequência do `MM_GSMPCM_2WAY_START` (só

@@ -28,7 +28,7 @@ enum { TAB_DIAL, TAB_CONTACTS, TAB_RECENTS, TAB_MSGS, NTABS };
 
 static lv_obj_t *root, *tabbar, *tab_btn[NTABS], *body, *status_lbl, *status2_lbl, *call_panel;
 static lv_obj_t *num_lbl, *search_ta, *search_kb, *list, *more_lbl, *sync_lbl;
-static lv_obj_t *cp_name, *cp_num, *cp_state, *cp_answer, *cp_keys, *cp_dtmf;
+static lv_obj_t *cp_name, *cp_num, *cp_state, *cp_answer, *cp_keys, *cp_dtmf, *cp_note, *cp_vphone, *cp_vfoston;
 static lv_timer_t *tick;
 static ph_info_t cur;
 static int tab;
@@ -561,6 +561,19 @@ static void on_answer(lv_event_t *e) { (void)e; ph_cmd("answer"); }
 static void on_hangup(lv_event_t *e) { (void)e; ph_cmd("hangup"); }
 static void on_dtmf(lv_event_t *e) { ph_cmd("dtmf %s", (const char *)lv_event_get_user_data(e)); }
 
+/* falar pelo celular ou pelo FOSTON (alto-falante e microfone do aparelho) */
+static void on_voice(lv_event_t *e)
+{
+    bool foston = lv_event_get_user_data(e) != NULL;
+    if(foston && !cur.voice_foston) {
+        const char *btns[] = { tr(S_CLOSE) };
+        dialog_open(BF_SYMBOL_INFO, lv_color_hex(C_PHONE), tr(S_PH_VOICE_FOSTON), tr(S_PH_VOICE_SOON), btns, 1, 0, -1,
+                    NULL, NULL);
+        return;
+    }
+    ph_cmd("voice %s", foston ? "foston" : "phone");
+}
+
 static void on_keys(lv_event_t *e)
 {
     (void)e;
@@ -588,15 +601,30 @@ static void build_call_panel(void)
     lv_obj_set_style_text_align(cp_name, LV_TEXT_ALIGN_CENTER, 0);
     cp_num = bf_label(left, "", BF_FONT_M, p->text_dim);
     cp_state = bf_label(left, "", BF_FONT_M, lv_color_hex(C_PHONE));
-    lv_obj_t *note = bf_label(left, tr(S_PH_VOICE_NOTE), BF_FONT_S, p->text_dim);
-    lv_obj_set_width(note, 370);
-    lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(note, LV_TEXT_ALIGN_CENTER, 0);
+    cp_note = bf_label(left, tr(S_PH_VOICE_NOTE), BF_FONT_S, p->text_dim);
+    lv_obj_set_width(cp_note, 370);
+    lv_label_set_long_mode(cp_note, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(cp_note, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_t *right = bf_plain(call_panel);
     lv_obj_set_size(right, 340, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(right, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(right, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(right, BF_SP_S, 0);
+    lv_obj_t *vrow = bf_plain(right);
+    lv_obj_set_size(vrow, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(vrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(vrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(vrow, BF_SP_S, 0);
+    bf_label(vrow, tr(S_PH_TALK_ON), BF_FONT_S, p->text_dim);
+    cp_vphone = bf_button(vrow, NULL, tr(S_PH_TALK_PHONE), 0);
+    cp_vfoston = bf_button(vrow, NULL, "FOSTON", 0);
+    for(lv_obj_t *b = cp_vphone; b; b = b == cp_vphone ? cp_vfoston : NULL) {
+        lv_obj_set_size(b, 112, 48);
+        lv_obj_set_style_min_height(b, 0, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(C_PHONE), LV_STATE_CHECKED);
+        lv_obj_set_style_text_color(b, lv_color_white(), LV_STATE_CHECKED);
+        lv_obj_add_event_cb(b, on_voice, LV_EVENT_CLICKED, b == cp_vfoston ? (void *)1 : NULL);
+    }
     cp_dtmf = keypad(right, on_dtmf, 96, 44);
     lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN);
     lv_obj_t *btns = bf_plain(right);
@@ -645,6 +673,11 @@ static void update_call(void)
         if(c->stat == PH_ACTIVE) lv_obj_remove_flag(cp_keys, LV_OBJ_FLAG_HIDDEN);
         else { lv_obj_add_flag(cp_keys, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN); }
     }
+    /* escolha da voz: marca a opção atual */
+    bool on_foston = !cur.voice_phone && cur.voice_foston;
+    if(on_foston) { lv_obj_add_state(cp_vfoston, LV_STATE_CHECKED); lv_obj_remove_state(cp_vphone, LV_STATE_CHECKED); }
+    else { lv_obj_add_state(cp_vphone, LV_STATE_CHECKED); lv_obj_remove_state(cp_vfoston, LV_STATE_CHECKED); }
+    set_text(cp_note, tr(on_foston ? S_PH_VOICE_ON_FOSTON : S_PH_VOICE_NOTE));
     char b[64];
     switch(c->stat) {
     case PH_ACTIVE: {
@@ -778,6 +811,7 @@ const bf_screen_def_t scr_phone_def = { create, destroy, S_APP_PHONE, NULL };
 /* modo --screenshot: abre uma aba */
 void scr_phone_demo(int t)
 {
+    if(t == 10 && cp_vfoston) { lv_obj_send_event(cp_vfoston, LV_EVENT_CLICKED, NULL); return; }
     if(t < 0 || t >= NTABS || !root) return;
     tab = t;
     build_tab();
