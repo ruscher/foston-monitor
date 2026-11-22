@@ -6,7 +6,7 @@
  *  - estado em /run/bigfoston-bt (chave=valor, reescrito por rename a cada mudança);
  *  - comandos, um por linha, no FIFO /run/bigfoston-bt.cmd:
  *      on | off                       liga/desliga o Bluetooth (S35bluetooth + marca)
- *      visible 0|1 | scan 0|1         visível por DiscoverableTimeout / procurar aparelhos
+ *      visible 0|1 | scan 0|1         visível por DiscoverableTimeout / procurar aparelhos (20 s)
  *      pair|connect|disconnect|forget AA:BB:CC:DD:EE:FF
  *      accept | reject                responde o pedido de pareamento pendente
  *      play | pause | next | prev     controla a música do celular (AVRCP)
@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <syslog.h>
 #include <time.h>
@@ -44,7 +45,9 @@ typedef struct {
 static DBusConnection *bus;
 static volatile sig_atomic_t quit;
 static int dirty = 1, agent_ok, reconnect_done;   /* reconnect_done: tentativas feitas */
-static long powered_at;                             /* quando o adaptador apareceu ligado */
+static long powered_at;
+static long scan_until;                             /* busca: encerra sozinha (rouba o rádio do áudio) */
+#define SCAN_MS 20000                             /* quando o adaptador apareceu ligado */
 static char adapter[64];                 /* /org/bluez/hci0 ou "" */
 static char last_result[160];
 
@@ -468,6 +471,7 @@ static void command(char *line)
     } else if(!strcmp(line, "visible")) {
         set_bool(adapter, "org.bluez.Adapter1", "Discoverable", atoi(arg));
     } else if(!strcmp(line, "scan")) {
+        scan_until = atoi(arg) ? mono_ms() + SCAN_MS : 0;
         call_async(adapter, "org.bluez.Adapter1", atoi(arg) ? "StartDiscovery" : "StopDiscovery", "scan", 5000,
                    DBUS_TYPE_INVALID);
     } else if(!strcmp(line, "accept") || !strcmp(line, "reject")) {
@@ -526,6 +530,22 @@ static DBusHandlerResult on_signal(DBusConnection *c, DBusMessage *msg, void *ud
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
+/* O MT6611 sai do reset com a varredura de visibilidade em 2,40 s a cada 2,56 s (94 % do
+ * tempo): visível, o áudio A2DP caía de ~41 para ~5 KB/s, com buracos de 2,4 s. Grava o
+ * padrão do Bluetooth (janela 11,25 ms, intervalo 2,56 s) ao ligar e a cada vez que fica visível.
+ * HCI Write Inquiry Scan Activity (0x0C1E) num soquete HCI cru (docs/bluetooth-audio-
+ * performance/08-uart-hci.md). */
+static void fix_inquiry_scan(void)
+{
+    struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };   /* AF_BLUETOOTH, hci0, RAW */
+    static const unsigned char cmd[] = { 0x01, 0x1e, 0x0c, 0x04, 0x00, 0x10, 0x12, 0x00 };
+    int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);                     /* BTPROTO_HCI */
+    if(s < 0) return;
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && write(s, cmd, sizeof cmd) == (ssize_t)sizeof cmd)
+        syslog(LOG_INFO, "varredura de visibilidade: 11,25 ms a cada 2,56 s");
+    close(s);
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
@@ -572,7 +592,12 @@ int main(int argc, char **argv)
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
             if(!st.powered) powered_at = 0;
-            else if(!powered_at) powered_at = now;
+            else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
+            /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,
+             * que é quando a varredura passa a rodar */
+            static int was_visible;
+            if(st.discoverable && !was_visible) fix_inquiry_scan();
+            was_visible = st.discoverable;
         }
         /* reconexão aos pareados e confiáveis: 3 s, 15 s e 60 s depois de ligar (o BlueALSA
          * precisa ter registrado o áudio antes, senão "profile-unavailable") */
@@ -584,10 +609,15 @@ int main(int argc, char **argv)
                     call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "connect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
+        if(scan_until && now >= scan_until) {
+            scan_until = 0;
+            if(adapter[0]) call_async(adapter, "org.bluez.Adapter1", "StopDiscovery", "scan", 5000, DBUS_TYPE_INVALID);
+        }
         if(now >= next_full) { dirty = 1; next_full = now + 10000; }   /* RSSI, marca, segurança */
         struct pollfd p[2] = { { dfd, POLLIN, 0 }, { ff, POLLIN, 0 } };
         int timeout = dirty ? 250 : (int)(next_full - now);
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
+        if(scan_until && timeout > 1000) timeout = 1000;
         if(timeout < 0) timeout = 0;
         if(dbus_connection_get_dispatch_status(bus) == DBUS_DISPATCH_DATA_REMAINS) timeout = 0;
         if(dbus_connection_has_messages_to_send(bus)) p[0].events |= POLLOUT;

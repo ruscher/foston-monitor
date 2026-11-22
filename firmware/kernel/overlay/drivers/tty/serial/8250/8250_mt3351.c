@@ -21,7 +21,16 @@
  * 16x mode of the 8250 core was never proven with it (the GPS boot loader
  * did not answer at all). Checked against CE's own values at 921600:
  * divisor 1, SAMPLE_COUNT 31, SAMPLE_POINT 15.
+ *
+ * Batched receive on ports with RTS/CTS (Bluetooth, docs/bluetooth-audio-
+ * performance/08-uart-hci.md): the 8250 core pushes the tty flip buffer on
+ * every interrupt, and each push wakes a kworker that runs the whole HCI
+ * receive path for ~14 bytes. With A2DP at ~42 KB/s that was ~3000 wakeups/s
+ * and ~33 % of the CPU in kernel threads. Here the FIFO is still drained on
+ * every interrupt, but the buffer is pushed only after MT3351_BATCH bytes, on
+ * a receive timeout interrupt (line idle) or by a 2 ms timer.
  */
+#include <linux/hrtimer.h>
 #include <linux/io.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
@@ -29,6 +38,7 @@
 #include <linux/platform_device.h>
 #include <linux/serial_8250.h>
 #include <linux/serial_core.h>
+#include <linux/tty_flip.h>
 
 #include "8250.h"
 
@@ -40,11 +50,90 @@
 #define MT3351_UART_EFR		0x08	/* with LCR = 0xBF */
 #define MT3351_EFR_AUTO_RTS	0x40
 #define MT3351_EFR_AUTO_CTS	0x80
+#define MT3351_BATCH		256	/* bytes per tty push in batched mode */
+#define MT3351_FLUSH_NS		(2 * NSEC_PER_MSEC)
+
+struct mt3351_uart {
+	int line;
+	struct uart_port *port;
+	struct hrtimer flush;
+	bool batch;			/* RTS/CTS on: batched receive */
+	unsigned int pending;		/* bytes read but not pushed yet */
+};
+
+/* port lock held */
+static bool mt3351_take_pending(struct mt3351_uart *d)
+{
+	bool push = d->pending != 0;
+
+	d->pending = 0;
+	return push;
+}
+
+static enum hrtimer_restart mt3351_flush_timer(struct hrtimer *t)
+{
+	struct mt3351_uart *d = container_of(t, struct mt3351_uart, flush);
+	struct uart_port *port = d->port;
+	unsigned long flags;
+	bool push;
+
+	uart_port_lock_irqsave(port, &flags);
+	push = mt3351_take_pending(d) && port->state;
+	if (push)
+		tty_flip_buffer_push(&port->state->port);
+	uart_port_unlock_irqrestore(port, flags);
+	return HRTIMER_NORESTART;
+}
+
+static int mt3351_handle_irq(struct uart_port *port)
+{
+	struct uart_8250_port *up = up_to_u8250p(port);
+	struct mt3351_uart *d = port->private_data;
+	unsigned int iir = serial_port_in(port, UART_IIR);
+	unsigned long flags;
+	u16 lsr;
+
+	if (!d || !READ_ONCE(d->batch))
+		return serial8250_handle_irq(port, iir);
+	if (iir & UART_IIR_NO_INT)
+		return 0;
+
+	uart_port_lock_irqsave(port, &flags);
+	lsr = serial_lsr_in(up);
+	if (!(lsr & UART_LSR_DR) && (lsr & UART_LSR_FIFOE))
+		serial8250_clear_and_reinit_fifos(up);
+	/* throttled: leave the FIFO full so the automatic RTS stops the sender */
+	if ((lsr & (UART_LSR_DR | UART_LSR_BI)) &&
+	    ((port->read_status_mask & UART_LSR_DR) || (lsr & (UART_LSR_FIFOE | UART_LSR_BRK_ERROR_BITS)))) {
+		int max = 256;
+
+		do {
+			serial8250_read_char(up, lsr);
+			d->pending++;
+			if (--max == 0)
+				break;
+			lsr = serial_in(up, UART_LSR);
+		} while (lsr & (UART_LSR_DR | UART_LSR_BI));
+
+		if (d->pending >= MT3351_BATCH || (iir & UART_IIR_RX_TIMEOUT) == UART_IIR_RX_TIMEOUT) {
+			if (mt3351_take_pending(d))
+				tty_flip_buffer_push(&port->state->port);
+		} else if (!hrtimer_is_queued(&d->flush)) {
+			hrtimer_start(&d->flush, ns_to_ktime(MT3351_FLUSH_NS), HRTIMER_MODE_REL);
+		}
+	}
+	serial8250_modem_status(up);
+	if ((lsr & UART_LSR_THRE) && (up->ier & UART_IER_THRI))
+		serial8250_tx_chars(up);
+	uart_unlock_and_check_sysrq_irqrestore(port, flags);
+	return 1;
+}
 
 static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
 			       const struct ktermios *old)
 {
 	struct uart_8250_port *up = up_to_u8250p(port);
+	struct mt3351_uart *d = port->private_data;
 	unsigned int baud, div, cnt, q, r;
 	unsigned long flags;
 
@@ -81,13 +170,14 @@ static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
 		efr &= ~(MT3351_EFR_AUTO_RTS | MT3351_EFR_AUTO_CTS);
 	writeb(efr, port->membase + MT3351_UART_EFR);
 	serial_port_out(port, UART_LCR, up->lcr);
+	if (d) {
+		if (!hwfc && mt3351_take_pending(d) && port->state)
+			tty_flip_buffer_push(&port->state->port);
+		WRITE_ONCE(d->batch, hwfc);
+	}
 	uart_port_unlock_irqrestore(port, flags);
 	tty_termios_encode_baud_rate(termios, baud, baud);
 }
-
-struct mt3351_uart {
-	int line;
-};
 
 static int mt3351_uart_probe(struct platform_device *pdev)
 {
@@ -134,10 +224,15 @@ static int mt3351_uart_probe(struct platform_device *pdev)
 	up.port.flags = UPF_FIXED_PORT | UPF_FIXED_TYPE | UPF_SKIP_TEST;
 	up.port.fifosize = 16;
 	up.port.set_termios = mt3351_set_termios;
+	up.port.handle_irq = mt3351_handle_irq;
+	up.port.private_data = data;
+	hrtimer_init(&data->flush, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	data->flush.function = mt3351_flush_timer;
 
 	data->line = serial8250_register_8250_port(&up);
 	if (data->line < 0)
 		return data->line;
+	data->port = &serial8250_get_port(data->line)->port;
 	/*
 	 * Receive FIFO trigger at 1 byte (the core uses 8): the GPS sends its
 	 * measurements in bursts at 921600 baud and with 8 left in the 16-byte
@@ -153,6 +248,8 @@ static void mt3351_uart_remove(struct platform_device *pdev)
 {
 	struct mt3351_uart *data = platform_get_drvdata(pdev);
 
+	WRITE_ONCE(data->batch, false);
+	hrtimer_cancel(&data->flush);
 	serial8250_unregister_port(data->line);
 }
 
