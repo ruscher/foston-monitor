@@ -10,7 +10,7 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
-![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.2.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
+![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.3.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -18,7 +18,7 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
-[🐧 BigFoston OS](#-bigfoston-os-020-linux-no-próprio-aparelho) •
+[🐧 BigFoston OS](#-bigfoston-os-030-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -54,14 +54,33 @@
 
 ---
 
-## 🐧 BigFoston OS 0.2.0: Linux no próprio aparelho
+## 🐧 BigFoston OS 0.3.0: Linux no próprio aparelho
 
 Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
 BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
 tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
 Brasil, rotas e voz.
 
-**Novidades da 0.2.0:**
+**Novidades da 0.3.0:**
+
+| | O que mudou | Medido no aparelho |
+|---|---|---|
+| 🔵 | **Bluetooth** (MediaTek MT6611): parear com o código na tela, ouvir a música do celular no alto-falante e controlar play, pausa e próxima pela tela | testado com um Android; reconecta sozinho ao ligar |
+| 🎵 | Áudio Bluetooth sem cortes | cortes com o FOSTON visível: **6 em 15 s → 0**; CPU livre tocando música: **23 % → 49 %** |
+| 🔎 | Busca do Big GPS entende abreviações (av, r, dr, sqn…) e procura em segundo plano | "doutor" no Brasil todo: **17,9 → 0,9 s** |
+| 🚦 | Rotas com semáforos, pedágios, perfil de moto e **Evitar pedágios** | Brasília → Goiânia sem pedágio: 253 km, 3 h 12 |
+| 🖼️ | Papel de parede com imagem da Galeria, novo padrão "Ondas Digitais" | — |
+| 💾 | Cartão SD vigiado por aviso do kernel, não por consulta | CPU com o aparelho parado: 10,9 → 8,3 % |
+| 🔄 | `reboot` no Terminal também reinicia por kexec | — |
+
+> 🔵 O Bluetooth precisa do firmware com bibliotecas compartilhadas
+> (`bigfoston_fs707dc_bt_defconfig`: +3 MB no initrd). Fones e caixas, viva-voz e teclados
+> Bluetooth ainda não estão prontos. Detalhes em
+> [recuperação do hardware](docs/hardware-enablement/00-overview.md).
+
+<details>
+<summary><b>Novidades da 0.2.0</b></summary>
+
 
 | | O que mudou | Medido no aparelho |
 |---|---|---|
@@ -73,7 +92,10 @@ Brasil, rotas e voz.
 | 🔘 | Botão de energia | diálogo com Cancelar, Hibernar, Reiniciar e Desligar |
 | 🔄 | Reiniciar de verdade | o Linux reinicia a si mesmo com kexec, sem desligar (~13 s) |
 
+</details>
+
 📚 Documentação: [estado da implementação](docs/implementation-status.md) ·
+[hardware e multimídia](docs/hardware-enablement/00-overview.md) ·
 [porte do Linux](docs/04-linux-port.md) · [Big GPS](docs/big-gps/00-visao-geral.md) ·
 [desempenho](docs/performance/00-overview.md) ·
 [relatório de desempenho](docs/performance/20-final-report.md) · [recuperação](docs/17-recuperacao.md)
@@ -105,7 +127,7 @@ Brasil, rotas e voz.
 | 📦 | Armazenamento de 2 GB FAT32 | `lsblk` |
 | 🧭 | Navegador original: iGO 8 | arquivos do aparelho |
 
-> ℹ️ Anúncios citam 64 MB de RAM, TV digital, AV-IN, Bluetooth e transmissor FM. Só o que está na tabela foi **medido nesta unidade**.
+> ℹ️ Anúncios citam 64 MB de RAM, TV digital, AV-IN, Bluetooth e transmissor FM. Só o que está na tabela foi **medido nesta unidade**; o Bluetooth (MediaTek MT6611) foi confirmado depois, pelo BigFoston OS.
 
 </td>
 </tr>

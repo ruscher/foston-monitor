@@ -9,6 +9,7 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/settings.h"
+#include "../core/app.h"
 #include "../core/imgload.h"
 #include "../core/fileops.h"
 #include "../widgets/imgview.h"
@@ -249,7 +250,24 @@ static void open_index(int i)
     if(grid && cells[i]) lv_obj_scroll_to_view(cells[i], LV_ANIM_OFF);
 }
 
-static void cell_click(lv_event_t *e) { open_index((int)(intptr_t)lv_event_get_user_data(e)); }
+static int pick;                          /* GALLERY_PICK_WALLPAPER: tocar escolhe o papel de parede */
+
+static void choose_wallpaper(int i)
+{
+    bf_settings_t *s = settings();
+    snprintf(s->wall_image, sizeof s->wall_image, "%s", imgs[i].path);
+    s->wallpaper = BF_WALL_IMAGE;
+    settings_save();
+    nav_back();
+    app_rebuild();                        /* o tema recalcula o papel de parede */
+}
+
+static void cell_click(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if(pick && i >= 0 && i < n_imgs) choose_wallpaper(i);
+    else open_index(i);
+}
 
 /* pede as miniaturas da parte visível, recebe as prontas, libera as distantes */
 static void tick_cb(lv_timer_t *t)
@@ -322,7 +340,8 @@ static void build_grid(void)
     lv_obj_t *hdr = bf_plain(root);
     lv_obj_set_size(hdr, LV_PCT(100), 48);
     char b[96];
-    snprintf(b, sizeof b, tr(S_GAL_COUNT), n_imgs);
+    if(pick) snprintf(b, sizeof b, "%s", tr(S_GAL_PICK_WALL));
+    else snprintf(b, sizeof b, tr(S_GAL_COUNT), n_imgs);
     lv_obj_t *t = bf_label(hdr, b, BF_FONT_M, p->text);
     lv_obj_align(t, LV_ALIGN_LEFT_MID, 4, 0);
     if(truncated) {
@@ -376,7 +395,7 @@ static void build_grid(void)
 
 static void create(lv_obj_t *parent, int arg)
 {
-    (void)arg;
+    pick = arg == GALLERY_PICK_WALLPAPER;
     char dir[512];
     free_list();
     if(access("/mnt/sd", F_OK) == 0) scan("/mnt/sd", 0);

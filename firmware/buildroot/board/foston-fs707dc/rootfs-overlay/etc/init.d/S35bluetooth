@@ -1,0 +1,36 @@
+#!/bin/sh
+# Bluetooth (MediaTek MT6611, docs/hardware-enablement/06): liga o chip e entrega a UART ao
+# kernel (hci0) com bfbt-attach. Como no Windows CE, fica desligado até ser ativado:
+# a marca /data/bigfoston/bluetooth-ligado (Ajustes) liga no boot.
+FLAG=/data/bigfoston/bluetooth-ligado
+# pareamentos do BlueZ: /var/lib/bluetooth está na RAM e usa ":" nos nomes (o FAT32 do
+# cartão não aceita), então vai num tar no cartão: restaurado no boot, salvo ao parar
+SAVE=/data/bigfoston/bluetooth-pareamentos.tar
+save() {
+    [ -d /var/lib/bluetooth ] && [ -d /data/bigfoston ] || return 0
+    tar -cf "$SAVE.tmp" -C /var/lib bluetooth 2>/dev/null && mv "$SAVE.tmp" "$SAVE" && sync
+}
+case "$1" in
+save)
+    save
+    ;;
+start)
+    if [ -f "$SAVE" ] && [ -z "$(ls -A /var/lib/bluetooth 2>/dev/null)" ]; then
+        mkdir -p /var/lib && tar -xf "$SAVE" -C /var/lib 2>/dev/null
+    fi
+    [ -f "$FLAG" ] || [ "$2" = force ] || exit 0
+    [ -x /usr/sbin/bfbt-attach ] || exit 0
+    pidof bfbt-attach >/dev/null && exit 0
+    /usr/sbin/bfbt-attach -b 921600 || logger -t bluetooth "o chip não respondeu"
+    ;;
+stop)
+    save
+    killall bfbt-attach 2>/dev/null
+    n=0
+    while pidof bfbt-attach >/dev/null && [ $n -lt 10 ]; do sleep 0.2; n=$((n + 1)); done
+    ;;
+restart)
+    "$0" stop
+    "$0" start force
+    ;;
+esac

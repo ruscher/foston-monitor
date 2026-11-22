@@ -1,6 +1,13 @@
 // bgroute-build.cpp - Big GPS route pack builder (runs on the PC).
 //
-//   bgroute-build IN.osm.pbf OUT.bgr --profile car|moto|bike|foot [--tests FILE]
+//   bgroute-build IN.osm.pbf OUT.bgr --profile car|moto|bike|foot [--tests FILE] [--avoid-toll]
+//
+// Traffic signals (highway=traffic_signals, crossing=traffic_signals) add their waiting time
+// to the arc that enters them (signals closer than 30 m are one junction: counted once);
+// BGR_SIGNAL_DS overrides the default (car 100, moto 80, bike 60, foot 0 deciseconds).
+// Toll booths (barrier=toll_booth) mark their way as a toll way, like toll=yes.
+// --avoid-toll: toll arcs cost BGR_TOLL_PENALTY_DS more (default 36000 = 1 h) in the
+// hierarchy only; the device subtracts it back from the route time (BGR_F_TOLLPEN).
 //
 // --tests writes 300 random queries (source arc, target arc, distance in deciseconds)
 // computed with a plain Dijkstra on the expanded graph: an independent reference for the
@@ -17,7 +24,12 @@
 #include <routingkit/osm_profile.h>
 #include <routingkit/strongly_connected_component.h>
 
+#include <osmium/handler.hpp>
+#include <osmium/io/pbf_input.hpp>
+#include <osmium/visitor.hpp>
+
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -85,10 +97,22 @@ bool used(uint64_t id, const TagMap &t)
 unsigned speed_of(uint64_t id, const TagMap &t, uint32_t cls)
 {
     switch (profile) {
-    case BGR_CAR:
-    case BGR_MOTO: {
+    case BGR_CAR: {
         unsigned s = get_osm_way_speed(id, t);
         return std::max(5u, std::min(s, 120u));
+    }
+    case BGR_MOTO: {
+        /* the car speed (legal limit, road class) with motorcycle rules: slower on dirt
+         * and gravel (unsafe at car speed), much slower on tracks; never above 110 */
+        unsigned s = std::max(5u, std::min(get_osm_way_speed(id, t), 110u));
+        const char *sf = t["surface"], *tt = t["tracktype"];
+        bool unpaved = cls == BGR_W_TRACK
+            || (sf && (is(sf, "unpaved") || is(sf, "dirt") || is(sf, "gravel") || is(sf, "ground") || is(sf, "sand")
+                       || is(sf, "earth") || is(sf, "grass") || is(sf, "mud") || is(sf, "compacted") || is(sf, "fine_gravel")))
+            || (tt && !is(tt, "grade1"));
+        if (unpaved) s = std::max(5u, std::min(s * 7 / 10, 50u));
+        if (cls == BGR_W_TRACK) s = std::min(s, 25u);
+        return s;
     }
     case BGR_BIKE:
         if (cls == BGR_W_STEPS) return 3;                 // carrying the bicycle
@@ -124,6 +148,47 @@ OSMWayDirectionCategory way_cb(uint64_t id, unsigned rid, const TagMap &t)
     }
 }
 
+/* traffic signals and toll booths: positions from a pass over the nodes (RoutingKit does
+ * not give node tags); matched to the graph by position (float coordinates, ~1 m) */
+struct NodeMarks : osmium::handler::Handler {
+    std::vector<std::pair<double, double>> signals, booths;
+    void node(const osmium::Node &n)
+    {
+        const char *h = n.tags()["highway"], *c = n.tags()["crossing"], *b = n.tags()["barrier"];
+        if (!n.location().valid()) return;
+        if ((h && !std::strcmp(h, "traffic_signals")) || (c && !std::strcmp(c, "traffic_signals")))
+            signals.push_back({n.location().lat(), n.location().lon()});
+        if (b && !std::strcmp(b, "toll_booth")) booths.push_back({n.location().lat(), n.location().lon()});
+    }
+};
+
+struct PointGrid {                 /* points in ~cell degrees; find one within r degrees */
+    double cell;
+    std::unordered_map<int64_t, std::vector<int>> m;
+    std::vector<std::pair<double, double>> pts;
+    explicit PointGrid(double c) : cell(c) {}
+    int64_t key(int64_t a, int64_t b) const { return a * 4000003 + b; }
+    void add(double la, double lo)
+    {
+        pts.push_back({la, lo});
+        m[key((int64_t)std::floor(la / cell), (int64_t)std::floor(lo / cell))].push_back((int)pts.size() - 1);
+    }
+    template <class F> void near(double la, double lo, double r, F f) const
+    {
+        int64_t a = (int64_t)std::floor(la / cell), b = (int64_t)std::floor(lo / cell);
+        double cl = std::cos(la * M_PI / 180.0);
+        for (int64_t i = a - 1; i <= a + 1; i++)
+            for (int64_t j = b - 1; j <= b + 1; j++) {
+                auto it = m.find(key(i, j));
+                if (it == m.end()) continue;
+                for (int k : it->second) {
+                    double dy = pts[k].first - la, dx = (pts[k].second - lo) * cl;
+                    if (dx * dx + dy * dy <= r * r) f(k);
+                }
+            }
+    }
+};
+
 void put_var(std::string &o, uint64_t v)
 {
     while (v >= 0x80) { o.push_back((char)(v | 0x80)); v >>= 7; }
@@ -147,9 +212,15 @@ uint32_t world_y(double lat)
 
 int main(int argc, char **argv)
 {
-    const char *tests = argc == 7 && !std::strcmp(argv[5], "--tests") ? argv[6] : nullptr;
-    if ((argc != 5 && !tests) || std::strcmp(argv[3], "--profile")) {
-        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgr --profile car|moto|bike|foot [--tests ARQ]\n", argv[0]);
+    const char *tests = nullptr;
+    bool avoid_toll = false, bad = argc < 5 || std::strcmp(argv[3], "--profile");
+    for (int i = 5; i < argc && !bad; i++) {
+        if (!std::strcmp(argv[i], "--tests") && i + 1 < argc) tests = argv[++i];
+        else if (!std::strcmp(argv[i], "--avoid-toll")) avoid_toll = true;
+        else bad = true;
+    }
+    if (bad) {
+        std::fprintf(stderr, "uso: %s IN.osm.pbf OUT.bgr --profile car|moto|bike|foot [--tests ARQ] [--avoid-toll]\n", argv[0]);
         return 2;
     }
     const char *names[] = {"car", "moto", "bike", "foot"};
@@ -166,7 +237,14 @@ int main(int argc, char **argv)
     };
     OSMRoutingGraph g = load_osm_routing_graph_from_pbf(argv[1], mapping, way_cb, restrictions, log, false, OSMRoadGeometry::uncompressed);
     mapping = OSMRoutingIDMapping();
+    NodeMarks marks;
+    {
+        osmium::io::Reader rd(argv[1], osmium::osm_entity_bits::node);
+        osmium::apply(rd, marks);
+        rd.close();
+    }
     unsigned n = g.node_count(), m = g.arc_count();
+    std::fprintf(stderr, "nós marcados: %zu semáforos, %zu cabines de pedágio\n", marks.signals.size(), marks.booths.size());
     std::fprintf(stderr, "grafo: %u nós, %u arcos, %zu vias, %zu proibições de conversão (%ld s)\n",
                  n, m, ways.size(), g.forbidden_turn_from_arc.size(), (long)(time(nullptr) - t0));
     if (ways.size() < 1) ways.resize(1);
@@ -235,6 +313,57 @@ int main(int argc, char **argv)
     // geometry: modelling nodes between tail and head, in arc direction
     auto lat_of = [&](unsigned k) { return (double)g.modelling_node_latitude[k]; };
     auto lon_of = [&](unsigned k) { return (double)g.modelling_node_longitude[k]; };
+
+    // traffic signals: clusters of signals closer than 30 m are one junction; an arc that
+    // enters a cluster (a signal on it, its tail not near the same cluster) waits once
+    {
+        const double M = 1.0 / 111320.0;                 // one metre in degrees of latitude
+        unsigned sig_ds = profile == BGR_CAR ? 100 : profile == BGR_MOTO ? 80 : profile == BGR_BIKE ? 60 : 0;
+        if (const char *e = getenv("BGR_SIGNAL_DS")) sig_ds = (unsigned)atoi(e);
+        PointGrid sg(40 * M);
+        for (auto &p : marks.signals) sg.add(p.first, p.second);
+        std::vector<int> cl(sg.pts.size());
+        for (size_t i = 0; i < cl.size(); i++) cl[i] = (int)i;
+        std::function<int(int)> root = [&](int x) { while (cl[x] != x) x = cl[x] = cl[cl[x]]; return x; };
+        for (size_t i = 0; i < sg.pts.size(); i++)
+            sg.near(sg.pts[i].first, sg.pts[i].second, 30 * M, [&](int k) { int a = root((int)i), b = root(k); if (a != b) cl[a] = b; });
+        auto signal_at = [&](double la, double lo) { int c = -1; sg.near(la, lo, 2 * M, [&](int k) { c = root(k); }); return c; };
+        auto cluster_near = [&](double la, double lo, int c) { bool f = false; sg.near(la, lo, 30 * M, [&](int k) { if (root(k) == c) f = true; }); return f; };
+        unsigned with_signal = 0;
+        if (sig_ds && !sg.pts.empty())
+            for (unsigned a = 0; a < m; a++) {
+                int c = -1;
+                for (unsigned k = g.first_modelling_node[a]; k < g.first_modelling_node[a + 1] && c < 0; k++) c = signal_at(lat_of(k), lon_of(k));
+                if (c < 0) c = signal_at(g.latitude[g.head[a]], g.longitude[g.head[a]]);
+                if (c < 0 || cluster_near(g.latitude[tail[a]], g.longitude[tail[a]], c)) continue;
+                time_ds[a] += sig_ds;
+                with_signal++;
+            }
+        // toll booths: the way through the booth is a toll way
+        PointGrid bg(40 * M);
+        for (auto &p : marks.booths) bg.add(p.first, p.second);
+        unsigned booth_ways = 0;
+        if (!bg.pts.empty())
+            for (unsigned a = 0; a < m; a++) {
+                bool hit = false;
+                auto chk = [&](double la, double lo) { bg.near(la, lo, 2 * M, [&](int) { hit = true; }); };
+                for (unsigned k = g.first_modelling_node[a]; k < g.first_modelling_node[a + 1] && !hit; k++) chk(lat_of(k), lon_of(k));
+                if (!hit) chk(g.latitude[g.head[a]], g.longitude[g.head[a]]);
+                if (hit && !(ways[g.way[a]].info & BGR_WF_TOLL << 8)) { ways[g.way[a]].info |= BGR_WF_TOLL << 8; booth_ways++; }
+            }
+        std::fprintf(stderr, "semáforos: %u arcos com espera de %u ds; pedágio: %u vias marcadas por cabine\n", with_signal, sig_ds, booth_ways);
+    }
+    // --avoid-toll: weights of the hierarchy (the times stay true)
+    unsigned toll_pen = 0;
+    std::vector<uint32_t> w_ds = time_ds;
+    if (avoid_toll) {
+        toll_pen = 36000;
+        if (const char *e = getenv("BGR_TOLL_PENALTY_DS")) toll_pen = (unsigned)atoi(e);
+        unsigned na = 0;
+        for (unsigned a = 0; a < m; a++)
+            if (ways[g.way[a]].info & BGR_WF_TOLL << 8) { w_ds[a] += toll_pen; na++; }
+        std::fprintf(stderr, "sem pedágio: %u arcos com +%u ds na hierarquia\n", na, toll_pen);
+    }
     // incoming / outgoing direction at the head / tail (local metres)
     auto bearing = [&](double la1, double lo1, double la2, double lo2) {
         double dx = (lo2 - lo1) * std::cos(la1 * M_PI / 180.0), dy = la2 - la1;
@@ -273,10 +402,14 @@ int main(int argc, char **argv)
             while (turn > 180) turn -= 360;
             while (turn < -180) turn += 360;
             unsigned cost = 0;                          // deciseconds
-            if (profile == BGR_CAR || profile == BGR_MOTO) {
+            if (profile == BGR_CAR) {
                 if (uturn) cost = 300;
                 else if (turn < -30) cost = turn < -120 ? 130 : 80;   // left: crosses traffic (right-hand traffic)
                 else if (turn > 30) cost = turn > 120 ? 80 : 30;
+            } else if (profile == BGR_MOTO) {                         // smaller: less waiting to turn
+                if (uturn) cost = 250;
+                else if (turn < -30) cost = turn < -120 ? 100 : 60;
+                else if (turn > 30) cost = turn > 120 ? 60 : 20;
             } else if (profile == BGR_BIKE) {
                 if (uturn) cost = 100;
                 else if (turn < -30) cost = 30;
@@ -284,7 +417,7 @@ int main(int argc, char **argv)
             }
             ex_tail.push_back(a);
             ex_head.push_back(b);
-            ex_w.push_back(cost + time_ds[b]);
+            ex_w.push_back(cost + w_ds[b]);
         }
     }
     std::fprintf(stderr, "grafo expandido: %zu arestas (%u retornos e %u conversões proibidas removidos)\n", ex_head.size(), uturns, banned);
@@ -295,7 +428,7 @@ int main(int argc, char **argv)
     if (node_mode) {
         ex_tail = tail;
         ex_head.assign(g.head.begin(), g.head.end());
-        ex_w = time_ds;
+        ex_w = w_ds;
         std::fprintf(stderr, "modo por nós: CH sobre %u nós e %u arcos\n", n, m);
     }
     ContractionHierarchy ch = ContractionHierarchy::build(cn, ex_tail, ex_head, ex_w,
@@ -513,7 +646,8 @@ int main(int argc, char **argv)
     h.magic = BGR_MAGIC; h.version = BGR_VERSION; h.profile = (uint32_t)profile;
     h.nodes = n; h.arcs = m; h.ways = (uint32_t)ways.size(); h.geom = (uint32_t)gx.size();
     h.ex_edges = node_mode ? 0 : (uint32_t)ex_head.size(); h.ch_fwd = ch_arcs[0]; h.ch_bwd = ch_arcs[1];
-    h.flags = node_mode ? BGR_F_NODE : 0;
+    h.flags = (node_mode ? BGR_F_NODE : 0) | (avoid_toll ? BGR_F_TOLLPEN : 0);
+    h.reserved[0] = toll_pen;
     h.grid_x0 = x0; h.grid_y0 = y0; h.grid_shift = shift; h.grid_w = gw; h.grid_h = gh;
     h.created = (uint32_t)time(nullptr);
     std::fseek(out, 0, SEEK_SET);

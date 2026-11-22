@@ -7,6 +7,8 @@
 #include "../core/settings.h"
 #include "../core/status.h"
 #include "../core/app.h"
+#include <stdio.h>
+#include <string.h>
 #include "../core/fx.h"
 #include "../widgets/page.h"
 #include "../assets/logo/bf_logo.h"
@@ -95,6 +97,12 @@ static void wall_click(lv_event_t *e)
     if(settings()->wallpaper == v) return;
     settings()->wallpaper = v;
     apply_rebuild();
+}
+
+static void wall_image_click(lv_event_t *e)
+{
+    (void)e;
+    nav_go(SCR_GALLERY, GALLERY_PICK_WALLPAPER);   /* tocar numa imagem aplica e volta */
 }
 
 static void home_click(lv_event_t *e)
@@ -236,6 +244,13 @@ static void build_wallpaper(void)
     lv_obj_t *img = lv_image_create(b);           /* o símbolo no próprio botão */
     lv_image_set_src(img, &bf_logo_mark);
     bf_label(b, tr(S_AP_WALL_LOGO), NULL, pal()->text);
+    seg_button(r, BF_SYMBOL_IMAGE, tr(S_AP_WALL_IMAGE), s->wallpaper == BF_WALL_IMAGE, wall_image_click, 0);
+    if(s->wallpaper == BF_WALL_IMAGE && s->wall_image[0]) {
+        const char *n = strrchr(s->wall_image, '/');
+        char t[300];
+        snprintf(t, sizeof t, tr(theme_wallpaper() ? S_AP_WALL_FILE : S_AP_WALL_MISSING), n ? n + 1 : s->wall_image);
+        hint(c, t, theme_wallpaper() ? pal()->text_dim : pal()->warning);
+    }
 }
 
 static void build_effects(void)

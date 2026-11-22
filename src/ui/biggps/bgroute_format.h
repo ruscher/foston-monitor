@@ -34,7 +34,12 @@ enum { BGR_CAR = 0, BGR_MOTO, BGR_BIKE, BGR_FOOT, BGR_PROFILES };
 /* BGR_F_NODE: the hierarchy is over the routing nodes and the original arcs (no turn
  * expansion: profiles without turn restrictions or turn costs — bicycle, foot); CH_ID is
  * indexed by node, EX_HEAD is empty and an original CH arc stores the arc id itself. */
-enum { BGR_F_NODE = 1 };
+enum { BGR_F_NODE = 1, BGR_F_TOLLPEN = 2 };
+/* BGR_F_TOLLPEN ("sem pedágio" pack): every arc of a toll way costs reserved[0]
+ * deciseconds more in the hierarchy (it avoids tolls when another way exists); the route
+ * time subtracts it back for each toll arc entered.  ARC_TIME never holds penalties.
+ * Version 3 builders also add the waiting time of traffic signals to ARC_TIME (once per
+ * signal cluster entered) and mark ways with a toll booth as toll ways. */
 
 enum {
     BGR_S_NODE_X, BGR_S_NODE_Y,                /* u32[nodes] */

@@ -1,6 +1,6 @@
 # Estado da implementação — BigFoston OS no FOSTON FS-707DC
 
-Atualizado em 21/11/2026 (BigFoston OS 0.2.0). Cada linha diz o que foi **medido no aparelho** (não no
+Atualizado em 22/11/2026 (BigFoston OS 0.2.0 + fase de recuperação do hardware). Cada linha diz o que foi **medido no aparelho** (não no
 simulador), com a evidência e onde está o detalhe. Legenda:
 
 - **FUNCIONANDO** — testado no hardware e em uso.
@@ -15,7 +15,7 @@ abertura do kernel mostra o logotipo FOSTONOS; em 6,2 s a interface LVGL está n
 tela, com toque, som, cartão SD com gravação, rede USB com SSH e relógio certo.
 Ajustes, calibração e livros ficam no cartão SD.
 
-Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone.
+Ficam de fora, por falta de driver: TV, transmissor FM e microfone. Bluetooth: o chip (MT6611) já responde no Linux, sem pilha nem perfis ainda.
 
 ## Boot e sistema
 
@@ -44,7 +44,7 @@ Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone.
 | Alto-falante (ALSA + OSS) | **FUNCIONANDO** | MP3 a ~7 % de CPU com espectro; sons de toque | [audio.md](audio.md) |
 | Fone de ouvido | **FUNCIONANDO** | detecção no GPIO 12 e troca alto-falante/fone conferidas com um fone | [audio.md](audio.md) |
 | Microfone | **NÃO IMPLEMENTADO** | o CE só grava no caminho de voz do DSP | [audio.md](audio.md) |
-| Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série; gravação sustentada corrigida (576 MB conferidos por MD5, zero erros); reparo automático com `fsck.fat` se o cartão não foi desmontado | [sd-controller.md](sd-controller.md) |
+| Cartão SD | **FUNCIONANDO** | leitura conferida com leitor no PC; gravação liberada só no cartão com a marca do seu número de série; gravação sustentada corrigida (576 MB conferidos por MD5, zero erros); reparo automático com `fsck.fat` se o cartão não foi desmontado; montagem e limpeza por aviso do kernel (uevent), sem consulta a cada segundo | [sd-controller.md](sd-controller.md), [hardware-enablement/03](hardware-enablement/03-sd-watchdog.md) |
 | Bateria e carregador | **FUNCIONANDO** | carga por software (algoritmo do CE) ligada por padrão; carregador de tomada: 16 min em corrente constante sem falhas (21/11/2026); USB do PC: recusa (VCHG cai abaixo de 4,35 V sob carga), com histerese; ícone com raio e verde na carga completa | [battery-charger.md](battery-charger.md) |
 | USB (dispositivo): rede + serial + SSH | **FUNCIONANDO** (High-Speed) | `ssh root@192.168.7.2` (login 0,55 s; antes 5,9 s pela espera de DNS reverso); TCP 3,7 MB/s PC→FOSTON, 6,2 MB/s FOSTON→PC (21/11/2026) | [04-linux-port.md](04-linux-port.md) |
 | Reconexão do cabo USB | **FUNCIONANDO** (em observação) | kernel anterior: rede parada após recolocar o cabo (2 de 2); kernel com a verificação da FIFO no reset do barramento: rede de volta em 4 de 4 trocas (ping do PC e log no SD). A verificação não precisou restaurar nada, então o mecanismo exato não foi isolado | [04-linux-port.md](04-linux-port.md) |
@@ -52,8 +52,9 @@ Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone.
 | USB High-Speed | **FUNCIONANDO** | `MUSB+0x70` como o CE e FIFO de 32 bits; `mt3351.hs=0` volta ao Full-Speed | [04-linux-port.md](04-linux-port.md) |
 | UARTs | **FUNCIONANDO** (recepção) | `8250_mt3351`, ttyS0..3 | [uart.md](uart.md) |
 | GPS (MT3328) | **FUNCIONANDO** | `gps.dll` do aparelho no Linux (`bfgps`), serviço no boot e tela GPS; posição real conferida ao ar livre (21/11/2026); relógio acertado pela hora do GPS sem NTP | [gps.md](gps.md) |
-| Big GPS (mapa, rotas, navegação, voz, busca offline) | **FUNCIONANDO** (simulado; falta teste dirigindo) | motor próprio sem FPU; mapa do Brasil inteiro no aparelho; rotas carro/moto/bicicleta/a pé com Contraction Hierarchies; voz pt-BR (eSpeak NG); busca com favoritos e recentes | [big-gps/00-visao-geral.md](big-gps/00-visao-geral.md) |
-| Bluetooth, TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
+| Big GPS (mapa, rotas, navegação, voz, busca offline) | **FUNCIONANDO** (simulado; falta teste dirigindo) | motor próprio sem FPU; mapa do Brasil inteiro no aparelho; rotas carro/moto/bicicleta/a pé com Contraction Hierarchies; voz pt-BR (eSpeak NG); busca com abreviações (SQN, Av., BR-020), índice por região (0,2–5 s no índice nacional com o cartão frio) e favoritos; semáforos, perfil de moto e evitar pedágios prontos no construtor (arquivos nacionais a gerar) | [big-gps/00-visao-geral.md](big-gps/00-visao-geral.md), [hardware-enablement/05](hardware-enablement/05-big-gps-improvements.md) |
+| Bluetooth (MediaTek MT6611, UART2) | **PARCIAL** | chip ligado pelos pinos da OAL (GPIO 104/3) e respondendo a HCI (`btprobe`); sem BlueZ, perfis nem app | [hardware-enablement/06](hardware-enablement/06-bluetooth-hardware.md) |
+| TV (ISDB-T), transmissor FM | **NÃO IMPLEMENTADO** | sem driver | [01-hardware.md](01-hardware.md) |
 
 ## Interface (bigfoston-shell, LVGL 9.2.2)
 
@@ -88,7 +89,7 @@ Ficam de fora, por falta de driver: Bluetooth, TV, transmissor FM e microfone.
 ## Limitações que o usuário percebe
 
 1. **Não deixar horas no Linux com a bateria baixa:** quem carrega é o CE.
-2. **`reboot` pelo terminal desliga o aparelho** (watchdog); o Reiniciar da interface reinicia por kexec.
+2. **`reboot -f` desliga o aparelho** (watchdog); `reboot` e o Reiniciar da interface reiniciam por kexec; com atualização pendente no cartão, o Reiniciar avisa e o `reboot` desliga (é preciso ligar para aplicá-la).
 3. **A hora do Linux vem do relógio do CE**; se ele perder a hora (bateria
    totalmente descarregada), acerte pelo PC (`bfagent.py settime`) ou em Ajustes > Data.
 4. **Liberar a gravação do SD reinicia o cartão** e soma ~1,3 s ao boot.

@@ -90,8 +90,12 @@ void theme_init(lv_display_t *disp)
     const bf_preset_t *pr = theme_preset(cfg->palette);
     bool dark = theme_dark_now();
     set_palette(dark, pr);
-    wall_ok = cfg->wallpaper != BF_WALL_PLAIN &&
-              wallpaper_build(&wall, &P, lv_color_hex(pr->glow), cfg->wallpaper == BF_WALL_LOGO);
+    wall_ok = cfg->wallpaper == BF_WALL_IMAGE && cfg->wall_image[0] &&
+              wallpaper_from_image(&wall, cfg->wall_image, &P);
+    /* sem a imagem (cartão fora, arquivo apagado): o degradê com o símbolo */
+    if(!wall_ok && cfg->wallpaper != BF_WALL_PLAIN)
+        wall_ok = wallpaper_build(&wall, &P, lv_color_hex(pr->glow),
+                                  cfg->wallpaper == BF_WALL_LOGO || cfg->wallpaper == BF_WALL_IMAGE);
     lv_theme_t *th = lv_theme_default_init(disp, P.primary, P.accent, dark, BF_FONT_M);
     lv_display_set_theme(disp, th);
 

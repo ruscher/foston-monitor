@@ -12,11 +12,16 @@
  *   tokens: bgs_token_t[ntokens] sorted by text (strcmp of the normalized word)
  *   postings: u32 entry ids, per token sorted by entry id
  *   strings: NUL-terminated UTF-8 (names, contexts) and normalized words
- *   category index: for each category, (z10 tile key, first entry) pairs sorted by key,
- *     then a sentinel (0xFFFFFFFF, end); cat_first[c] .. cat_first[c+1] in pairs
+ *   category index: version 2: for each category, (z10 tile key, first entry) pairs sorted
+ *     by key, then a sentinel (0xFFFFFFFF, end); version 3: (key, first, end) triples, no
+ *     sentinel; cat_first[c] .. cat_first[c+1] in pairs / triples
+ *   version 3, tile table (off_tiles, ntiles): bgs_tile_t sorted by key
  *
- * Points of interest are stored grouped by category and, inside one, by zoom-10 tile
- * (key = ty << 16 | tx), so "nearest fuel stations" reads only the tiles around the point.
+ * Version 2 stores the points of interest grouped by category and, inside one, by zoom-10
+ * tile (key = ty << 16 | tx).  Version 3 stores every entry by zoom-10 tile and, inside a
+ * tile, points of interest by category: an entry id tells its tile (tile table, read once),
+ * so a query checks the tiles near the position first and stops when no farther tile can
+ * enter the results; the postings also hold the words of the context.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -26,7 +31,7 @@
 #include <stdint.h>
 
 #define BGS_MAGIC   0x31534742u   /* "BGS1" */
-#define BGS_VERSION 2
+#define BGS_VERSION 3   /* 3: entries by tile, tile table, context words indexed (2 is still read) */
 
 enum { BGS_T_PLACE = 0, BGS_T_STREET, BGS_T_POI, BGS_T_ADDRESS };
 
@@ -45,8 +50,15 @@ typedef struct {
     uint32_t created;
     uint32_t off_catidx;       /* u32 cat_first[BGS_C_COUNT + 1] (pair index), then the pairs */
     uint32_t ncatpairs;
-    uint32_t reserved[3];
+    uint32_t off_tiles, ntiles; /* version 3 */
+    uint32_t reserved;
 } bgs_header_t;
+
+typedef struct {
+    uint32_t key;              /* z10 tile: ty << 16 | tx */
+    uint32_t first;            /* first entry; the tile ends at the next tile's first */
+    uint32_t maxrank;          /* highest rank in the tile */
+} bgs_tile_t;
 
 typedef struct {
     uint32_t x, y;             /* world coordinates (32-bit Web Mercator) */

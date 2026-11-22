@@ -86,6 +86,7 @@ int main(int argc, char **argv)
     if (rc) { printf("sem rota (%d); %u nós, %.1f ms\n", rc, st.settled, st.us / 1e3); return 1; }
     printf("rota: %.2f km, %d min %02d s, %d arcos; busca %.1f ms, %u nós, %u relaxados, %u páginas lidas\n",
            r.len_dm / 1e4, (int)(r.time_ds / 600), (int)(r.time_ds / 10 % 60), r.narcs, st.us / 1e3, st.settled, st.relaxed, st.pages_read);
+    printf("pedágio: %d arcos de via com pedágio%s\n", r.toll_arcs, bgr_avoids_toll(p) ? " (arquivo sem pedágio)" : "");
     bgn_route_t nr;
     t0 = now();
     if (bgn_build(p, &r, &nr)) { printf("erro ao montar as instruções\n"); return 1; }

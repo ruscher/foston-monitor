@@ -2,8 +2,14 @@
  * aparelho não tem FPU em uso pelo musl estático). */
 #include "wallpaper.h"
 #include "../assets/logo/bf_logo.h"
+#include "imgload.h"
+#include "settings.h"
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define WM_X 430      /* canto superior esquerdo da marca d'água (sai pela direita) */
 #define WM_Y 40
@@ -79,5 +85,101 @@ bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow
     dsc->data_size = (uint32_t)BF_WALL_W * BF_WALL_H * 2;
     /* mesmo endereço com conteúdo novo: o cache de imagens do LVGL precisa esquecer */
     lv_image_cache_drop(dsc);
+    return true;
+}
+
+/* ------------------------------------------------ imagem do usuário */
+
+#define CACHE_MAGIC "BFWP1"
+
+typedef struct {
+    char magic[8];
+    char path[256];
+    long long mtime, size;
+    int dark;
+} cache_hdr_t;
+
+static void fill_dsc(lv_image_dsc_t *dsc)
+{
+    lv_memzero(dsc, sizeof *dsc);
+    dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
+    dsc->header.cf = LV_COLOR_FORMAT_RGB565;
+    dsc->header.w = BF_WALL_W;
+    dsc->header.h = BF_WALL_H;
+    dsc->header.stride = BF_WALL_W * 2;
+    dsc->data = (const uint8_t *)buf;
+    dsc->data_size = (uint32_t)BF_WALL_W * BF_WALL_H * 2;
+    lv_image_cache_drop(dsc);
+}
+
+static void cache_key(cache_hdr_t *h, const char *path, const struct stat *st, bool dark)
+{
+    memset(h, 0, sizeof *h);
+    memcpy(h->magic, CACHE_MAGIC, sizeof CACHE_MAGIC);
+    snprintf(h->path, sizeof h->path, "%s", path);
+    h->mtime = (long long)st->st_mtime;
+    h->size = (long long)st->st_size;
+    h->dark = dark;
+}
+
+bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palette_t *p)
+{
+    struct stat st;
+    if(stat(path, &st) || !S_ISREG(st.st_mode)) return false;
+    if(!buf && !(buf = malloc((size_t)BF_WALL_W * BF_WALL_H * 2))) return false;
+    const size_t bytes = (size_t)BF_WALL_W * BF_WALL_H * 2;
+    char cpath[300];
+    data_path(cpath, sizeof cpath, "wallpaper.cache");
+    cache_hdr_t want, got;
+    cache_key(&want, path, &st, p->dark);
+
+    FILE *f = fopen(cpath, "rb");
+    if(f) {
+        bool ok = fread(&got, sizeof got, 1, f) == 1 && !memcmp(&got, &want, sizeof want) &&
+                  fread(buf, 1, bytes, f) == bytes;
+        fclose(f);
+        if(ok) { fill_dsc(dsc); return true; }
+    }
+
+    /* decodifica já reduzida para perto do tamanho que preenche 800x360 */
+    int w, h;
+    if(!img_probe(path, &w, &h) || w <= 0 || h <= 0) return false;
+    int tw, th;
+    if((long long)w * BF_WALL_H >= (long long)h * BF_WALL_W) { th = BF_WALL_H; tw = (int)(((long long)w * BF_WALL_H + h - 1) / h); }
+    else { tw = BF_WALL_W; th = (int)(((long long)h * BF_WALL_W + w - 1) / w); }
+    lv_image_dsc_t img;
+    if(!img_load_fit(path, tw, th, p->bg, &img, NULL, 0)) return false;
+    int iw = (int)img.header.w, ih = (int)img.header.h, is = (int)img.header.stride / 2;
+    /* recorte central com a proporção da tela (amplia por vizinho se a imagem for pequena) */
+    int cw, ch;
+    if((long long)iw * BF_WALL_H >= (long long)ih * BF_WALL_W) { ch = ih; cw = (int)((long long)ih * BF_WALL_W / BF_WALL_H); }
+    else { cw = iw; ch = (int)((long long)iw * BF_WALL_H / BF_WALL_W); }
+    int ox = (iw - cw) / 2, oy = (ih - ch) / 2;
+    const uint16_t *src = (const uint16_t *)img.data;
+    /* no escuro, 80 % do brilho; no claro, 30 % da cor de fundo por cima */
+    unsigned mul = p->dark ? 205 : 179, br = p->bg.red, bgc = p->bg.green, bb = p->bg.blue;
+    for(int y = 0; y < BF_WALL_H; y++) {
+        const uint16_t *srow = src + (size_t)(oy + y * ch / BF_WALL_H) * is + ox;
+        uint16_t *row = buf + (size_t)y * BF_WALL_W;
+        for(int x = 0; x < BF_WALL_W; x++) {
+            uint16_t c = srow[x * cw / BF_WALL_W];
+            unsigned r = (c >> 11) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
+            if(p->dark) { r = r * mul >> 8; g = g * mul >> 8; b = b * mul >> 8; }
+            else { r = (r * mul + br * (256 - mul)) >> 8; g = (g * mul + bgc * (256 - mul)) >> 8; b = (b * mul + bb * (256 - mul)) >> 8; }
+            unsigned thr = bayer[y & 3][x & 3];
+            row[x] = (uint16_t)(q(r << 8, 31, thr) << 11 | q(g << 8, 63, thr) << 5 | q(b << 8, 31, thr));
+        }
+    }
+    img_free(&img);
+
+    char tmp[310];
+    snprintf(tmp, sizeof tmp, "%s.tmp", cpath);
+    if((f = fopen(tmp, "wb"))) {
+        bool ok = fwrite(&want, sizeof want, 1, f) == 1 && fwrite(buf, 1, bytes, f) == bytes;
+        ok = fclose(f) == 0 && ok;
+        if(ok) rename(tmp, cpath);
+        else unlink(tmp);
+    }
+    fill_dsc(dsc);
     return true;
 }

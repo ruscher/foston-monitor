@@ -23,7 +23,8 @@ void settings_defaults(bf_settings_t *s)
     s->lang = LANG_PT;
     s->mode = BF_MODE_DARK;
     s->palette = 0;
-    s->wallpaper = BF_WALL_LOGO;
+    s->wallpaper = BF_WALL_IMAGE;
+    snprintf(s->wall_image, sizeof s->wall_image, "%s", BF_WALL_DEFAULT_IMAGE);
     s->anim = true;
     s->sounds = true;
     s->boot_sound = false;
@@ -44,6 +45,7 @@ void settings_defaults(bf_settings_t *s)
     s->clock_24h = true;
     s->nav_voice = true;
     s->map_detail = BF_DETAIL_AUTO;
+    s->map_avoid_toll = false;
 }
 
 static void mkdir_p(const char *path)
@@ -87,15 +89,16 @@ void settings_load(void)
     data_path(path, sizeof path, "settings.conf");
     FILE *f = fopen(path, "r");
     if(!f) return;
-    char line[256], k[64], v[128];
+    char line[512], k[64], v[300];
     while(fgets(line, sizeof line, f)) {
         if(line[0] == '#') continue;
-        if(sscanf(line, " %63[^= ] = %127[^\n]", k, v) != 2) continue;
+        if(sscanf(line, " %63[^= ] = %299[^\n]", k, v) != 2) continue;
         if(!strcmp(k, "language"))       cur.lang = i18n_lang_from_code(v);
         else if(!strcmp(k, "theme"))     cur.mode = !strcmp(v, "light") ? BF_MODE_LIGHT :
                                                 !strcmp(v, "auto") ? BF_MODE_AUTO : BF_MODE_DARK;
         else if(!strcmp(k, "palette"))   cur.palette = clampi(atoi(v), 0, 63);
         else if(!strcmp(k, "wallpaper")) cur.wallpaper = clampi(atoi(v), 0, BF_WALL__N - 1);
+        else if(!strcmp(k, "wallpaper_image")) snprintf(cur.wall_image, sizeof cur.wall_image, "%.255s", v);
         else if(!strcmp(k, "animations")) cur.anim = atoi(v) != 0;
         else if(!strcmp(k, "sounds"))    cur.sounds = atoi(v) != 0;
         else if(!strcmp(k, "boot_sound")) cur.boot_sound = atoi(v) != 0;
@@ -106,7 +109,7 @@ void settings_load(void)
         else if(!strcmp(k, "auto_time")) cur.auto_time = atoi(v) != 0;
         else if(!strcmp(k, "home_mode")) cur.home_mode = clampi(atoi(v), 0, BF_HOME__N - 1);
         else if(!strcmp(k, "home_apps")) cur.home_apps = (unsigned)strtoul(v, NULL, 0);
-        else if(!strcmp(k, "ntp_servers")) snprintf(cur.ntp, sizeof cur.ntp, "%s", v);
+        else if(!strcmp(k, "ntp_servers")) snprintf(cur.ntp, sizeof cur.ntp, "%.159s", v);
         else if(!strcmp(k, "backlight")) cur.backlight = clampi(atoi(v), 5, 100);
         else if(!strcmp(k, "volume"))    cur.volume = clampi(atoi(v), 0, 100);
         else if(!strcmp(k, "music_repeat"))  cur.music_repeat = clampi(atoi(v), 0, 2);
@@ -122,6 +125,7 @@ void settings_load(void)
         else if(!strcmp(k, "book_theme"))    cur.book_theme = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "nav_voice"))     cur.nav_voice = atoi(v) != 0;
         else if(!strcmp(k, "map_detail"))    { int d = atoi(v); cur.map_detail = d >= 0 && d < BF_DETAIL__N ? d : BF_DETAIL_AUTO; }
+        else if(!strcmp(k, "map_avoid_toll")) cur.map_avoid_toll = atoi(v) != 0;
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
     }
@@ -141,7 +145,7 @@ bool settings_save(void)
     fprintf(f, "# BigFoston shell — ajustes (gerado automaticamente)\n");
     fprintf(f, "language = %s\n", i18n_lang_code(cur.lang));
     fprintf(f, "theme = %s\n", cur.mode == BF_MODE_LIGHT ? "light" : cur.mode == BF_MODE_AUTO ? "auto" : "dark");
-    fprintf(f, "palette = %d\nwallpaper = %d\n", cur.palette, cur.wallpaper);
+    fprintf(f, "palette = %d\nwallpaper = %d\nwallpaper_image = %s\n", cur.palette, cur.wallpaper, cur.wall_image);
     fprintf(f, "animations = %d\nsounds = %d\nboot_sound = %d\n", cur.anim, cur.sounds, cur.boot_sound);
     fprintf(f, "dim_minutes = %d\ndevice_notices = %d\n", cur.dim_min, cur.notify);
     fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\nntp_servers = %s\n",
@@ -160,6 +164,7 @@ bool settings_save(void)
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);
     fprintf(f, "map_detail = %d\n", cur.map_detail);
+    fprintf(f, "map_avoid_toll = %d\n", cur.map_avoid_toll ? 1 : 0);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
     /* no cartão SD (FAT): o conteúdo vai ao cartão antes da troca de nome */

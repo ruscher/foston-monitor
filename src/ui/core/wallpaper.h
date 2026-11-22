@@ -10,4 +10,8 @@
 #define BF_WALL_H BF_CONTENT_H
 
 bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow, bool logo);
+/* imagem do usuário recortada para preencher 800x360 (centro), escurecida um pouco no
+ * tema escuro para o texto continuar legível. Guarda o resultado em $DATA/wallpaper.cache
+ * (a decodificação do PNG/JPEG leva segundos no aparelho). false se não abrir. */
+bool wallpaper_from_image(lv_image_dsc_t *dsc, const char *path, const bf_palette_t *p);
 #endif

@@ -272,33 +272,43 @@ int main(int argc, char **argv)
         }
     std::fprintf(stderr, "%zu entradas (%zu lugares) em %ld s\n", ents.size(), places.size(), (long)(time(nullptr) - t0));
 
-    /* order: points of interest by category and zoom-10 tile, then everything else */
+    /* order (version 3): by zoom-10 tile, inside a tile points of interest by category,
+     * then everything else; an entry id tells its tile through the tile table */
     auto tilekey = [](const Ent &e) {
         uint32_t x = world_x(e.lon) >> 22, y = world_y(e.lat) >> 22;      /* zoom 10 */
         return y << 16 | x;
     };
     std::stable_sort(ents.begin(), ents.end(), [&](const Ent &a, const Ent &b) {
+        uint32_t ka = tilekey(a), kb = tilekey(b);
+        if (ka != kb) return ka < kb;
         int ca = a.type == BGS_T_POI ? a.cat : 255, cb = b.type == BGS_T_POI ? b.cat : 255;
-        if (ca != cb) return ca < cb;
-        if (ca == 255) return false;
-        return tilekey(a) < tilekey(b);
+        return ca < cb;
     });
-    std::vector<uint32_t> cat_first(BGS_C_COUNT + 1, 0), cat_pairs;
-    for (int c = 0; c < BGS_C_COUNT; c++) {
-        cat_first[c] = (uint32_t)(cat_pairs.size() / 2);
-        uint32_t last = 0xFFFFFFFFu;
-        for (size_t i = 0; i < ents.size(); i++) {
-            if (ents[i].type != BGS_T_POI || ents[i].cat != c) continue;
-            uint32_t k = tilekey(ents[i]);
-            if (k != last) { cat_pairs.push_back(k); cat_pairs.push_back((uint32_t)i); last = k; }
-        }
-        /* sentinel: end of this category's entries */
-        uint32_t end = 0;
-        for (size_t i = 0; i < ents.size(); i++) if (ents[i].type == BGS_T_POI && ents[i].cat == c) end = (uint32_t)i + 1;
-        cat_pairs.push_back(0xFFFFFFFFu);
-        cat_pairs.push_back(end);
+    std::vector<uint32_t> tiles;                       /* key, first, maxrank */
+    for (size_t i = 0; i < ents.size(); i++) {
+        uint32_t k = tilekey(ents[i]);
+        if (tiles.empty() || tiles[tiles.size() - 3] != k) { tiles.push_back(k); tiles.push_back((uint32_t)i); tiles.push_back(0); }
+        tiles.back() = std::max<uint32_t>(tiles.back(), ents[i].rank);
     }
-    cat_first[BGS_C_COUNT] = (uint32_t)(cat_pairs.size() / 2);
+    /* category index: (key, first, end) of each category's block in each tile */
+    std::vector<uint32_t> cat_first(BGS_C_COUNT + 1, 0), cat_pairs;
+    {
+        std::vector<std::vector<uint32_t>> per(BGS_C_COUNT);
+        for (size_t i = 0; i < ents.size();) {
+            if (ents[i].type != BGS_T_POI) { i++; continue; }
+            uint32_t k = tilekey(ents[i]);
+            int c = ents[i].cat;
+            size_t j = i;
+            while (j < ents.size() && ents[j].type == BGS_T_POI && ents[j].cat == c && tilekey(ents[j]) == k) j++;
+            if (c >= 0 && c < BGS_C_COUNT) { per[c].push_back(k); per[c].push_back((uint32_t)i); per[c].push_back((uint32_t)j); }
+            i = j;
+        }
+        for (int c = 0; c < BGS_C_COUNT; c++) {
+            cat_first[c] = (uint32_t)(cat_pairs.size() / 3);
+            cat_pairs.insert(cat_pairs.end(), per[c].begin(), per[c].end());
+        }
+        cat_first[BGS_C_COUNT] = (uint32_t)(cat_pairs.size() / 3);
+    }
 
     /* strings, tokens, postings */
     std::string strings;
@@ -318,8 +328,11 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < ents.size(); i++) {
         const Ent &e = ents[i];
         out[i] = {world_x(e.lon), world_y(e.lat), intern(e.name), intern(e.context), e.type, e.cat, e.rank};
-        char norm[512];
-        size_t n = bgs_norm(e.name.c_str(), norm, sizeof norm);
+        /* version 3: the words of the context (neighbourhood, town) are indexed too, so a
+         * query is the intersection of its words' lists ("padaria curitiba") */
+        char norm[768];
+        std::string both = e.name + " " + e.context;
+        size_t n = bgs_norm(both.c_str(), norm, sizeof norm);
         size_t a = 0;
         while (a < n) {
             size_t b = a;
@@ -353,7 +366,9 @@ int main(int argc, char **argv)
     h.off_postings = h.off_tokens + (uint32_t)(toks.size() * sizeof(bgs_token_t));
     h.off_strings = h.off_postings + (uint32_t)(post.size() * 4);
     h.off_catidx = h.off_strings + (uint32_t)strings.size();
-    h.ncatpairs = (uint32_t)(cat_pairs.size() / 2);
+    h.ncatpairs = (uint32_t)(cat_pairs.size() / 3);
+    h.off_tiles = h.off_catidx + (uint32_t)(cat_first.size() + cat_pairs.size()) * 4;
+    h.ntiles = (uint32_t)(tiles.size() / 3);
     h.created = (uint32_t)time(nullptr);
     std::fwrite(&h, sizeof h, 1, f);
     std::fwrite(out.data(), sizeof(bgs_entry_t), out.size(), f);
@@ -362,6 +377,7 @@ int main(int argc, char **argv)
     std::fwrite(strings.data(), 1, strings.size(), f);
     std::fwrite(cat_first.data(), 4, cat_first.size(), f);
     std::fwrite(cat_pairs.data(), 4, cat_pairs.size(), f);
+    std::fwrite(tiles.data(), 4, tiles.size(), f);
     if (std::fclose(f)) { std::perror(argv[2]); return 1; }
     std::fprintf(stderr, "%s: %u entradas, %u palavras, %u referências, %u bytes de texto (%ld s)\n", argv[2], h.nentries, h.ntokens,
                  h.npostings, h.strings_len, (long)(time(nullptr) - t0));
