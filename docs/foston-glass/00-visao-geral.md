@@ -33,7 +33,7 @@ Tudo dentro do shell LVGL existente; nenhum processo ou serviço novo.
 |---|---|
 | Barra superior | y 0-48 (vidro azul-profundo, 70 %) |
 | Relógio e data | (30, 21) 446x88 |
-| Conexão | (32, 117) 272x156 |
+| Conexão | (30, 117) 446x156 (linhas inteiras clicáveis; operadora, antena e bateria do celular) |
 | Player | (508, 18) 272x233 |
 | Dock | (24, 287) 752x124; Apps: quadrado de 96 px por cima do dock (filho da tela), 18 px acima dele |
 
@@ -50,8 +50,11 @@ Tudo dentro do shell LVGL existente; nenhum processo ou serviço novo.
 - **Player:** o da Multimídia (não há outro motor de áudio). Cartão: capa da faixa, espectro real,
   busca na faixa pelo toque. Celular: título, artista, tempo e estado do AVRCP, ícone do
   Bluetooth no lugar da capa (o celular não manda a imagem), sem busca na faixa.
-- **Dock:** GPS (Big GPS), Rádio (página honesta: nenhum receptor de rádio identificado no FOSTON),
-  Apps (grade com todos os aplicativos), Bluetooth, Telefone (docs/phone; a TV fica na grade Apps).
+- **Dock:** TV, Rádio (página honesta: nenhum receptor de rádio identificado no FOSTON),
+  Apps (grade com todos os aplicativos), Galeria, Telefone (docs/phone). GPS e Bluetooth ficam no
+  card Conexão (linha inteira abre a tela) e na barra superior.
+- **Barra superior:** cada ícone tem uma caixa de toque de 44 px: GPS → GpsInfo, rede → SSH,
+  Bluetooth → Bluetooth, som → volume (um toque), bateria → Potência.
 
 ## Desempenho (FOSTON, shell compilado pelo Buildroot)
 

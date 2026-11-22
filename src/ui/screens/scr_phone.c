@@ -916,8 +916,10 @@ static void refresh(void)
     else if(!cur.link) snprintf(b, sizeof b, "%s", tr(S_PH_NOPHONE));
     else {
         snprintf(b, sizeof b, "%s", cur.dev);
+        /* operadora, antena (sinal) e bateria do celular, pelo HFP */
+        size_t n2 = (size_t)snprintf(b2, sizeof b2, "%s%s", cur.op, cur.op[0] ? "  " : "");
         if(cur.signal >= 0 && cur.battery >= 0)
-            snprintf(b2, sizeof b2, BF_SYMBOL_TOWER " %d/5  %s %d/5", cur.signal,
+            snprintf(b2 + n2, sizeof b2 - n2, BF_SYMBOL_TOWER " %d/5  %s %d/5", cur.signal,
                      cur.battery >= 4 ? LV_SYMBOL_BATTERY_FULL : cur.battery >= 3 ? LV_SYMBOL_BATTERY_3 :
                      cur.battery >= 2 ? LV_SYMBOL_BATTERY_2 : cur.battery >= 1 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY,
                      cur.battery);
@@ -965,13 +967,16 @@ static void create(lv_obj_t *parent, int arg)
     for(int i = 0; i < NTABS; i++) {
         tab_btn[i] = bf_button(tabbar, syms[i], tr(names[i]), 0);
         lv_obj_set_height(tab_btn[i], 52);
-        lv_obj_set_style_pad_hor(tab_btn[i], BF_SP_M, 0);
+        lv_obj_set_style_pad_hor(tab_btn[i], BF_SP_S, 0);
+        for(uint32_t k = 0; k < lv_obj_get_child_count(tab_btn[i]); k++)   /* abas compactas: sobra lugar */
+            lv_obj_set_style_text_font(lv_obj_get_child(tab_btn[i], (int32_t)k), BF_FONT_S, 0);
         lv_obj_set_style_bg_color(tab_btn[i], lv_color_hex(C_PHONE), LV_STATE_CHECKED);
         lv_obj_set_style_text_color(tab_btn[i], lv_color_white(), LV_STATE_CHECKED);
         lv_obj_add_event_cb(tab_btn[i], on_tab, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
     lv_obj_t *st = bf_card(tabbar);
     lv_obj_set_height(st, 52);
+    lv_obj_set_style_min_width(st, 0, 0);
     lv_obj_set_style_pad_ver(st, 4, 0);
     lv_obj_set_style_pad_hor(st, BF_SP_S, 0);
     lv_obj_remove_flag(st, LV_OBJ_FLAG_SCROLLABLE);

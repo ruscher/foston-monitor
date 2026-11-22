@@ -15,6 +15,7 @@
 #include "../core/cover.h"
 #include "../core/btstat.h"
 #include "../core/gpsstat.h"
+#include "../core/phonestat.h"
 #include "../widgets/glass.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
@@ -25,7 +26,7 @@
 
 static lv_timer_t *tick_t, *spec_t;
 static lv_obj_t *clk, *date_l, *wday_l;
-static lv_obj_t *bt_dev, *bt_st, *bt_dot, *gps_st, *gps_dot, *gps_bars;
+static lv_obj_t *bt_dev, *bt_st, *bt_dot, *gps_st, *gps_dot, *gps_bars, *ph_op, *ph_bars, *ph_bat;
 static lv_obj_t *cov_box, *cov_img, *cov_note, *song, *artist, *spec, *pos_l, *len_l, *prog, *play_l;
 static lv_image_dsc_t thumb;
 static int thumb_for = -2, last_min = -1, last_day = -1;
@@ -105,12 +106,25 @@ static void gl_clock_tick(void)
 static void open_bt(lv_event_t *e) { (void)e; nav_go(SCR_BLUETOOTH, 0); }
 static void open_gps(lv_event_t *e) { (void)e; nav_go(SCR_GPS, 0); }
 
+#define CONN_W 446                         /* largura do card Conexão (alinhado ao do relógio) */
+
+/* a linha inteira é o botão: os filhos não pegam o toque */
+static void unclick_children(lv_obj_t *o)
+{
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *c = lv_obj_get_child(o, (int32_t)i);
+        lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
+        unclick_children(c);
+    }
+}
+
 static lv_obj_t *row(lv_obj_t *card, int y, int h, lv_event_cb_t cb)
 {
     lv_obj_t *r = lv_obj_create(card);
     lv_obj_remove_style_all(r);
     lv_obj_set_pos(r, 6, y);
-    lv_obj_set_size(r, 258, h);
+    lv_obj_set_size(r, CONN_W - 14, h);
+    lv_obj_add_flag(r, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_radius(r, 14, 0);
     lv_obj_set_style_bg_color(r, lv_color_white(), LV_STATE_PRESSED);
     lv_obj_set_style_bg_opa(r, LV_OPA_10, LV_STATE_PRESSED);
@@ -132,7 +146,7 @@ static lv_obj_t *dot(lv_obj_t *parent)
 
 static void conn_card(lv_obj_t *p)
 {
-    lv_obj_t *c = glass_card(p, 32, 117, 272, 156, 22);     /* folga abaixo do GPS */
+    lv_obj_t *c = glass_card(p, 30, 117, CONN_W, 156, 22);  /* folga abaixo do GPS */
     lv_obj_t *t = glass_label(c, tr(S_GL_CONNECTION), BF_FONT_M, GL_WHITE);
     lv_obj_set_pos(t, 18, 8);
 
@@ -149,10 +163,22 @@ static void conn_card(lv_obj_t *p)
     lv_obj_set_pos(bt_dot, 63, 45);
     bt_st = glass_label(r, "", BF_FONT_S, GL_ACTIVE);
     lv_obj_set_pos(bt_st, 76, 40);
+    /* celular conectado: operadora, antena (sinal 0-5 em 4 barras) e bateria */
+    ph_op = glass_label(r, "", BF_FONT_S, GL_WHITE);
+    lv_obj_set_width(ph_op, 160);
+    lv_label_set_long_mode(ph_op, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(ph_op, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(ph_op, CONN_W - 14 - 170, 6);
+    ph_bars = glass_bars(r);
+    lv_obj_set_pos(ph_bars, CONN_W - 14 - 100, 30);
+    ph_bat = glass_label(r, "", BF_FONT_S, GL_WHITE);
+    lv_obj_set_pos(ph_bat, CONN_W - 14 - 62, 34);
+    glass_bars_set(ph_bars, -1);
+    unclick_children(r);
 
     lv_obj_t *line = lv_obj_create(c);
     lv_obj_remove_style_all(line);
-    lv_obj_set_size(line, 236, 1);
+    lv_obj_set_size(line, CONN_W - 36, 1);
     lv_obj_set_pos(line, 18, 100);
     lv_obj_set_style_bg_color(line, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(line, LV_OPA_30, 0);
@@ -167,7 +193,8 @@ static void conn_card(lv_obj_t *p)
     gps_st = glass_label(r, "", BF_FONT_S, GL_ACTIVE);
     lv_obj_set_pos(gps_st, 76, 22);
     gps_bars = glass_bars(r);
-    lv_obj_set_pos(gps_bars, 216, 8);
+    lv_obj_set_pos(gps_bars, CONN_W - 14 - 46, 8);
+    unclick_children(r);
 }
 
 static void status_color(lv_obj_t *dot_, lv_obj_t *lbl, bool on)
@@ -200,6 +227,23 @@ static void conn_tick(void)
     set_text_if(bt_dev, dev);
     set_text_if(bt_st, st);
     status_color(bt_dot, bt_st, on);
+
+    /* celular pelo canal de ligações (HFP): operadora, sinal e bateria dele */
+    ph_info_t ph;
+    ph_read(&ph);
+    if(ph.link && ph.signal >= 0) {
+        set_text_if(ph_op, ph.op[0] ? ph.op : "");
+        glass_bars_set(ph_bars, ph.service == 0 ? 0 : (ph.signal * 4 + 4) / 5);
+        char bb[24];
+        snprintf(bb, sizeof bb, "%s %d/5", ph.battery >= 4 ? LV_SYMBOL_BATTERY_FULL : ph.battery >= 3 ? LV_SYMBOL_BATTERY_3 :
+                 ph.battery >= 2 ? LV_SYMBOL_BATTERY_2 : ph.battery >= 1 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY,
+                 ph.battery < 0 ? 0 : ph.battery);
+        set_text_if(ph_bat, ph.battery >= 0 ? bb : "");
+    } else {
+        set_text_if(ph_op, "");
+        set_text_if(ph_bat, "");
+        glass_bars_set(ph_bars, -1);
+    }
 
     gps_info_t g;
     gps_read(&g);
@@ -423,10 +467,10 @@ static void spec_tick(lv_timer_t *t)
 static void dock_click(lv_event_t *e)
 {
     switch((int)(intptr_t)lv_event_get_user_data(e)) {
-    case 0: nav_go(SCR_MAP, 0); break;
+    case 0: nav_go(SCR_FEATURE, FEAT_TV); break;
     case 1: nav_go(SCR_FEATURE, FEAT_RADIO); break;
     case 2: nav_go(SCR_HOME, HOME_ARG_APPS); break;
-    case 3: nav_go(SCR_BLUETOOTH, 0); break;
+    case 3: nav_go(SCR_GALLERY, 0); break;
     case 4: nav_go(SCR_PHONE, 0); break;
     }
 }
@@ -462,10 +506,10 @@ static void dock(lv_obj_t *p)
 {
     lv_obj_t *d = glass_card(p, 24, 287, 752, 124, 28);
     static const struct { const lv_image_dsc_t *icon; bf_str_t name; uint32_t top, bot; } it[5] = {
-        { &bf_icon_gps, S_APP_GPS, GL_LIGHT, GL_BLUE },
+        { &bf_icon_tv, S_APP_TV, GL_LIGHT, GL_BLUE },
         { &bf_icon_fm, S_GL_RADIO, GL_LAVENDER, GL_LAVBLUE },
         { NULL, S_GL_APPS, GL_SKY, GL_BLUE },
-        { &bf_icon_bluetooth, S_APP_BLUETOOTH, GL_LIGHT, GL_BLUE },
+        { &bf_icon_gallery, S_APP_GALLERY, GL_LIGHT, GL_BLUE },
         { &bf_icon_phone, S_APP_PHONE, GL_LAVENDER, GL_LAVBLUE },
     };
     static const int cx[5] = { 85, 231, 376, 521, 667 };
@@ -526,6 +570,6 @@ void home_glass_destroy(void)
     if(spec_t) { lv_timer_delete(spec_t); spec_t = NULL; }
     jpeg_free(&thumb);
     thumb_for = -2;
-    clk = date_l = wday_l = bt_dev = bt_st = bt_dot = gps_st = gps_dot = gps_bars = NULL;
+    clk = date_l = wday_l = bt_dev = bt_st = bt_dot = gps_st = gps_dot = gps_bars = ph_op = ph_bars = ph_bat = NULL;
     cov_box = cov_img = cov_note = song = artist = spec = pos_l = len_l = prog = play_l = NULL;
 }

@@ -50,8 +50,35 @@ static void glass_nav(lv_obj_t *bar_)
 static void vol_click(lv_event_t *e)
 {
     lv_area_t a;
-    lv_obj_get_coords(lv_event_get_target(e), &a);
-    volpop_open((a.x1 + a.x2) / 2, a.y2 + 10);
+    lv_obj_get_coords(lv_event_get_current_target(e), &a);
+    volpop_open((a.x1 + a.x2) / 2, a.y2 + 6);
+}
+
+/* atalhos dos ícones de status: GPS -> GpsInfo, rede -> SSH, Bluetooth, bateria -> Potência */
+static void jump_click(lv_event_t *e)
+{
+    volpop_close();
+    nav_go((bf_screen_t)(intptr_t)lv_event_get_user_data(e), 0);
+}
+
+/* caixa de toque de 44 px de altura em volta de um ícone (o desenho continua pequeno) */
+static lv_obj_t *hit_box(lv_obj_t *parent, lv_event_cb_t cb, void *ud)
+{
+    lv_obj_t *b = lv_obj_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, LV_SIZE_CONTENT, BF_TOPBAR_H - 4);
+    lv_obj_set_style_min_width(b, 40, 0);
+    lv_obj_set_style_pad_hor(b, 5, 0);
+    lv_obj_set_style_radius(b, BF_RADIUS_S, 0);
+    lv_obj_set_style_bg_color(b, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(b, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_set_flex_flow(b, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(b, 4, 0);
+    lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    return b;
 }
 
 static void set_text_if(lv_obj_t *l, const char *t)
@@ -142,23 +169,18 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     lv_obj_set_size(icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(icons, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(icons, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(icons, glass ? 16 : 12, 0);
+    lv_obj_set_style_pad_column(icons, glass ? 2 : 0, 0);
 
     sim_badge = bf_pill(icons, tr(S_SIM_BADGE), p->warning);
-    ic_gps = icon(icons, LV_SYMBOL_GPS);
-    ic_net = icon(icons, BF_SYMBOL_NET);
-    ic_bt  = icon(icons, LV_SYMBOL_BLUETOOTH);
+    /* cada ícone numa caixa de toque grande; um toque leva à tela dele */
+    ic_gps = icon(hit_box(icons, jump_click, (void *)(intptr_t)SCR_GPS), LV_SYMBOL_GPS);
+    ic_net = icon(hit_box(icons, jump_click, (void *)(intptr_t)SCR_SSH), BF_SYMBOL_NET);
+    ic_bt  = icon(hit_box(icons, jump_click, (void *)(intptr_t)SCR_BLUETOOTH), LV_SYMBOL_BLUETOOTH);
     ic_usb = icon(icons, LV_SYMBOL_USB);
-    ic_vol = icon(icons, LV_SYMBOL_VOLUME_MAX);
-    /* toque no ícone de som: controle de volume, em qualquer tela */
-    lv_obj_add_flag(ic_vol, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(ic_vol, 14);
-    lv_obj_add_event_cb(ic_vol, vol_click, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *batbox = bf_plain(icons);
-    lv_obj_set_size(batbox, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(batbox, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(batbox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(batbox, 4, 0);
+    lv_obj_set_style_margin_hor(ic_usb, 5, 0);
+    /* som: um toque abre o controle de volume, em qualquer tela */
+    ic_vol = icon(hit_box(icons, vol_click, NULL), LV_SYMBOL_VOLUME_MAX);
+    lv_obj_t *batbox = hit_box(icons, jump_click, (void *)(intptr_t)SCR_POWER);
     ic_bat = battery_create(batbox, BF_FONT_M);
     bat_pct = bf_label(batbox, "—", BF_FONT_S, p->text);
 
