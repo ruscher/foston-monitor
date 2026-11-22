@@ -37,6 +37,9 @@
 #define MT3351_UART_SAMPLE_POINT 0x2c
 #define MT3351_UART_RATE_FIX	0x34
 #define MT3351_UART_DMA_EN	0x4c
+#define MT3351_UART_EFR		0x08	/* with LCR = 0xBF */
+#define MT3351_EFR_AUTO_RTS	0x40
+#define MT3351_EFR_AUTO_CTS	0x80
 
 static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
 			       const struct ktermios *old)
@@ -45,6 +48,11 @@ static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
 	unsigned int baud, div, cnt, q, r;
 	unsigned long flags;
 
+	bool hwfc = termios->c_cflag & CRTSCTS;
+	u8 efr;
+
+	/* receive trigger: 8 bytes with automatic flow control, else 1 (see top) */
+	up->fcr = UART_FCR_ENABLE_FIFO | (hwfc ? UART_FCR_R_TRIG_10 : UART_FCR_R_TRIG_00);
 	serial8250_do_set_termios(port, termios, old);
 	baud = uart_get_baud_rate(port, termios, old, 300, 921600);
 	/* uart.dll: divisor from the high byte of clk/baud, then the sample count */
@@ -65,6 +73,13 @@ static void mt3351_set_termios(struct uart_port *port, struct ktermios *termios,
 	writeb(1, port->membase + MT3351_UART_RATE_FIX);
 	serial_port_out(port, UART_LCR, up->lcr | UART_LCR_DLAB);
 	serial_dl_write(up, div);
+	serial_port_out(port, UART_LCR, 0xbf);
+	efr = readb(port->membase + MT3351_UART_EFR);
+	if (hwfc)
+		efr |= MT3351_EFR_AUTO_RTS | MT3351_EFR_AUTO_CTS;
+	else
+		efr &= ~(MT3351_EFR_AUTO_RTS | MT3351_EFR_AUTO_CTS);
+	writeb(efr, port->membase + MT3351_UART_EFR);
 	serial_port_out(port, UART_LCR, up->lcr);
 	uart_port_unlock_irqrestore(port, flags);
 	tty_termios_encode_baud_rate(termios, baud, baud);

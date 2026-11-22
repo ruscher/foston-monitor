@@ -15,7 +15,7 @@ save)
     save
     ;;
 start)
-    if [ -f "$SAVE" ] && [ ! -d /var/lib/bluetooth ]; then
+    if [ -f "$SAVE" ] && [ -z "$(ls -A /var/lib/bluetooth 2>/dev/null)" ]; then
         mkdir -p /var/lib && tar -xf "$SAVE" -C /var/lib 2>/dev/null
     fi
     [ -f "$FLAG" ] || [ "$2" = force ] || exit 0
