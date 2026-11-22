@@ -7,9 +7,12 @@ coefficient tables. This tool reads it from the NAND backup of the user's own de
 the output must stay on that device (SD card: BigFoston/voz/wavedev-text.bin); it is not
 distributed with BigFoston.
 
-  voice-extract.py OUT.bin [--nand DSK9-msflash.img]
+  voice-extract.py OUT.bin [--patch PATCH.bin] [--nand DSK9-msflash.img]
 
 OUT.bin = the raw .text section, loaded at VA 0x03BD1000 (bfvoice reads it by VA).
+PATCH.bin = the MT6611 ROM patch that mtk_bthuart.dll (Radio_WritePatch) sends to this
+FOSTON's chip (version 3, revision 0x8B: 0x1CDC bytes at VA 0x01F2CFE0); bfbt-attach
+sends it like Windows CE (SD card: BigFoston/bt/mt6611-patch.bin).
 SPDX-License-Identifier: GPL-3.0-or-later
 """
 import argparse
@@ -28,6 +31,7 @@ SHA256 = "3f2eeb466764bbdfc4849397c4fbfd21458d10acfb73fc9876cfda1e40b030d7"
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out")
+    ap.add_argument("--patch", help="also write the MT6611 patch here")
     ap.add_argument("--nand", help="NAND image (default: backup/2026-11-19-nand/DSK9-msflash.img)")
     args = ap.parse_args()
     if args.nand:
@@ -46,6 +50,14 @@ def main():
     with open(args.out, "wb") as f:
         f.write(blob)
     print("%s: %d bytes, sha256 %s" % (args.out, len(blob), digest))
+    if args.patch:
+        _i, _e, bsecs = mod.module("mtk_bthuart.dll")
+        t = [x for x in bsecs if x["realaddr"] == 0x01F21000][0]
+        tb = bytes(t["blob"][:min(t["psize"], t["vsize"])])
+        patch = tb[0x01F2CFE0 - 0x01F21000:0x01F2CFE0 - 0x01F21000 + 0x1CDC]
+        with open(args.patch, "wb") as f:
+            f.write(patch)
+        print("%s: %d bytes, sha256 %s" % (args.patch, len(patch), hashlib.sha256(patch).hexdigest()))
 
 
 if __name__ == "__main__":

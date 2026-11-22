@@ -11,6 +11,9 @@
  *                            inicia o DSP no boot e o Linux o encontra pronto)
  *   bfvoice start [TEXT.bin] voz da ligação: alto-falante e microfone (CE MM_GSMPCM_2WAY_START)
  *   bfvoice stop             volta ao normal (CE MM_GSMPCM_2WAY_CLOSE)
+ *   bfvoice run [TEXT.bin]   start, atende o DSP até SIGTERM/SIGINT e faz o stop (é o que o
+ *                            bfphone usa: no modo 2 vias o ARM leva cada bloco de 20 ms de uma
+ *                            área da memória do DSP para outra — CE IST 0x3C0CEA4/0x3C1997C)
  *
  * TEXT.bin (padrão /mnt/sd/BigFoston/voz/wavedev-text.bin): a seção de código do wavedev_drv.dll do próprio aparelho (VA 0x03BD1000), tirada
  * do backup pelo tools/bigfoston/voice-extract.py. É da MediaTek: fica só no cartão do usuário.
@@ -25,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -347,6 +351,50 @@ static int stop(void)
     return rc;
 }
 
+/* Pedido do DSP (CE IST, bit 0x20 de +0x10): caixa +0x0A == 0x14. O ARM lê o bloco de
+ * Y[+0x9A*2] (tamanho +0x9C*2), grava em Y[+0x9A*2 + 0x280] (tamanho +0x9E*2) e responde
+ * +0x0A = 0. */
+static volatile sig_atomic_t quit;
+static void on_sig(int s) { (void)s; quit = 1; }
+static unsigned long served, bad;
+
+static void serve_once(void)
+{
+    if(r16(W_MBOX, 0x0A) != 0x14) return;
+    uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2, rd = (uint32_t)r16(W_MBOX, 0x9C) * 2,
+             wr = (uint32_t)r16(W_MBOX, 0x9E) * 2;
+    uint16_t buf[0x140];
+    if(rd > sizeof buf || wr > sizeof buf || off + 0x280 + wr > 0x8000 || off + rd > 0x8000) {
+        bad++;
+    } else {
+        for(uint32_t i = 0; i < rd; i += 2) buf[i / 2] = r16(W_YM, off + i);
+        for(uint32_t i = rd; i < wr; i += 2) buf[i / 2] = 0;
+        for(uint32_t i = 0; i < wr; i += 2) w16(W_YM, off + 0x280 + i, buf[i / 2]);
+        served++;
+    }
+    w16(W_MBOX, 0x0A, 0);
+}
+
+static int run(void)
+{
+    signal(SIGTERM, on_sig);
+    signal(SIGINT, on_sig);
+    signal(SIGHUP, on_sig);
+    if(start()) { stop(); return 1; }
+    long last = now_ms();
+    while(!quit) {
+        serve_once();
+        stall_us(1000);
+        long t = now_ms();
+        if(t - last >= 10000) {
+            last = t;
+            fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
+        }
+    }
+    fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
+    return stop() ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     if(argc < 2) {
@@ -369,6 +417,38 @@ int main(int argc, char **argv)
         return 0;
     }
     if(!strcmp(c, "stop")) return stop() ? 1 : 0;
+    if(!strcmp(c, "run")) {
+        if(load_text(img)) return 1;
+        setvbuf(stderr, NULL, _IOLBF, 0);
+        return run();
+    }
+    if(!strcmp(c, "meter")) {                     /* atendimento + pico por segundo dos dois blocos */
+        signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
+        long end = now_ms() + (argc > 2 ? atol(argv[2]) : 30) * 1000, sec = now_ms() + 1000;
+        int m1 = 0, m2 = 0;
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        while(!quit && now_ms() < end) {
+            if(r16(W_MBOX, 0x0A) == 0x14) {
+                uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2;
+                for(uint32_t i = 0; i < 0x140 && off + 0x280 + i < 0x8000; i += 2) {
+                    int a = (int16_t)r16(W_YM, off + i), b = (int16_t)r16(W_YM, off + 0x280 + i);
+                    if(abs(a) > m1) m1 = abs(a);
+                    if(abs(b) > m2) m2 = abs(b);
+                }
+            }
+            serve_once();
+            stall_us(1000);
+            if(now_ms() >= sec) { printf("%ld origem %5d destino %5d\n", (end - now_ms()) / 1000, m1, m2); m1 = m2 = 0; sec += 1000; }
+        }
+        return 0;
+    }
+    if(!strcmp(c, "serve")) {                     /* só o atendimento (diagnóstico) */
+        signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
+        long end = now_ms() + (argc > 2 ? atol(argv[2]) : 5) * 1000;
+        while(!quit && now_ms() < end) { serve_once(); stall_us(1000); }
+        printf("%lu blocos atendidos, %lu inválidos\n", served, bad);
+        return 0;
+    }
     fprintf(stderr, "comando desconhecido\n");
     return 2;
 }

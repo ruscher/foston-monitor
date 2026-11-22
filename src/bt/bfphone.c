@@ -48,6 +48,8 @@
 #define BFVOICE  "/usr/sbin/bfvoice"
 #define VOICE_IMG "/mnt/sd/BigFoston/voz/wavedev-text.bin"
 #define VOICE_PREF "/data/bigfoston/telefone-voz"
+/* a voz pelo DSP ainda não sai de ponta a ponta (docs/phone/02): só com esta marca */
+#define VOICE_EXPERIMENTAL "/data/bigfoston/voz-experimental"
 
 /* ------------------------------------------------------------------ estado */
 
@@ -427,11 +429,14 @@ static int run_bfvoice(const char *what)
 
 static void voice_check(void)
 {
-    st.voice_avail = !access(BFVOICE, X_OK) && !access(VOICE_IMG, R_OK);
+    st.voice_avail = !access(BFVOICE, X_OK) && !access(VOICE_IMG, R_OK) && !access(VOICE_EXPERIMENTAL, F_OK);
 }
 
-/* o PCM de voz do BlueALSA aberto (sem dados): faz o FOSTON pedir o canal de voz ao celular
- * no meio da ligação; o som em si vai pelo PCM do chip ao DSP, não por aqui */
+/* canal de voz pedido pelo FOSTON no meio da ligação: um socket SCO do kernel para o celular
+ * (o HF pode abrir o SCO no HFP sem negociação de codec), mantido aberto e sem dados — o som
+ * vai pelo PCM do chip ao DSP. O BlueALSA não serve: como HF ele não abre o SCO sozinho. */
+#define BTPROTO_SCO 2
+struct sockaddr_sco_ { unsigned short family; uint8_t bdaddr[6]; };
 static int hold_fd[2] = { -1, -1 };
 
 static void sco_release(void)
@@ -442,33 +447,40 @@ static void sco_release(void)
 static void sco_request(void)
 {
     if(hold_fd[0] >= 0 || !st.addr[0]) return;
-    char dev[32], path[112];
-    snprintf(dev, sizeof dev, "%s", st.addr);
-    for(char *c = dev; *c; c++) if(*c == ':') *c = '_';
-    snprintf(path, sizeof path, "/org/bluealsa/hci0/dev_%s/hfphf/sink", dev);
-    DBusMessage *m = dbus_message_new_method_call("org.bluealsa", path, "org.bluealsa.PCM1", "Open");
-    if(!m) return;
-    DBusError e;
-    dbus_error_init(&e);
-    DBusMessage *r = dbus_connection_send_with_reply_and_block(bus, m, 5000, &e);
-    dbus_message_unref(m);
-    if(!r) { syslog(LOG_INFO, "pedido do canal de voz recusado: %s", e.message); dbus_error_free(&e); return; }
-    int a = -1, b = -1;
-    if(dbus_message_get_args(r, &e, DBUS_TYPE_UNIX_FD, &a, DBUS_TYPE_UNIX_FD, &b, DBUS_TYPE_INVALID)) {
-        hold_fd[0] = a; hold_fd[1] = b;
-        for(int i = 0; i < 2; i++) fcntl(hold_fd[i], F_SETFD, FD_CLOEXEC);
-    } else dbus_error_free(&e);
-    dbus_message_unref(r);
+    unsigned v[6];
+    if(sscanf(st.addr, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;
+    int sk = socket(31, SOCK_SEQPACKET | SOCK_CLOEXEC | SOCK_NONBLOCK, BTPROTO_SCO);
+    if(sk < 0) { syslog(LOG_ERR, "socket SCO: %m"); return; }
+    struct sockaddr_sco_ a = { 31, { 0 } };
+    for(int i = 0; i < 6; i++) a.bdaddr[i] = (uint8_t)v[5 - i];
+    if(connect(sk, (struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS) {
+        syslog(LOG_INFO, "pedido do canal de voz recusado: %m");
+        close(sk);
+        return;
+    }
+    hold_fd[0] = sk;
+    syslog(LOG_INFO, "canal de voz pedido ao celular");
 }
+
+/* bfvoice run: liga o DSP e faz a ponte dos blocos de 20 ms até receber SIGTERM */
+static pid_t voice_pid;
 
 static void voice_start(void)
 {
     if(st.voice_on) return;
-    if(run_bfvoice("start") == 0) {
+    pid_t p = fork();
+    if(p == 0) {
+        int nul = open("/dev/null", O_WRONLY);
+        if(nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        execl(BFVOICE, "bfvoice", "run", (char *)NULL);
+        _exit(127);
+    }
+    if(p > 0) {
+        voice_pid = p;
         st.voice_on = 1;
         syslog(LOG_INFO, "voz da ligação no FOSTON (DSP ligado)");
     } else {
-        syslog(LOG_ERR, "bfvoice start falhou: voz volta para o celular");
+        syslog(LOG_ERR, "bfvoice não iniciou: voz volta para o celular");
         st.voice_phone = 1;
     }
     write_state();
@@ -476,10 +488,13 @@ static void voice_start(void)
 
 static void voice_stop(void)
 {
-    if(!st.voice_on && access("/run/bfvoice.saved", F_OK)) return;
-    run_bfvoice("stop");
-    st.voice_on = 0;
-    write_state();
+    if(voice_pid > 0) {
+        kill(voice_pid, SIGTERM);
+        for(int i = 0; i < 30 && waitpid(voice_pid, NULL, WNOHANG) == 0; i++) usleep(100000);
+        if(waitpid(voice_pid, NULL, WNOHANG) == 0) { kill(voice_pid, SIGKILL); waitpid(voice_pid, NULL, 0); }
+        voice_pid = 0;
+    } else if(!access("/run/bfvoice.saved", F_OK)) run_bfvoice("stop");   /* sobra de outra execução */
+    if(st.voice_on) { st.voice_on = 0; write_state(); }
 }
 
 static void sco_drop(void);

@@ -70,3 +70,23 @@ hardware será confirmado antes.
 
 Alternativa estudada, mas não suficiente: SCO pelo HCI (o MT6611 da MediaTek não tem, no
 firmware deste aparelho, o comando que troca a voz de PCM para HCI; nenhum dos DLLs o manda).
+
+## Testes no aparelho (22/11/2026, ligação real com o POCO X4)
+
+| Passo | Resultado |
+|---|---|
+| Estado do DSP no CE parado e no Linux (só leitura, `bfagent phys` e `bfvoice status`) | iguais: caixa `+0x00 = 0x5555`, controle `+0x00 = 5`, `+0x28 = 1`, `+0x48 = 0xBFFF`. O CE deixa o DSP carregado e ele continua assim no Linux, também depois do kexec. O PDN1 é igual nos dois (`0xFFFC78C6`): o bit 21 **não** é o clock do DSP |
+| `bfvoice start`/`stop` sem ligação | o DSP confirma as trocas de modo (`+0xAA/+0xE0/+0xF6` vão a 2 e voltam a 0 no stop) |
+| Canal de voz pedido pelo Linux | o kernel pedia **eSCO** (2-EV3): o chip aceita o comando e nunca completa. O CE manda `0xFC1E` (máscara LMP sem eSCO); o `bfbt-attach` agora também manda, e o canal SCO abre (o celular o abre sozinho ao reconectar) |
+| Voz do DSP com SCO aberto | o DSP pede um bloco a cada 20 ms (caixa `+0x0A = 0x14`, bit `0x20` em `+0x10`); a ponte do `bfvoice run` (CE IST `0x3C0CEA4`: copia `Y[+0x9A*2]` para `+0x280` e responde `+0x0A = 0`) atende 50 blocos/s de 160 amostras, sem erro |
+| Patch da ROM do MT6611 | o CE lê a versão (`0xFCD1 {04 00 00 80}` → `03 8B`) e manda 7388 bytes pelo `0xFCC4`; o `bfbt-attach` faz o mesmo (patch do backup do aparelho no cartão, `BigFoston/bt/mt6611-patch.bin`); aceito |
+| **Som** | **não sai**: os blocos do DSP ficam em ruído de fundo (pico ~60 de 32767) com a outra pessoa falando e com o usuário falando; nenhum pacote SCO pelo HCI. A voz não chega ao DSP pelos pinos PCM |
+
+Por segurança, "Falar pelo FOSTON" só aparece com a marca `/data/bigfoston/voz-experimental`
+(sem ela a ligação ficaria muda).
+
+## Próximo passo
+
+Medir no próprio Windows CE, com uma ligação real pelo app Bluetooth original (PhoneLink),
+os registradores enquanto a voz funciona, e comparar com o Linux: pinos (função do DAI/PCM),
+`0x8004D000`, `0x80061xxx`, a caixa postal e os blocos do DSP. O que diferir é o que falta.
