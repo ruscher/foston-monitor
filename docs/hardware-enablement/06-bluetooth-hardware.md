@@ -1,6 +1,6 @@
 # Bluetooth — hardware
 
-Estado: **chip identificado, ligado e respondendo a comandos HCI no Linux** (22/11/2026).
+Estado: **chip identificado, ligado e com o rádio funcionando no Linux** (22/11/2026): um celular o encontrou e pediu conexão.
 Ainda não há pilha Bluetooth (BlueZ) nem perfis: ver [00-overview.md](00-overview.md).
 
 ## O que é
@@ -50,6 +50,11 @@ acima, os mesmos do `bfgps`):
 | Sequência do `Radio_HWTurnOn` + HCI Reset a 115200 com RTS/CTS | `04 0E 04 01 03 0C 00` (concluído, status 0) |
 | Read Local Name / Version / BD_ADDR / Features / Buffer Size | respostas acima |
 | Desligar | `LDO_EN` = 0, `RST` = 0 |
+
+| Visível como "BigFoston" (nome, classe viva-voz, Write Scan Enable 3) | o celular do usuário **viu "BigFoston"** na busca |
+| Toque no nome, no celular | **2 pedidos de conexão recebidos** (classe `5a420c` = smartphone, enlace ACL), recusados de propósito pelo `btprobe` (sem pilha para atender) |
+
+**O rádio funciona nos dois sentidos sem o patch da MediaTek** (22/11/2026).
 
 Sem o patch, a ROM do chip já responde aos comandos HCI básicos. O endereço Bluetooth sai
 genérico (`00:00:46:66:11:01`) até o comando da MediaTek que grava o endereço; o CE gerou um

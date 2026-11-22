@@ -22,7 +22,7 @@ INVIÁVEL NESTE HARDWARE, BLOQUEADO POR DEPENDÊNCIA.
 | Semáforos, pedágios, moto, evitar pedágios | PARCIAL: conferido no PC (DF e Centro-Oeste); faltam os arquivos nacionais no cartão | [05](05-big-gps-improvements.md) |
 | Zoom 15 em cidades densas | NÃO IMPLEMENTADO | [05](05-big-gps-improvements.md) |
 | Navegação com GPS real em movimento | NÃO TESTADO | [05](05-big-gps-improvements.md) |
-| Bluetooth: chip MT6611 ligado, HCI respondendo | PARCIAL (só HCI; sem BlueZ nem perfis) | [06](06-bluetooth-hardware.md) |
+| Bluetooth: chip MT6611 ligado, rádio funcionando (celular vê "BigFoston" e pede conexão) | PARCIAL (sem BlueZ nem perfis) | [06](06-bluetooth-hardware.md) |
 | Bluetooth: áudio, telefone, HID, app | NÃO IMPLEMENTADO (depende da pilha) | [06](06-bluetooth-hardware.md) |
 | Microfone | NÃO IMPLEMENTADO (o CE grava pelo caminho de voz do DSP, ver [audio.md](../audio.md)) | — |
 | TV digital (Siano SMS1xxx, ISDB-T, SPI) | NÃO IMPLEMENTADO | — |
