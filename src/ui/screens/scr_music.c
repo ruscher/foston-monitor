@@ -521,6 +521,11 @@ static void tech_line(char *out, size_t n)
     pl_info_t in;
     player_info(&in);
     if(!in.rate) { out[0] = 0; return; }
+    if(!in.layer) {                          /* WAV (gravação do Telefone): PCM sem compressão */
+        snprintf(out, n, "WAV PCM 16 bits  ·  %d,%d kHz  ·  %s%s", in.rate / 1000, in.rate % 1000 / 100,
+                 in.channels == 2 ? tr(S_MUSIC_STEREO) : tr(S_MUSIC_MONO), in.audio_out ? "" : tr(S_MUSIC_NOOUT));
+        return;
+    }
     static const char *const ver[] = { "1", "2", "2.5" };
     snprintf(out, n, "MPEG-%s Layer %s  ·  %d kbps%s  ·  %d,%d kHz  ·  %s%s",
              ver[in.version >= 0 && in.version < 3 ? in.version : 0],
@@ -1084,7 +1089,11 @@ static void create(lv_obj_t *parent, int arg)
         last_tick = lv_tick_get();
         srand((unsigned)time(NULL));
     }
-    if(player_state() == PL_STOPPED) {        /* parado: relê o cartão e a pasta */
+    {                                         /* relê o cartão e a pasta (arquivos novos, como as
+                                               * gravações do Telefone); mantém a faixa atual */
+        bool stopped = player_state() == PL_STOPPED;
+        char keep[512] = "";
+        if(!stopped && cur >= 0 && cur < n_tracks) snprintf(keep, sizeof keep, "%s", tracks[cur]);
         free_tracks();
         memset(plays, 0, sizeof plays);
         n_hist = 0;
@@ -1093,6 +1102,8 @@ static void create(lv_obj_t *parent, int arg)
         scan(music, 0);
         qsort(tracks, n_tracks, sizeof tracks[0], cmp_track);
         cur = -1;
+        for(int i = 0; keep[0] && i < n_tracks; i++) if(!strcmp(tracks[i], keep)) { cur = i; break; }
+        if(!stopped && cur < 0 && keep[0]) player_stop();   /* a faixa sumiu do cartão */
     }
 
     root = bf_plain(parent);

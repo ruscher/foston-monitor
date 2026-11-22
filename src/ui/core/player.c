@@ -79,13 +79,19 @@ bool player_available(void) { return true; }
 static bool dsp_open(int rate, int channels)
 {
     if(dsp >= 0) close(dsp);
-    dsp = open("/dev/dsp", O_WRONLY | O_CLOEXEC);
-    if(dsp < 0) return false;
+    /* o clique da tela (fx.c) segura o /dev/dsp por alguns ms: tenta de novo por ~300 ms */
+    for(int i = 0; i < 10; i++) {
+        dsp = open("/dev/dsp", O_WRONLY | O_CLOEXEC);
+        if(dsp >= 0 || errno != EBUSY) break;
+        usleep(30000);
+    }
+    if(dsp < 0) { fprintf(stderr, "player: /dev/dsp: %s\n", strerror(errno)); return false; }
     int frag = (4 << 16) | 12;     /* 4 fragmentos de 4 KB: ~90 ms a 44,1 kHz estéreo */
     ioctl(dsp, SNDCTL_DSP_SETFRAGMENT, &frag);
     int fmt = AFMT_S16_LE, ch = channels, sp = rate;
     if(ioctl(dsp, SNDCTL_DSP_SETFMT, &fmt) || ioctl(dsp, SNDCTL_DSP_CHANNELS, &ch) ||
        ioctl(dsp, SNDCTL_DSP_SPEED, &sp)) {
+        fprintf(stderr, "player: /dev/dsp %d Hz %d canais recusado: %s\n", rate, channels, strerror(errno));
         close(dsp);
         dsp = -1;
         return false;
