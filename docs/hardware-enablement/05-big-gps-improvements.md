@@ -21,14 +21,14 @@ Detalhes: busca em [big-gps/10-busca.md](../big-gps/10-busca.md), rotas em
 | praça da sé | 19 s (resultado errado) | 3,1 s (Praça da Sé, São Paulo) |
 | av paulista sao paulo | — | 5,4 s (Avenida Paulista, São Paulo) |
 
-## Semáforos (construtor pronto; dados nacionais a reconstruir)
+## Semáforos
 
 `highway=traffic_signals` e `crossing=traffic_signals`: semáforos a menos de 30 m formam um
 cruzamento, e a espera conta uma vez no trecho que entra nele (carro 10 s, moto 8 s,
 bicicleta 6 s, a pé 0; `BGR_SIGNAL_DS`). DF: 880 semáforos → 677 trechos; Rodoviária →
 Taguatinga 21 min 21 s → 22 min 02 s, mesmo caminho. Conferência CH × Dijkstra: 0 diferentes.
 
-## Pedágios (construtor e aparelho prontos; dados nacionais a reconstruir)
+## Pedágios
 
 - `toll=yes` e cabines (`barrier=toll_booth`, que marcam a via): Centro-Oeste 163 cabines.
 - Arquivo `-carro-sem-pedagio.bgr`: pedágio custa +1 h só na hierarquia; o aparelho desconta e
@@ -50,7 +50,7 @@ quando não há alternativa.
 Limite: o que o OSM não marca como pedágio não é evitado; a tela diz "pode ter pedágio"
 quando faltam os dados e nunca garante uma rota sem pedágio além do que os dados dizem.
 
-## Moto (construtor pronto; dados nacionais a reconstruir)
+## Moto
 
 Arquivo próprio (`-moto.bgr`; sem ele, o de carro como antes): acesso `motorcycle=*` /
 `motor_vehicle=*`, máximo 110 km/h, 70 % da velocidade (até 50 km/h) em terra, cascalho e
@@ -60,6 +60,25 @@ Rodoviária → Taguatinga: 21 min 38 s (carro 22 min 02 s).
 **Não feito:** rota mais curta, preferência por rodovias e evitar terra como opções
 separadas: com a hierarquia de pesos fixos cada uma seria mais um arquivo nacional de ~4 GB;
 a moto já evita terra pela velocidade.
+
+## Arquivos nacionais (gerados em 22/11/2026, ainda não copiados para o cartão)
+
+Com semáforos, pedágios e moto, gerados no PC (`build-data.sh`) a partir do OSM do Brasil:
+
+| Arquivo | Tamanho | Tempo de geração |
+|---|---|---|
+| `brasil-carro.bgr` | 3,94 GB | 51 min |
+| `brasil-carro-sem-pedagio.bgr` | 3,94 GB | 46 min |
+| `brasil-moto.bgr` | 3,93 GB | 44 min |
+| `brasil-bicicleta.bgr` | 2,94 GB | 9 min |
+
+| Conferência no PC (`bgroute`) | Normal | Sem pedágio | Moto |
+|---|---|---|---|
+| Brasília → Goiânia | 206 km, 2 h 25, 98 trechos com pedágio | 253 km, 3 h 12, nenhum | 206 km, 2 h 25 |
+| São Paulo → Rio de Janeiro | 434 km, 4 h 30, 82 trechos | 487 km, 6 h 32, nenhum | — |
+
+Busca de 7–14 ms no PC. Falta copiar os ~15 GB para o cartão (um leitor de cartão no PC é
+bem mais rápido que a rede USB) e repetir as rotas no aparelho.
 
 ## Zoom 15 em cidades densas — não feito nesta etapa
 

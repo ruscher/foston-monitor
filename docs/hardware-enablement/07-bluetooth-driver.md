@@ -20,8 +20,12 @@ BlueZ está em [08-bluetooth-profiles.md](08-bluetooth-profiles.md).
 O CE usa 3,2 Mbaud (modo de alta velocidade da UART da MediaTek, com DMA). O driver
 `8250_mt3351` usa o modo 16550 (clock 29,25 MHz / 16 → até ~1,8 Mbaud, FIFO de 16 bytes,
 interrupção por byte). Testado: **460800 e 921600** — o chip troca, o kernel inicializa e o
-hci0 liga sem erros nem estouros da FIFO. 921600 (92 KB/s) cobre o A2DP (SBC ~40 KB/s); se
-houver perdas com áudio, o próximo passo é o DMA de recepção da UART.
+hci0 liga sem erros nem estouros da FIFO. 921600 (92 KB/s) cobre o A2DP (SBC ~40 KB/s).
+
+Com RTS/CTS o driver liga o controle de fluxo automático do chip da UART (LCR = 0xBF, EFR
++0x08 bits 0x40 RTS e 0x80 CTS, como o `uart.dll`) e usa gatilho de 8 bytes na FIFO de
+recepção: ~14 bytes por interrupção em vez de 1, sem erros de remontagem
+([08](08-bluetooth-profiles.md)). Próximo passo, se precisar: DMA de recepção.
 
 Códigos do comando 0xFC77 (desmontados do `Radio_ChangeControllerUART`): 9600 1, 19200 3,
 38400 6, 57600 7, 115200 8, 230400 9, 460800 0xA, 921600 0xB, 3200000 0xC; segundo byte 0x40 =

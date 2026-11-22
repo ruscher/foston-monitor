@@ -39,14 +39,22 @@ e restaurados no boot.
 
 Com o áudio tocando: **CPU 92 %** (8 % livre) — BlueALSA (decodificação SBC sem FPU) 26 % e
 **43 % no kernel**: a UART interrompe a cada byte (~48 mil interrupções/s a ~48 KB/s).
-Assim não dá para navegar e ouvir música por Bluetooth ao mesmo tempo. Próximo passo:
-**recepção da UART por DMA** (o CE usa o canal GDMA 0x11 para esta UART; o driver
-`8250_mt3351` hoje só o desliga), o que também deve resolver a conexão iniciada pelo celular
-e os erros do início.
+Assim não dá para navegar e ouvir música por Bluetooth ao mesmo tempo.
+
+**Correção 1 (feita):** controle de fluxo automático da UART, como o `uart.dll` do CE
+(LCR = 0xBF, EFR bits 0x40/0x80) e FIFO de recepção com gatilho de 8 bytes quando a porta
+usa RTS/CTS (o GPS, sem RTS/CTS, continua com 1 byte). Medido no kernel novo: 1,2 MB
+recebidos em 88 mil interrupções (**~14 bytes por interrupção** contra 1), nenhum erro de
+remontagem; GPS na ttyS0 normal. **A medir:** CPU com música tocando.
+
+Se ainda faltar CPU, o passo seguinte é a **recepção por DMA** (o CE usa o canal GDMA 0x11
+para esta UART; o driver `8250_mt3351` hoje só o desliga).
 
 ## Falta
 
-- DMA da UART; depois medir CPU de novo.
+- Medir CPU com música e o controle de fluxo novo; DMA da UART se ainda precisar.
+- Conexão iniciada pelo celular (hoje só a iniciada pelo FOSTON funciona).
+- `S35bluetooth start force` não deixou o `bfbt-attach` rodando num teste (manual funciona).
 - Agente de pareamento na interface (hoje o teste usa `bluetoothctl`), app Bluetooth
   (ligar/desligar, parear, conectar, esquecer).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
