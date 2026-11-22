@@ -250,12 +250,21 @@ static int write_patch(int fd)
         syslog(LOG_WARNING, "MT6611 versão %d/0x%02x: patch não conhecido, segue sem", ver[1], ver[2]);
         return 0;
     }
+    /* Radio_CmdMTKSetE2BaseAddr (CE, antes do patch, para as versões 1/0x8B e 3/0x8B):
+     * escrita de registrador 0xFCD0 {endereço 0x01000124, valor 0x01005900} — a área de
+     * configuração do chip ("E2") dentro do patch */
     FILE *f = fopen(PATCH_FILE, "rb");
     if(!f) { syslog(LOG_INFO, "sem %s: segue sem o patch (sem voz nas ligações)", PATCH_FILE); return 0; }
     static unsigned char data[0x4000];
     size_t n = fread(data, 1, sizeof data, f);
     fclose(f);
     if(n != 0x1cdc) { syslog(LOG_WARNING, "%s com tamanho errado (%zu)", PATCH_FILE, n); return 0; }
+    static const unsigned char e2[] = { 0x24, 0x01, 0x00, 0x01, 0x00, 0x59, 0x00, 0x01 };
+    unsigned char est = 0xff;
+    if(!vendor_cmd(fd, 0xd0, e2, sizeof e2, &est, 1) || est != 0) {
+        syslog(LOG_ERR, "SetE2BaseAddr recusado (0x%02x)", est);
+        return -1;
+    }
     for(size_t off = 0; off < n;) {
         size_t len = n - off > 240 ? 240 : n - off;
         unsigned char p[245];
@@ -270,7 +279,9 @@ static int write_patch(int fd)
         }
         off += len;
     }
-    syslog(LOG_INFO, "patch do MT6611 carregado (%zu bytes)", n);
+    /* como o Radio_Init do CE: HCI Reset depois do patch (o chip passa a usá-lo) */
+    if(!hci_reset(fd)) { syslog(LOG_ERR, "sem resposta ao HCI Reset depois do patch"); return -1; }
+    syslog(LOG_INFO, "patch do MT6611 carregado (%zu bytes, E2 em 0x01005900)", n);
     return 1;
 }
 
@@ -305,11 +316,13 @@ int main(int argc, char **argv)
             if(!set_baud(fd, baud)) { fprintf(stderr, "bfbt-attach: troca para %d baud falhou (tentativa %d)\n", baud, tr + 1); continue; }
             if(!hci_reset(fd)) { fprintf(stderr, "bfbt-attach: sem resposta ao HCI Reset a %d baud (tentativa %d)\n", baud, tr + 1); continue; }
         }
-        if(write_patch(fd) < 0) {           /* na última tentativa segue sem o patch */
+        int pr = write_patch(fd);
+        if(pr < 0) {                        /* na última tentativa segue sem o patch */
             fprintf(stderr, "bfbt-attach: patch falhou (tentativa %d)\n", tr + 1);
             if(tr < 2) continue;
             if(!hci_reset(fd)) continue;
         }
+        if(pr != 0 && !set_bdaddr(fd)) syslog(LOG_WARNING, "endereço Bluetooth não regravado depois do reset");
         if(!disable_esco(fd)) syslog(LOG_WARNING, "máscara sem eSCO (0xFC1E) não aceita");
         ok = 1;
     }

@@ -422,6 +422,24 @@ int main(int argc, char **argv)
         setvbuf(stderr, NULL, _IOLBF, 0);
         return run();
     }
+    if(!strcmp(c, "peek")) {                      /* só lê: pico/média do bloco de origem, 10x por segundo */
+        int secs = argc > 2 ? atoi(argv[2]) : 10;
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        for(int k = 0; k < secs * 10; k++) {
+            uint32_t off = (uint32_t)r16(W_MBOX, 0x9A) * 2;
+            int mx = 0; long sum = 0; int zc = 0, prev = 0;
+            for(uint32_t i = 0; i < 0x140 && off + i < 0x8000; i += 2) {
+                int a = (int16_t)r16(W_YM, off + i);
+                if(abs(a) > mx) mx = abs(a);
+                sum += abs(a);
+                if((a < 0) != (prev < 0)) zc++;
+                prev = a;
+            }
+            printf("pico %5d media %5ld cruzamentos %3d\n", mx, sum / 160, zc);
+            stall_us(100000);
+        }
+        return 0;
+    }
     if(!strcmp(c, "tone")) {                      /* start + tom de 1 kHz no lado do alto-falante */
         if(load_text(img)) return 1;
         signal(SIGTERM, on_sig); signal(SIGINT, on_sig);
