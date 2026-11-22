@@ -85,6 +85,8 @@ firmware deste aparelho, o comando que troca a voz de PCM para HCI; nenhum dos D
 | Tom de 1 kHz escrito pelo ARM no bloco de destino da ponte (`bfvoice tone`, sem ligação) | **o usuário ouviu no alto-falante**: DSP → DAC de voz → amplificador funciona. Logo o destino é o alto-falante e a origem (que fica em ruído) é a voz que deveria chegar do MT6611 pelos pinos PCM |
 | Clocks (`bus.dll`, `0x3D231A0`) | ids 0–23: PDN0 bit id; 24–44: PDN1 bit id−24 (42 = bit 18, conferido); id 45 (DSP) = bit 2 de `0x80001204` (0 = ligado, está ligado no Linux) |
 
+| Música (A2DP) com o patch do MT6611 | **quebra**: o celular mostra "tocando", mas quase não manda pacotes (20 em 3 s); sem o patch (com a máscara sem eSCO) a música volta. O patch só é carregado no modo experimental de voz |
+
 **Bloqueio atual:** a voz do celular não chega do MT6611 ao MT3351 pela interface PCM (DAI).
 O app Bluetooth do CE não manda nenhum comando de fabricante para isso (só a API da pilha da
 Microsoft); a OAL (`nk.exe`) e o `uart.dll` têm a tabela de nomes dos grupos de pinos

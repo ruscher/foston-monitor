@@ -211,8 +211,11 @@ static int disable_esco(int fd)
  * (0xFC D1 {04 00 00 80}) e manda o patch certo em pedaços de até 240 bytes pelo 0xFCC4
  * {estágio 0 primeiro / 1 meio / 2 último, tamanho, 0, 0, 0, dados}. O patch é da MediaTek:
  * vem do backup do próprio aparelho (tools/bigfoston/voice-extract.py --patch) para o cartão.
- * Sem ele o chip faz dados e música, mas a voz da ligação não sai pelos pinos PCM. */
+ * MEDIDO (22/11/2026): com o patch o celular para de mandar o áudio A2DP (a música para) e a
+ * voz da ligação continua sem chegar ao DSP; por isso só é carregado no modo experimental de
+ * voz (VOICE_EXPERIMENTAL, docs/phone/02). */
 #define PATCH_FILE "/mnt/sd/BigFoston/bt/mt6611-patch.bin"
+#define VOICE_EXPERIMENTAL "/data/bigfoston/voz-experimental"
 
 static int vendor_cmd(int fd, unsigned ocf, const unsigned char *p, int n, unsigned char *ret, int retn)
 {
@@ -242,6 +245,7 @@ static int write_patch(int fd)
     static const unsigned char rd[] = { 0x04, 0x00, 0x00, 0x80 };
     unsigned char ver[3] = { 0xff, 0, 0 };
     if(!vendor_cmd(fd, 0xd1, rd, sizeof rd, ver, 3) || ver[0] != 0) return -1;
+    if(access(VOICE_EXPERIMENTAL, F_OK)) return 0;          /* padrão: sem o patch */
     if(ver[1] != 3 || ver[2] != 0x8b) {
         syslog(LOG_WARNING, "MT6611 versão %d/0x%02x: patch não conhecido, segue sem", ver[1], ver[2]);
         return 0;
