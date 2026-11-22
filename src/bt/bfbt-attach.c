@@ -74,6 +74,7 @@ static void power(int on)
         set(T_OUT, p, 0);
     }
     if(!on) return;
+    ms(100);                                      /* desligado de verdade antes de religar */
     set(T_OUT, PIN_LDO, 1);
     ms(3);
     set(T_OUT, PIN_RST, 1);
@@ -95,21 +96,23 @@ static int open_tty(void)
     return fd;
 }
 
-/* HCI Reset -> 04 0E 04 xx 03 0C 00 */
+/* HCI Reset -> 04 0E 04 xx 03 0C 00; lê até achar a resposta (sobras de um evento anterior
+ * não podem cortá-la) */
 static int hci_reset(int fd)
 {
     static const unsigned char cmd[] = { 0x01, 0x03, 0x0c, 0x00 };
+    tcflush(fd, TCIFLUSH);
     if(write(fd, cmd, sizeof cmd) != sizeof cmd) return 0;
-    unsigned char b[32];
+    unsigned char b[64];
     int n = 0;
     struct pollfd p = { fd, POLLIN, 0 };
-    while(n < 7 && poll(&p, 1, 1500) > 0) {
+    while(n < (int)sizeof b && poll(&p, 1, 1500) > 0) {
         ssize_t r = read(fd, b + n, sizeof b - (size_t)n);
         if(r <= 0) break;
         n += (int)r;
+        for(int i = 0; i + 6 < n; i++)
+            if(b[i] == 0x04 && b[i + 1] == 0x0e && b[i + 4] == 0x03 && b[i + 5] == 0x0c) return b[i + 6] == 0;
     }
-    for(int i = 0; i + 6 < n; i++)
-        if(b[i] == 0x04 && b[i + 1] == 0x0e && b[i + 4] == 0x03 && b[i + 5] == 0x0c) return b[i + 6] == 0;
     return 0;
 }
 
@@ -211,24 +214,25 @@ int main(int argc, char **argv)
     if(argc > 1 && !strcmp(argv[1], "off")) { power(0); return 0; }
     openlog("bfbt-attach", LOG_PID, LOG_DAEMON);
 
+    /* liga, HCI Reset, endereço e troca de velocidade; se algo falhar, corta a alimentação e
+     * repete tudo (a troca de velocidade falha às vezes logo depois de ligar) */
     int fd = -1, ok = 0;
     for(int tr = 0; tr < 3 && !ok; tr++) {
-        power(1);
         if(fd >= 0) close(fd);
+        power(1);
         fd = open_tty();
         if(fd < 0) { perror(TTY); power(0); return 1; }
-        ok = hci_reset(fd);
+        if(!hci_reset(fd)) { fprintf(stderr, "bfbt-attach: sem resposta ao HCI Reset (tentativa %d)\n", tr + 1); continue; }
+        if(!set_bdaddr(fd)) syslog(LOG_WARNING, "endereço Bluetooth não gravado (fica o de fábrica)");
+        if(baud != 115200) {
+            if(!set_baud(fd, baud)) { fprintf(stderr, "bfbt-attach: troca para %d baud falhou (tentativa %d)\n", baud, tr + 1); continue; }
+            if(!hci_reset(fd)) { fprintf(stderr, "bfbt-attach: sem resposta ao HCI Reset a %d baud (tentativa %d)\n", baud, tr + 1); continue; }
+        }
+        ok = 1;
     }
     if(!ok) {
-        fprintf(stderr, "bfbt-attach: o chip não respondeu ao HCI Reset\n");
-        syslog(LOG_ERR, "o chip não respondeu ao HCI Reset");
-        close(fd);
-        power(0);
-        return 1;
-    }
-    if(!set_bdaddr(fd)) syslog(LOG_WARNING, "endereço Bluetooth não gravado (fica o de fábrica)");
-    if(baud != 115200 && (!set_baud(fd, baud) || !hci_reset(fd))) {
-        syslog(LOG_ERR, "troca para %d baud falhou", baud);
+        fprintf(stderr, "bfbt-attach: o chip Bluetooth não respondeu\n");
+        syslog(LOG_ERR, "o chip não respondeu (%d baud)", baud);
         close(fd);
         power(0);
         return 1;
