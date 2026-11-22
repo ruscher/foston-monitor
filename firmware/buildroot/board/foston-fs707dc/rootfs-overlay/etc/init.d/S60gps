@@ -30,6 +30,10 @@ stop)
     touch /run/bigfoston-gps.stop
     killall bfgps 2>/dev/null
     [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+    # o bfgps grava o espelho do \ResidentFlash no cartão ao sair: espera (até
+    # 5 s) antes que o desligamento desmonte o cartão
+    n=0
+    while pidof bfgps >/dev/null && [ $n -lt 10 ]; do sleep 0.5; n=$((n + 1)); done
     rm -f "$PIDFILE" /run/bigfoston-gps /run/gps-nmea
     ;;
 restart)

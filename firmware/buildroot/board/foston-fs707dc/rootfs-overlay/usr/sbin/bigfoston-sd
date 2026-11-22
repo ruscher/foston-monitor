@@ -5,7 +5,8 @@
 #   bigfoston-sd eject    grava o que falta e desmonta (o cartão pode sair)
 #   bigfoston-sd lost     desmonta um cartão que saiu sem ser ejetado
 #   bigfoston-sd status   rw | ro | ejected | absent
-#   bigfoston-sd watch    laço: monta o cartão que entra, limpa o que sai
+#   bigfoston-sd watch    monta o cartão que entra e limpa o que sai (avisos do kernel)
+#   bigfoston-sd event    um aviso do kernel (chamado pelo "uevent" do watch)
 #
 # Gravação só no cartão que traz BigFoston/linux-rw com o número de série DELE
 # ("serial=0x...", criado depois do teste tools/bigfoston/sd-write-test.sh);
@@ -31,7 +32,7 @@ lock() {
     trap 'rmdir "$LOCK" 2>/dev/null' EXIT
 }
 
-# só builtins do shell: o laço de vigia roda a cada segundo (sem fork de grep)
+# só builtins do shell: roda a cada aviso do kernel (sem fork de grep)
 mounted() {
     while read -r _d m _r; do [ "$m" = "$MNT" ] && return 0; done < /proc/mounts
     return 1
@@ -115,6 +116,20 @@ do_umount() {
     return 0
 }
 
+# estado desejado: sem cartão, nada montado; cartão presente e não ejetado,
+# montado. Espera uma operação em andamento (até 30 s) antes de conferir.
+reconcile() {
+    n=0
+    while [ -d "$LOCK" ] && [ $n -lt 60 ]; do sleep 0.5; n=$((n + 1)); done
+    if [ ! -b "$DEV" ]; then
+        rm -f "$EJECTED"
+        mounted && "$0" lost >/dev/null
+    elif ! mounted && [ ! -f "$EJECTED" ]; then
+        "$0" mount 4 >/dev/null
+    fi
+    return 0
+}
+
 case "$1" in
 mount)
     lock || exit 1
@@ -143,28 +158,33 @@ status)
     else echo absent
     fi
     ;;
+event)
+    # chamado pelo "uevent" (netlink) a cada aviso do kernel; a bateria avisa a
+    # cada 10 s, então sai logo, só com builtins, se não é a partição do cartão
+    [ "$SUBSYSTEM" = block ] && [ "/dev/$DEVNAME" = "$DEV" ] || exit 0
+    case "$ACTION" in
+    add)    sleep 1 ;;      # os contatos trepidam e o cartão leva ~1 s para iniciar
+    remove) ;;
+    *)      exit 0 ;;
+    esac
+    reconcile
+    ;;
 watch)
-    # 1 s por volta, só lê /proc e /dev; espera enquanto outra operação trava
-    # Ao inserir, os contatos trepidam e o cartão leva ~1 s para iniciar: só
-    # monta depois de vê-lo presente em duas voltas seguidas.
-    seen=0
+    # O kernel detecta o cartão sozinho (o driver consulta o slot) e cria ou
+    # apaga $DEV; o "uevent" do BusyBox ouve esses avisos sem consultar nada.
+    # A conferência a cada 60 s só cobre um aviso que chegou enquanto outra
+    # operação (mount, eject) travava o cartão.
+    uevent "$0" event &
+    upid=$!
+    trap 'kill $upid 2>/dev/null; exit 0' TERM INT
     while :; do
-        sleep 1
-        [ -d "$LOCK" ] && continue
-        if [ ! -b "$DEV" ]; then
-            seen=0
-            rm -f "$EJECTED"
-            mounted && "$0" lost >/dev/null
-        elif ! mounted && [ ! -f "$EJECTED" ]; then
-            seen=$((seen + 1))
-            [ $seen -ge 2 ] && { "$0" mount 4 >/dev/null; seen=0; }
-        else
-            seen=0
-        fi
+        sleep 60 & wait $!
+        kill -0 $upid 2>/dev/null || { uevent "$0" event & upid=$!; }
+        reconcile
     done
     ;;
 *)
-    echo "uso: $0 mount|eject|lost|status|watch" >&2
+    echo "uso: $0 mount|eject|lost|status|watch|event" >&2
     exit 2
     ;;
 esac

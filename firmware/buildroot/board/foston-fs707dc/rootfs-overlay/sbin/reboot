@@ -1,0 +1,18 @@
+#!/bin/sh
+# reboot do terminal = Reiniciar da interface: o Linux reinicia a si mesmo com
+# kexec (/usr/sbin/bigfoston-reboot), porque o reset do watchdog deixa este
+# aparelho desligado. O desligamento é o de sempre (init: rcK, umount -a -r) e
+# o salto acontece no fim (/usr/sbin/bigfoston-kexec-exec).
+#
+#   reboot -f   vai direto ao kernel, sem desligar os serviços: watchdog (desliga)
+#
+# Se o kexec não puder ser preparado (sem cartão, atualização pendente, arquivos
+# de boot que não conferem), diz o motivo e desliga como antes.
+for a in "$@"; do
+    case "$a" in -f|-h|--help|-*f*) exec /bin/busybox reboot "$@" ;; esac
+done
+if ! /usr/sbin/bigfoston-reboot --prepare; then
+    echo "reboot: sem kexec; o aparelho vai DESLIGAR (ligue no botão)" >&2
+    rm -f /kexec/pending
+fi
+exec /bin/busybox reboot "$@"

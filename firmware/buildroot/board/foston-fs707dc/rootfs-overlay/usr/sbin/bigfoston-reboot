@@ -9,6 +9,8 @@
 # (/usr/sbin/bigfoston-kexec-exec em /etc/inittab), sem cortar a energia.
 #
 # Sai com erro, sem reiniciar, quando falta algo; a interface mostra o motivo.
+# "bigfoston-reboot --prepare" só prepara (é o que o /sbin/reboot do terminal
+# usa antes de chamar o reboot do BusyBox).
 # Uma atualização pendente (BigFoston/update) só é aplicada pelo agente do CE
 # ao ligar: nesse caso use Desligar e ligue de novo.
 SRC=/mnt/sd/BigFoston/update.ok
@@ -37,4 +39,6 @@ kexec -l "$DST/zImage" --initrd="$DST/initrd.img" --dtb="$DST/fs707dc.dtb" \
 
 touch "$DST/pending"
 sync
-exec /sbin/reboot
+[ "$1" = --prepare ] && exit 0
+# o BusyBox direto: /sbin/reboot é o script que chama este (sem laço)
+exec /bin/busybox reboot
