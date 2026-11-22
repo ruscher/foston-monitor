@@ -230,6 +230,8 @@ static const uint16_t param_block[20] = {
 
 static uint16_t saved_1204, saved_gain;
 
+static void guard_snapshot(void);
+
 /* CE MM_GSMPCM_2WAY_START (0x3C0833C, 0x3C0C5A8, 0x3C1A100) */
 static int start(void)
 {
@@ -306,6 +308,7 @@ static int start(void)
     w32(W_DSP, 0x04, 0x838);
     /* amplificador do alto-falante (GPIO 5) */
     m32(W_GPIO, 0x300, 1u << 5, 1u << 5);
+    guard_snapshot();
     /* para o stop: ganho e caminho de antes */
     FILE *f = fopen("/run/bfvoice.saved", "w");
     if(f) { fprintf(f, "%u %u\n", saved_gain, saved_1204); fclose(f); }
@@ -415,15 +418,49 @@ static void set_mute(int m)
  * a música pausada pela ligação) ele desliga os clocks 37/43 e o amplificador, e a ligação fica
  * muda. Durante a ligação o bfvoice confere e restaura (a cada 200 ms). */
 static unsigned long fixes;
+static char fixed_what[160];
+
+/* "foto" dos registradores de áudio tirada no fim do start; guard() restaura o que mudar
+ * (o ALSA, ao abrir/fechar o som, mexe em quase todos: medido ao juntar duas chamadas) */
+static const struct { int w; uint32_t o; uint32_t mask; } watch[] = {
+    { W_ANA, 0x104, 0xffff }, { W_ANA, 0x10C, 0xffff }, { W_ANA, 0x110, 0xffff }, { W_ANA, 0x114, 0xffff },
+    { W_ANA, 0x200, 0x03ff }, { W_ANA, 0x204, 0xffff }, { W_ANA, 0x208, 0x00ff }, { W_ANA, 0x20C, 0xffff },
+    { W_ADMA, 0x200, 0xffff }, { W_ADMA, 0x204, 0x000C },
+    { W_AFE, 0x000, 0xffff }, { W_AFE, 0x00C, 0xffff }, { W_AFE, 0x014, 0xffff }, { W_AFE, 0x018, 0xffff },
+    { W_AFE, 0x100, 0xffff }, { W_AFE, 0x104, 0xffff },
+};
+#define NWATCH (int)(sizeof watch / sizeof watch[0])
+static uint32_t snap[NWATCH];
+
+static void guard_snapshot(void)
+{
+    for(int i = 0; i < NWATCH; i++) snap[i] = r32(watch[i].w, watch[i].o) & watch[i].mask;
+}
+
+static void note_fix(const char *what)
+{
+    fixes++;
+    if(!strstr(fixed_what, what) && strlen(fixed_what) + strlen(what) + 2 < sizeof fixed_what) {
+        strcat(fixed_what, " ");
+        strcat(fixed_what, what);
+    }
+}
+
 static void guard(void)
 {
     uint32_t need = CLK(42) | CLK(43) | CLK(37);
-    if(r32(W_PDN, PDN1_STA) & need) { clk_on(need); fixes++; }
-    if((r32(W_ANA, 0x204) & 0xffff) != 0x1240) { lo16(W_ANA, 0x204, 0x1240); fixes++; }
-    if((r32(W_ANA, 0x108) & 0xffff) != (muted ? 0x80 : 0)) { lo16(W_ANA, 0x108, muted ? 0x80 : 0); fixes++; }
-    if((r32(W_ANA, 0x104) & 0xffff) != 0x2A00) { lo16(W_ANA, 0x104, 0x2A00); fixes++; }
-    if(!(r32(W_GPIO, 0x300) & (1u << 5))) { m32(W_GPIO, 0x300, 1u << 5, 1u << 5); fixes++; }
-    if((r16(W_ADMA, 0x204) & 0x000C) != 0x000C) { m16(W_ADMA, 0x204, 0x000C, 0x000C); fixes++; }
+    if(r32(W_PDN, PDN1_STA) & need) { clk_on(need); note_fix("clocks"); }
+    if((r32(W_ANA, 0x108) & 0xffff) != (muted ? 0x80u : 0u)) { lo16(W_ANA, 0x108, muted ? 0x80 : 0); note_fix("mic"); }
+    if(!(r32(W_GPIO, 0x300) & (1u << 5))) { m32(W_GPIO, 0x300, 1u << 5, 1u << 5); note_fix("amp"); }
+    for(int i = 0; i < NWATCH; i++) {
+        uint32_t m = watch[i].mask, v = r32(watch[i].w, watch[i].o);
+        if((v & m) != snap[i]) {
+            w32(watch[i].w, watch[i].o, (v & ~m) | snap[i]);
+            char n[16];
+            snprintf(n, sizeof n, "%s%03X", watch[i].w == W_ANA ? "A" : watch[i].w == W_ADMA ? "D" : "F", watch[i].o);
+            note_fix(n);
+        }
+    }
 }
 
 /* níveis (pico) da voz do celular e do microfone, para o log */
@@ -502,9 +539,10 @@ static int run(void)
         if(t - lastctl >= 200) { lastctl = t; ctl_read(); guard(); }
         if(t - last >= 10000) {
             last = t;
-            fprintf(stderr, "bfvoice: %lu blocos, %lu inválidos, celular %d, microfone %d%s, ganho %d%%, restaurações %lu\n",
-                    served, bad, lvl_rx, lvl_ul, muted ? " (mudo)" : "", rx_gain, fixes);
+            fprintf(stderr, "bfvoice: %lu blocos, %lu inválidos, celular %d, microfone %d%s, ganho %d%%, restaurações %lu%s\n",
+                    served, bad, lvl_rx, lvl_ul, muted ? " (mudo)" : "", rx_gain, fixes, fixed_what);
             lvl_rx = lvl_ul = 0;
+            fixed_what[0] = 0;
         }
     }
     fprintf(stderr, "bfvoice: %lu blocos atendidos, %lu inválidos\n", served, bad);
