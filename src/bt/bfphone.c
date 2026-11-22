@@ -45,7 +45,9 @@
 #define DATADIR  "/mnt/sd/BigFoston/telefone"
 #define HFP_AG   "0000111f-0000-1000-8000-00805f9b34fb"
 #define MAXCALLS 6
-#define VOICE_FOSTON_OK 0                /* 1 quando o caminho de voz do DSP existir */
+#define BFVOICE  "/usr/sbin/bfvoice"
+#define VOICE_IMG "/mnt/sd/BigFoston/voz/wavedev-text.bin"
+#define VOICE_PREF "/data/bigfoston/telefone-voz"
 
 /* ------------------------------------------------------------------ estado */
 
@@ -56,6 +58,8 @@ static struct {
     char addr[18], dev[64], op[48];
     int signal, battery, service, roam;          /* -1 = desconhecido */
     int voice_phone;                             /* 1: voz fica no celular */
+    int voice_avail;                             /* bfvoice e a imagem do DSP no cartão */
+    int voice_on;                                /* voz do DSP ligada agora */
     int sco;
     call_t call[MAXCALLS];
     int ncall;
@@ -94,7 +98,8 @@ static void write_state(void)
     fprintf(f, "signal=%d\nbattery=%d\nservice=%d\nroam=%d\n", st.signal, st.battery, st.service, st.roam);
     /* voice_foston: o FOSTON sabe tocar a voz e captar o microfone (falta o caminho do DSP:
      * docs/phone/02-audio-da-chamada.md); até lá a voz fica no celular */
-    fprintf(f, "voice=%s\nvoice_foston=%d\nsco=%d\n", st.voice_phone ? "phone" : "foston", VOICE_FOSTON_OK, st.sco);
+    fprintf(f, "voice=%s\nvoice_foston=%d\nvoice_on=%d\nsco=%d\n", st.voice_phone ? "phone" : "foston",
+            st.voice_avail, st.voice_on, st.sco);
     for(int i = 0; i < st.ncall; i++)
         fprintf(f, "call=%d|%d|%d|%s|%s\n", st.call[i].idx, st.call[i].dir, st.call[i].stat, st.call[i].num,
                 st.call[i].name);
@@ -158,6 +163,7 @@ static void lookup_name(const char *num, char *name, size_t n)
 /* ------------------------------------------------------------- canal AT */
 
 static DBusConnection *bus;
+static void sco_release(void);
 static int at_fd = -1;
 static char at_buf[1024];
 static int at_len;
@@ -255,7 +261,7 @@ static void commit_calls(void)
     for(int i = 0; i < st.ncall; i++) if(st.call[i].stat == 0) had_active = 1;
     for(int i = 0; i < nnew; i++) if(newcall[i].stat == 0) has_active = 1;
     if(has_active && !had_active) st.since = time(NULL);
-    if(!nnew) st.since = 0;
+    if(!nnew) { st.since = 0; sco_release(); }
     memcpy(st.call, newcall, sizeof newcall);
     st.ncall = nnew;
     write_state();
@@ -404,6 +410,80 @@ static void at_pump(void)
 
 /* ------------------------------------------------------------- voz (SCO) */
 
+static int run_bfvoice(const char *what)
+{
+    pid_t p = fork();
+    if(p == 0) {
+        int nul = open("/dev/null", O_WRONLY);
+        if(nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
+        execl(BFVOICE, "bfvoice", what, (char *)NULL);
+        _exit(127);
+    }
+    if(p < 0) return -1;
+    int stt = 0;
+    while(waitpid(p, &stt, 0) < 0 && errno == EINTR) {}
+    return WIFEXITED(stt) && WEXITSTATUS(stt) == 0 ? 0 : -1;
+}
+
+static void voice_check(void)
+{
+    st.voice_avail = !access(BFVOICE, X_OK) && !access(VOICE_IMG, R_OK);
+}
+
+/* o PCM de voz do BlueALSA aberto (sem dados): faz o FOSTON pedir o canal de voz ao celular
+ * no meio da ligação; o som em si vai pelo PCM do chip ao DSP, não por aqui */
+static int hold_fd[2] = { -1, -1 };
+
+static void sco_release(void)
+{
+    for(int i = 0; i < 2; i++) if(hold_fd[i] >= 0) { close(hold_fd[i]); hold_fd[i] = -1; }
+}
+
+static void sco_request(void)
+{
+    if(hold_fd[0] >= 0 || !st.addr[0]) return;
+    char dev[32], path[112];
+    snprintf(dev, sizeof dev, "%s", st.addr);
+    for(char *c = dev; *c; c++) if(*c == ':') *c = '_';
+    snprintf(path, sizeof path, "/org/bluealsa/hci0/dev_%s/hfphf/sink", dev);
+    DBusMessage *m = dbus_message_new_method_call("org.bluealsa", path, "org.bluealsa.PCM1", "Open");
+    if(!m) return;
+    DBusError e;
+    dbus_error_init(&e);
+    DBusMessage *r = dbus_connection_send_with_reply_and_block(bus, m, 5000, &e);
+    dbus_message_unref(m);
+    if(!r) { syslog(LOG_INFO, "pedido do canal de voz recusado: %s", e.message); dbus_error_free(&e); return; }
+    int a = -1, b = -1;
+    if(dbus_message_get_args(r, &e, DBUS_TYPE_UNIX_FD, &a, DBUS_TYPE_UNIX_FD, &b, DBUS_TYPE_INVALID)) {
+        hold_fd[0] = a; hold_fd[1] = b;
+        for(int i = 0; i < 2; i++) fcntl(hold_fd[i], F_SETFD, FD_CLOEXEC);
+    } else dbus_error_free(&e);
+    dbus_message_unref(r);
+}
+
+static void voice_start(void)
+{
+    if(st.voice_on) return;
+    if(run_bfvoice("start") == 0) {
+        st.voice_on = 1;
+        syslog(LOG_INFO, "voz da ligação no FOSTON (DSP ligado)");
+    } else {
+        syslog(LOG_ERR, "bfvoice start falhou: voz volta para o celular");
+        st.voice_phone = 1;
+    }
+    write_state();
+}
+
+static void voice_stop(void)
+{
+    if(!st.voice_on && access("/run/bfvoice.saved", F_OK)) return;
+    run_bfvoice("stop");
+    st.voice_on = 0;
+    write_state();
+}
+
+static void sco_drop(void);
+
 #define BTPROTO_HCI 1
 #define SOL_HCI     0
 #define HCI_FILTER  2
@@ -440,17 +520,25 @@ static void hci_read(void)
         int t = now_ms();
         if(t - sco_drop_t0 > 30000) { sco_drop_t0 = t; sco_drops = 0; }
         /* voz no celular: desfaz o canal de voz (no máximo 20 vezes em 30 s, para não brigar
-         * com um celular que insiste) */
-        if(st.voice_phone && sco_drops < 20) {
-            uint8_t c[] = { 0x01, 0x06, 0x04, 3, (uint8_t)sco_handle, (uint8_t)(sco_handle >> 8), 0x13 };
-            if(write(hci, c, sizeof c) == (ssize_t)sizeof c) sco_drops++;
-            syslog(LOG_INFO, "voz da ligação mantida no celular (canal de voz desfeito)");
-        }
+         * com um celular que insiste); voz no FOSTON: liga o DSP */
+        if(st.voice_phone || !st.voice_avail) {
+            if(sco_drops < 20) { sco_drop(); sco_drops++; }
+        } else voice_start();
         write_state();
     } else if(ev == 0x05 && n >= 3 + 4 && p[0] == 0 && st.sco && (uint16_t)(p[1] | p[2] << 8) == sco_handle) {
         st.sco = 0;
+        voice_stop();
+        sco_release();
         write_state();
     }
+}
+
+static void sco_drop(void)
+{
+    if(!st.sco || hci < 0) return;
+    uint8_t c[] = { 0x01, 0x06, 0x04, 3, (uint8_t)sco_handle, (uint8_t)(sco_handle >> 8), 0x13 };
+    if(write(hci, c, sizeof c) == (ssize_t)sizeof c)
+        syslog(LOG_INFO, "voz da ligação mantida no celular (canal de voz desfeito)");
 }
 
 /* ------------------------------------------------------- sincronização */
@@ -560,9 +648,19 @@ static void command(char *l)
     char *arg = strchr(l, ' ');
     if(arg) *arg++ = 0;
     if(!strcmp(l, "voice") && arg) {
-        st.voice_phone = strcmp(arg, "foston") != 0;
-        /* "foston-teste" deixa o canal de voz aberto mesmo sem o DSP (diagnóstico) */
-        if(!st.voice_phone && !VOICE_FOSTON_OK && strcmp(arg, "foston-teste")) st.voice_phone = 1;
+        voice_check();
+        int phone = strcmp(arg, "foston") != 0 || !st.voice_avail;
+        st.voice_phone = phone;
+        FILE *f = fopen(VOICE_PREF, "w");              /* a escolha vale para as próximas ligações */
+        if(f) { fputs(phone ? "phone\n" : "foston\n", f); fclose(f); }
+        if(phone) {                                     /* volta a voz para o celular */
+            voice_stop();
+            sco_release();
+            sco_drop();
+        } else if(st.ncall) {                           /* no meio da ligação: pede o canal de voz */
+            if(st.sco) voice_start();
+            else sco_request();
+        }
         write_state();
         return;
     }
@@ -626,7 +724,12 @@ int main(void)
     int ff = open(FIFO, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if(ff < 0) return 1;
     hci_open();
+    voice_check();
+    FILE *pf = fopen(VOICE_PREF, "r");                 /* última escolha do usuário */
+    if(pf) { char v[16] = ""; if(fgets(v, sizeof v, pf)) st.voice_phone = strncmp(v, "foston", 6) != 0; fclose(pf); }
+    voice_stop();                                       /* sobra de uma execução anterior */
     write_state();
+    int next_vcheck = 0;
     char cmdbuf[256];
     int cmdlen = 0;
     int next_try = 0, phone_since = 0, hfp_asked = 0;
@@ -664,6 +767,12 @@ int main(void)
             }
         }
         if(at_fd >= 0) at_pump();
+        if(t - next_vcheck >= 0) {                     /* o cartão pode montar depois */
+            next_vcheck = t + 10000;
+            int was = st.voice_avail;
+            voice_check();
+            if(was != st.voice_avail) write_state();
+        }
 
         struct pollfd p[4] = { { ff, POLLIN, 0 }, { at_fd, POLLIN, 0 }, { hci, POLLIN, 0 }, { sync_fd, POLLIN, 0 } };
         if(poll(p, 4, 250) < 0 && errno != EINTR) break;
@@ -685,6 +794,8 @@ int main(void)
         dbus_connection_read_write_dispatch(bus, 0);
     }
     if(sync_pid) kill(sync_pid, SIGTERM);
+    voice_stop();
+    sco_release();
     unlink(FIFO);
     unlink(STATE);
     return 0;

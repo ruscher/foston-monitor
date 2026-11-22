@@ -674,7 +674,7 @@ static void update_call(void)
         else { lv_obj_add_flag(cp_keys, LV_OBJ_FLAG_HIDDEN); lv_obj_add_flag(cp_dtmf, LV_OBJ_FLAG_HIDDEN); }
     }
     /* escolha da voz: marca a opção atual */
-    bool on_foston = !cur.voice_phone && cur.voice_foston;
+    bool on_foston = !cur.voice_phone && cur.voice_foston;     /* escolhido (o DSP liga com o canal de voz) */
     if(on_foston) { lv_obj_add_state(cp_vfoston, LV_STATE_CHECKED); lv_obj_remove_state(cp_vphone, LV_STATE_CHECKED); }
     else { lv_obj_add_state(cp_vphone, LV_STATE_CHECKED); lv_obj_remove_state(cp_vfoston, LV_STATE_CHECKED); }
     set_text(cp_note, tr(on_foston ? S_PH_VOICE_ON_FOSTON : S_PH_VOICE_NOTE));

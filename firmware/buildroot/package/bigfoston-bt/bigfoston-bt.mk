@@ -29,6 +29,7 @@ define BIGFOSTON_BT_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/bfhci.stripped $(TARGET_DIR)/usr/sbin/bfhci
 	$(INSTALL) -D -m 0755 $(@D)/build/bfsnoop.stripped $(TARGET_DIR)/usr/sbin/bfsnoop
 	$(INSTALL) -D -m 0755 $(@D)/build/bfpbap.stripped $(TARGET_DIR)/usr/sbin/bfpbap
+	$(INSTALL) -D -m 0755 $(@D)/build/bfvoice.stripped $(TARGET_DIR)/usr/sbin/bfvoice
 	$(BIGFOSTON_BT_INSTALL_AGENT)
 endef
 

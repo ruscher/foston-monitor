@@ -19,6 +19,7 @@ typedef struct {
     int signal, battery, service;     /* 0-5 / 0-5 / 0-1; -1 = desconhecido */
     bool voice_phone, sco;
     bool voice_foston;                /* o FOSTON já sabe fazer a voz da ligação */
+    bool voice_on;                    /* voz da ligação no FOSTON agora (DSP ligado) */
     ph_call_t call[PH_MAXCALLS];
     int ncall;
     time_t since;                     /* início da ligação ativa (0 = nenhuma) */

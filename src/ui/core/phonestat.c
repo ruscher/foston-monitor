@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "nav.h"
 #include "../widgets/dialog.h"
+#include "../screens/screens.h"
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -52,6 +53,7 @@ void ph_read(ph_info_t *p)
         else if(!strcmp(line, "voice")) p->voice_phone = strcmp(v, "foston") != 0;
         else if(!strcmp(line, "sco")) p->sco = atoi(v);
         else if(!strcmp(line, "voice_foston")) p->voice_foston = atoi(v);
+        else if(!strcmp(line, "voice_on")) p->voice_on = atoi(v);
         else if(!strcmp(line, "since")) p->since = (time_t)atol(v);
         else if(!strcmp(line, "sync")) snprintf(p->sync, sizeof p->sync, "%s", v);
         else if(!strcmp(line, "call") && p->ncall < PH_MAXCALLS) {
@@ -106,6 +108,15 @@ void ph_poll_global(void)
     if(access(state_path(), R_OK)) return;
     ph_info_t p;
     ph_read(&p);
+    /* voz no FOSTON: a música do cartão usa o mesmo áudio; pausa e volta depois */
+    static bool paused_for_call;
+    music_status_t ms;
+    music_status(&ms);
+    if(p.voice_on && ms.playing && !ms.bt) { music_command(MUSIC_TOGGLE); paused_for_call = true; }
+    else if(!p.voice_on && paused_for_call) {
+        paused_for_call = false;
+        if(ms.active && !ms.playing && !ms.bt) music_command(MUSIC_TOGGLE);
+    }
     const ph_call_t *in = NULL;
     for(int i = 0; i < p.ncall; i++) if(p.call[i].stat == PH_INCOMING) in = &p.call[i];
     char key[64] = "";
