@@ -10,4 +10,6 @@
   a rotação e o modo noturno; o vetorial continua.
 - **GPS:** ~4 % de CPU em repouso (leitura serial imitando o WinCE + motor MTK); não mexido
   para não arriscar o GPS que funciona.
+- **Vigia do cartão:** `bigfoston-sd watch` checa a cada 1 s (`sleep 1` cria um processo);
+  custa 2-4 % de CPU parado. Um uevent do kernel evitaria isso; ainda não feito.
 - **Não medido:** latência física do toque, navegação real em movimento, uso por horas.

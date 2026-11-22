@@ -30,6 +30,26 @@ a interface vem primeiro.
 | RSS do shell (navegação) | 12,4 MB | 14,1 MB | idem |
 | Swap usada / faltas maiores | 0 / 0 | 0 / 0 | — |
 
+## Firmware instalado (conferência)
+
+Mesmo roteiro com o firmware instalado (`/usr/bin/bigfoston-shell`, atualização aplicada
+às 21:47 de 21/11/2026, kernel com zram e PSI):
+
+| Fase | Quadros/s | Desenho médio / p95 | Laço médio / máx |
+|---|---|---|---|
+| arrasto | 17,4 | 49,6 / 89 | 40,9 / 126,7 |
+| arrasto só do LVGL | 17,6 | 46,2 / 86 | 34,8 / 115,5 |
+| rotação | 12,8 | 44,6 / 80 | 25,8 / 112,5 |
+| seguir GPS | 2,9 | 19,1 / 67 | 3,0 / 78,9 |
+| navegação | 2,7 | 36,4 / 104 | 6,0 / 316,1 |
+| zoom | 1,9 | 12,9 / 53 | 1,7 / 120,1 |
+
+O roteiro levou 63 s. O `MemAvailable` mínimo foi 77,5 MB, sem swap e sem falta maior de
+página. Na navegação, um quadro do motor levou 1,3 s, quando uma rota nova foi carregada
+do cartão. Ele roda em outra thread; a interface teve no máximo 316 ms numa volta.
+
+Com o sistema parado, a CPU total é de ~11 % ([20](20-final-report.md)).
+
 ## Etapas (arrasto, quadros/s da tela)
 
 | Etapa | Quadros/s | Desenho do LVGL médio |

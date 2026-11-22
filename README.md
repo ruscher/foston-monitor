@@ -10,6 +10,7 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
+![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.2.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -17,6 +18,7 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
+[🐧 BigFoston OS](#-bigfoston-os-020-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -49,6 +51,32 @@
 </td>
 </tr>
 </table>
+
+---
+
+## 🐧 BigFoston OS 0.2.0: Linux no próprio aparelho
+
+Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
+BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
+tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
+Brasil, rotas e voz.
+
+**Novidades da 0.2.0:**
+
+| | O que mudou | Medido no aparelho |
+|---|---|---|
+| 🗺️ | Mapa do Big GPS mais rápido | arrasto de **3,6 → 17,4 quadros/s**; rotação de 5,1 → 12,8 |
+| 👆 | Interface sem travadas | pior espera para atender um toque na navegação: 722 → 316 ms |
+| 📡 | GPS sem bloquear o cartão | espera de disco com o aparelho parado: **20 % → 0 %** |
+| 💤 | Toque e botão por evento | o shell parado acorda 4 vezes/s em vez de 57 |
+| ⚙️ | Ajustes > Desempenho | detalhe do mapa: Automático, Econômico, Equilibrado ou Detalhado |
+| 🔘 | Botão de energia | diálogo com Cancelar, Hibernar, Reiniciar e Desligar |
+| 🔄 | Reiniciar de verdade | o Linux reinicia a si mesmo com kexec, sem desligar (~13 s) |
+
+📚 Documentação: [estado da implementação](docs/implementation-status.md) ·
+[porte do Linux](docs/04-linux-port.md) · [Big GPS](docs/big-gps/00-visao-geral.md) ·
+[desempenho](docs/performance/00-overview.md) ·
+[relatório de desempenho](docs/performance/20-final-report.md) · [recuperação](docs/17-recuperacao.md)
 
 ---
 
