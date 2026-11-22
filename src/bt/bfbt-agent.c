@@ -585,20 +585,29 @@ static DBusHandlerResult on_signal(DBusConnection *c, DBusMessage *msg, void *ud
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-/* O MT6611 sai do reset com a varredura de visibilidade em 2,40 s a cada 2,56 s (94 % do
- * tempo): visível, o áudio A2DP caía de ~41 para ~5 KB/s, com buracos de 2,4 s. Grava o
- * padrão do Bluetooth (janela 11,25 ms, intervalo 2,56 s) ao ligar e a cada vez que fica visível.
- * HCI Write Inquiry Scan Activity (0x0C1E) num soquete HCI cru (docs/bluetooth-audio-
- * performance/08-uart-hci.md). */
-static void fix_inquiry_scan(void)
+/* Ajustes do MT6611 gravados a cada vez que o adaptador liga (a inicialização do BlueZ não os
+ * faz), por comandos HCI num soquete cru (docs/bluetooth-integration/03-bluez-stack.md):
+ *  - Write Inquiry Scan Activity (0x0C1E): o chip sai do reset varrendo a visibilidade 2,40 s a
+ *    cada 2,56 s; visível, o A2DP caía de ~41 para ~5 KB/s. Padrão do Bluetooth: 11,25 ms;
+ *  - Write Default Link Policy Settings (0x080F) = só sniff, sem troca de papel: quando o
+ *    celular pedia para virar mestre no meio da abertura do áudio, o chip perdia a resposta do
+ *    AVDTP Discover e a conexão falhava (POCO X4: 0/5 conexões; sem a troca: 5/5). */
+static void hci_raw(const unsigned char *cmd, size_t n, const char *what)
 {
     struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };   /* AF_BLUETOOTH, hci0, RAW */
-    static const unsigned char cmd[] = { 0x01, 0x1e, 0x0c, 0x04, 0x00, 0x10, 0x12, 0x00 };
     int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);                     /* BTPROTO_HCI */
     if(s < 0) return;
-    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && write(s, cmd, sizeof cmd) == (ssize_t)sizeof cmd)
-        syslog(LOG_INFO, "varredura de visibilidade: 11,25 ms a cada 2,56 s");
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && write(s, cmd, n) == (ssize_t)n)
+        syslog(LOG_INFO, "%s", what);
     close(s);
+}
+
+static void fix_inquiry_scan(void)
+{
+    static const unsigned char scan[] = { 0x01, 0x1e, 0x0c, 0x04, 0x00, 0x10, 0x12, 0x00 };
+    static const unsigned char policy[] = { 0x01, 0x0f, 0x08, 0x02, 0x04, 0x00 };
+    hci_raw(scan, sizeof scan, "varredura de visibilidade: 11,25 ms a cada 2,56 s");
+    hci_raw(policy, sizeof policy, "politica de enlace: sem troca de papel");
 }
 
 static void on_sig(int s) { (void)s; quit = 1; }

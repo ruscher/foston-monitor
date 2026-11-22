@@ -26,6 +26,7 @@ define BIGFOSTON_BT_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/bfbt-attach.stripped $(TARGET_DIR)/usr/sbin/bfbt-attach
 	$(INSTALL) -D -m 0755 $(@D)/build/btprobe.stripped $(TARGET_DIR)/usr/sbin/btprobe
 	$(INSTALL) -D -m 0755 $(@D)/build/bfhci.stripped $(TARGET_DIR)/usr/sbin/bfhci
+	$(INSTALL) -D -m 0755 $(@D)/build/bfsnoop.stripped $(TARGET_DIR)/usr/sbin/bfsnoop
 	$(BIGFOSTON_BT_INSTALL_AGENT)
 endef
 

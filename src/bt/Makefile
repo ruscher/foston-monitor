@@ -7,7 +7,7 @@ STRIP := $(CROSS)strip
 CFLAGS ?= -O2 -g
 LDFLAGS ?= -static
 CFLAGS += -std=gnu11 -Wall -Wextra -Wno-unused-parameter
-PROGS := build/bfbt-attach build/btprobe build/bfhci
+PROGS := build/bfbt-attach build/btprobe build/bfhci build/bfsnoop
 all: $(PROGS)
 build/%: %.c Makefile
 	@mkdir -p build

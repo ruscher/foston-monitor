@@ -3,12 +3,14 @@
  *   bfhci            mostra estado, endereço, versões e contadores
  *   bfhci up|down    liga/desliga o adaptador (HCIDEVUP/HCIDEVDOWN)
  *   bfhci scan on|off  visível e conectável / invisível (HCISETSCAN)
+ *   bfhci lp N       política de enlace padrão (comando HCI 0x080F): 1 troca de papel, 4 sniff
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -20,6 +22,7 @@
 #define HCIDEVDOWN _IOW('H', 202, int)
 #define HCIGETDEVINFO _IOR('H', 211, int)
 #define HCISETSCAN _IOW('H', 221, int)
+#define HCISETLINKPOL _IOW('H', 223, int)
 
 struct hci_dev_stats { uint32_t err_rx, err_tx, cmd_tx, evt_rx, acl_tx, acl_rx, sco_tx, sco_rx, byte_rx, byte_tx; };
 struct hci_dev_info {
@@ -42,6 +45,17 @@ int main(int argc, char **argv)
     if(argc > 1 && (!strcmp(argv[1], "up") || !strcmp(argv[1], "down"))) {
         int up = !strcmp(argv[1], "up");
         if(ioctl(s, up ? HCIDEVUP : HCIDEVDOWN, 0) < 0 && !(up && errno == EALREADY)) { perror(argv[1]); return 1; }
+    } else if(argc > 2 && !strcmp(argv[1], "lp")) {
+        /* Write Default Link Policy Settings num soquete HCI cru (o ioctl recusa com o mgmt) */
+        unsigned v = (unsigned)strtoul(argv[2], NULL, 0);
+        struct { unsigned short family, dev, channel; } a = { AF_BT, 0, 0 };
+        unsigned char cmd[] = { 0x01, 0x0f, 0x08, 0x02, (unsigned char)v, (unsigned char)(v >> 8) };
+        int r = socket(AF_BT, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
+        if(r < 0 || bind(r, (struct sockaddr *)&a, sizeof a) < 0 || write(r, cmd, sizeof cmd) != (ssize_t)sizeof cmd) {
+            perror("Write Default Link Policy");
+            return 1;
+        }
+        close(r);
     } else if(argc > 2 && !strcmp(argv[1], "scan")) {
         struct hci_dev_req r = { 0, !strcmp(argv[2], "on") ? 3u : 0u };   /* SCAN_INQUIRY | SCAN_PAGE */
         if(ioctl(s, HCISETSCAN, &r) < 0) { perror("HCISETSCAN"); return 1; }
@@ -53,6 +67,7 @@ int main(int argc, char **argv)
     const uint8_t *a = di.bdaddr;
     printf("%s: %s%s%s  endereço %02X:%02X:%02X:%02X:%02X:%02X\n", di.name, di.flags & 1 ? "LIGADO" : "desligado",
            di.flags & (1 << 4) ? " visível" : "", di.flags & (1 << 3) ? " conectável" : "", a[5], a[4], a[3], a[2], a[1], a[0]);
+    printf("  política de enlace 0x%x (1 troca de papel, 4 sniff)\n", di.link_policy);
     printf("  ACL %u x %u, SCO %u x %u; comandos %u, eventos %u, ACL tx/rx %u/%u, erros rx/tx %u/%u\n", di.acl_mtu, di.acl_pkts,
            di.sco_mtu, di.sco_pkts, di.stat.cmd_tx, di.stat.evt_rx, di.stat.acl_tx, di.stat.acl_rx, di.stat.err_rx, di.stat.err_tx);
     close(s);

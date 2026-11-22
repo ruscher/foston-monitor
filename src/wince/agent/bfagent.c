@@ -31,8 +31,8 @@
 #include "boot.h"
 #include "sha256.h"
 
-#define AGENT_VERSION "bfagent 0.6.1"
-#define AGENT_VERSION_W L"bfagent 0.6.1"
+#define AGENT_VERSION "bfagent 0.6.2"
+#define AGENT_VERSION_W L"bfagent 0.6.2"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 
@@ -1787,61 +1787,65 @@ static void apply_sd_update(void)
         return;
     }
 
-    /* copy to <name>.new and check every copy before touching the installed files */
+    /* Install one file at a time (agent 0.6.2). The internal flash (\ResidentFlash, 12 MB)
+     * cannot hold two full versions side by side (0.3.0 with Bluetooth: 5.8 MB), so:
+     *  - leftovers (<name>.old from agents < 0.6.2, <name>.new) are deleted first;
+     *  - the installed SHA256SUMS is deleted before touching anything: autoboot needs it, so a
+     *    half-installed set is never booted;
+     *  - each file: skip it if it already is the new one (resuming), else copy to <name>.new,
+     *    check, replace; if there is no room for the .new, delete the installed file and copy
+     *    straight over it, checking again;
+     *  - SHA256SUMS is written last. On any failure the update stays on the card (it is not
+     *    retired) and the next boot carries on; the previous version is kept on the card
+     *    (BigFoston/recuperacao), not in the internal flash. */
     CreateDirectoryW(AUTOBOOT_DIR, NULL);
     CreateDirectoryW(LINUX_DIR, NULL);
-    /* the previous version (<name>.old) is never booted and the swap below deletes it anyway:
-     * deleting it first leaves room for the new files (the 0.3.0 Bluetooth initrd, 4.9 MB, did
-     * not fit next to the installed copy and the .old one). The installed version stays
-     * untouched until every new file is checked. */
     for (i = 0; i < UPD_FILES; i++) {
-        _snwprintf(old, MAX_PATH - 1, L"%ls\%ls.old", LINUX_DIR, upd_names[i]);
+        _snwprintf(old, MAX_PATH - 1, L"%ls\\%ls.old", LINUX_DIR, upd_names[i]);
+        old[MAX_PATH - 1] = 0;
+        DeleteFileW(old);
+        _snwprintf(old, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
         old[MAX_PATH - 1] = 0;
         DeleteFileW(old);
     }
+    DeleteFileW(LINUX_DIR L"\\SHA256SUMS");
     for (i = 0; i < UPD_FILES; i++) {
+        WCHAR tmp[MAX_PATH];
+        DWORD err;
         STATUS(L"Atualizacao do BigFoston: gravando %ls na memoria interna...", upd_names[i]);
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
         _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls", UPDATE_DIR, upd_names[i]);
-        _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
-        src[MAX_PATH - 1] = dst[MAX_PATH - 1] = 0;
-        if (!CopyFileW(src, dst, FALSE) || !file_sha256(dst, upd_max[i], have, NULL) || strcmp(have, want[i])) {
-            int j;
-            DWORD err = GetLastError();           /* before the cleanup below changes it */
-            for (j = 0; j <= i; j++) {
-                _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[j]);
-                DeleteFileW(dst);
-            }
-            _snprintf(why, sizeof(why) - 1,
-                      "a copia de %ls na memoria interna nao confere (erro %lu)",
-                      upd_names[i], (unsigned long)err);
-            why[sizeof(why) - 1] = 0;
-            update_reject(why);
-            return;
-        }
-    }
-    /* swap: <name> -> <name>.old, <name>.new -> <name> */
-    for (i = 0; i < UPD_FILES; i++) {
         _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls", LINUX_DIR, upd_names[i]);
-        _snwprintf(old, MAX_PATH - 1, L"%ls\\%ls.old", LINUX_DIR, upd_names[i]);
-        _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
-        dst[MAX_PATH - 1] = old[MAX_PATH - 1] = src[MAX_PATH - 1] = 0;
-        DeleteFileW(old);
-        if (file_exists(dst) && !MoveFileW(dst, old))
+        _snwprintf(tmp, MAX_PATH - 1, L"%ls\\%ls.new", LINUX_DIR, upd_names[i]);
+        src[MAX_PATH - 1] = dst[MAX_PATH - 1] = tmp[MAX_PATH - 1] = 0;
+        if (file_sha256(dst, upd_max[i], have, NULL) && !strcmp(have, want[i]))
+            continue;                               /* already the new one (resumed update) */
+        if (CopyFileW(src, tmp, FALSE) && file_sha256(tmp, upd_max[i], have, NULL) && !strcmp(have, want[i])) {
             DeleteFileW(dst);
-        if (!MoveFileW(src, dst)) {
-            upd_log("ERRO ao instalar %ls (erro %lu): o boot automatico fica desligado ate reinstalar pelo PC",
-                    upd_names[i], (unsigned long)GetLastError());
-            update_retire(UPDATE_DIR L".bad");
-            return;
+            if (MoveFileW(tmp, dst))
+                continue;
         }
+        DeleteFileW(tmp);                           /* no room for the copy: replace in place */
+        DeleteFileW(dst);
+        if (CopyFileW(src, dst, FALSE) && file_sha256(dst, upd_max[i], have, NULL) && !strcmp(have, want[i]))
+            continue;
+        err = GetLastError();
+        upd_log("INCOMPLETA: %ls nao foi gravado na memoria interna (erro %lu); a atualizacao fica no "
+                "cartao e continua no proximo boot", upd_names[i], (unsigned long)err);
+        STATUS(L"Atualizacao incompleta: desligue e ligue de novo (ver BigFoston\\update.log).");
+        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        Sleep(3000);
+        return;
     }
     f = _wfopen(LINUX_DIR L"\\SHA256SUMS", L"wb");
-    if (f) {
-        for (i = 0; i < UPD_FILES; i++)
-            fprintf(f, "%s  %ls\n", want[i], upd_names[i]);
-        fclose(f);
+    if (!f) {
+        upd_log("INCOMPLETA: SHA256SUMS nao foi gravado (erro %lu); a atualizacao continua no proximo boot",
+                (unsigned long)GetLastError());
+        return;
     }
+    for (i = 0; i < UPD_FILES; i++)
+        fprintf(f, "%s  %ls\n", want[i], upd_names[i]);
+    fclose(f);
     upd_log("APLICADA: zImage %lu, initrd.img %lu, fs707dc.dtb %lu bytes; zImage %.16s",
             (unsigned long)size[0], (unsigned long)size[1], (unsigned long)size[2], want[0]);
     update_retire(UPDATE_DIR L".ok");
@@ -1910,14 +1914,21 @@ static void do_autoboot(void)
     }
 }
 
+/* installed Linux complete: the three files and the SHA256SUMS written last by an update */
+static int linux_installed(void)
+{
+    return file_exists(LINUX_DIR L"\\zImage") && file_exists(LINUX_DIR L"\\initrd.img") &&
+           file_exists(LINUX_DIR L"\\fs707dc.dtb") && file_exists(LINUX_DIR L"\\SHA256SUMS");
+}
+
 static DWORD WINAPI autoboot_thread(LPVOID arg)
 {
     int left = (int)(intptr_t)arg;
     apply_sd_update();
-    if (!file_exists(LINUX_DIR L"\\zImage") || !file_exists(LINUX_DIR L"\\initrd.img") ||
-        !file_exists(LINUX_DIR L"\\fs707dc.dtb")) {
+    if (!linux_installed()) {
         InterlockedExchange(&g_autoboot, 2);
-        STATUS(L"Linux da memoria interna incompleto: ficando no Windows CE.");
+        STATUS(L"Linux da memoria interna incompleto: ficando no Windows CE. Desligue e ligue para continuar "
+               L"a atualizacao do cartao, ou copie BigFoston\\recuperacao\\linux-0.2.0 para BigFoston\\update.");
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
         return 0;
     }
@@ -1944,8 +1955,9 @@ static void autoboot_start(void)
     HANDLE t;
     if (_wcsnicmp(g_origin_dir, AUTOBOOT_DIR, wcslen(AUTOBOOT_DIR)) || GetTickCount() > 180000)
         return;
-    if (!file_exists(LINUX_DIR L"\\zImage") || !file_exists(LINUX_DIR L"\\initrd.img") ||
-        !file_exists(LINUX_DIR L"\\fs707dc.dtb"))
+    /* an update on the card is applied even when the installed set is incomplete (it may be
+     * an interrupted update, which carries on from where it stopped) */
+    if (!linux_installed() && !file_exists(UPDATE_DIR L"\\SHA256SUMS"))
         return;
     f = _wfopen(AUTOBOOT_DIR L"\\autoboot.conf", L"r");
     if (!f)
