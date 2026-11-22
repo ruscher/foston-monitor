@@ -23,7 +23,8 @@ void settings_defaults(bf_settings_t *s)
     s->lang = LANG_PT;
     s->mode = BF_MODE_DARK;
     s->palette = 0;
-    s->wallpaper = BF_WALL_LOGO;
+    s->wallpaper = BF_WALL_IMAGE;
+    snprintf(s->wall_image, sizeof s->wall_image, "%s", BF_WALL_DEFAULT_IMAGE);
     s->anim = true;
     s->sounds = true;
     s->boot_sound = false;

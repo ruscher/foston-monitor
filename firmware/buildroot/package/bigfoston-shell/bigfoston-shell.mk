@@ -21,7 +21,7 @@ define BIGFOSTON_SHELL_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/target/bigfoston-shell.stripped \
 		$(TARGET_DIR)/usr/bin/bigfoston-shell
 	mkdir -p $(TARGET_DIR)/usr/share/bigfoston
-	cp -r $(@D)/data/apps $(TARGET_DIR)/usr/share/bigfoston/
+	cp -r $(@D)/data/apps $(@D)/data/wallpapers $(TARGET_DIR)/usr/share/bigfoston/
 endef
 
 $(eval $(generic-package))

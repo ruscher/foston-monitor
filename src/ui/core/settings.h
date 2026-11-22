@@ -51,6 +51,13 @@ enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME__N };
 /* Multimídia, Livro, GPS, Arquivos, Monitor, Ajustes */
 #define BF_HOME_APPS_DEFAULT ((1u << 0) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10))
 enum { BF_WALL_PLAIN, BF_WALL_GRADIENT, BF_WALL_LOGO, BF_WALL_IMAGE, BF_WALL__N };
+/* papel de parede padrão (data/wallpapers, livre para redistribuir); no simulador, relativo
+ * a src/ui. Sem o arquivo, o tema usa o degradê com o símbolo. */
+#ifdef BIGFOSTON_TARGET
+#define BF_WALL_DEFAULT_IMAGE "/usr/share/bigfoston/wallpapers/ondas-digitais.jpg"
+#else
+#define BF_WALL_DEFAULT_IMAGE "data/wallpapers/ondas-digitais.jpg"
+#endif
 #define BF_DIM_CHOICES { 0, 1, 2, 5, 10 }
 /* o PC pela rede USB (se servir NTP), depois o NTP.br e o pool */
 #define BF_NTP_DEFAULT "192.168.7.1 a.st1.ntp.br pool.ntp.org"
