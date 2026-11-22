@@ -537,3 +537,4 @@ X(S_AP_WALL_MISSING, "ap.wall_missing", "Não abriu %s (cartão fora ou arquivo 
 X(S_GAL_PICK_WALL,  "gal.pick_wall",  "Toque numa imagem para usar como papel de parede", "Tap an image to use as wallpaper", "Toque una imagen para usarla como fondo")
 X(S_MUSIC_BT_PLAYING, "music.bt_playing", "Reproduzindo via Bluetooth", "Playing via Bluetooth", "Reproduciendo por Bluetooth")
 X(S_MUSIC_BT_TECH,  "music.bt_tech",  "Bluetooth  ·  %s  ·  SBC 44,1 kHz", "Bluetooth  ·  %s  ·  SBC 44.1 kHz", "Bluetooth  ·  %s  ·  SBC 44,1 kHz")
+X(S_MUSIC_BT_NOSET, "music.bt_noset", "O aplicativo do celular não deixa mudar isso pelo FOSTON", "The phone's app does not allow changing this from the FOSTON", "La app del móvil no permite cambiar esto desde el FOSTON")

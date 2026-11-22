@@ -25,6 +25,7 @@
 #include "../core/btaudio.h"
 #include "../widgets/dialog.h"
 #include "../widgets/volpop.h"
+#include "../widgets/bottombar.h"
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,6 +55,7 @@ static bool src_bt;
 static bt_info_t btc;              /* estado do agente, relido no máximo a cada 500 ms */
 static uint32_t btc_at;
 static bool bt_was_live;
+static char bt_pending[16];        /* comando que o celular pode recusar (repeat, shuffle) */
 
 static const bt_info_t *bt_now(void)
 {
@@ -265,6 +267,13 @@ static void src_click(lv_event_t *e)
 static void shuffle_click(lv_event_t *e)
 {
     (void)e;
+    if(src_bt) {
+        const bt_info_t *b = bt_now();
+        bt_cmd("shuffle %s", strcmp(b->pl_shuffle, "off") ? "off" : "alltracks");
+        snprintf(bt_pending, sizeof bt_pending, "shuffle");
+        btc_at = 0;
+        return;
+    }
     settings()->music_shuffle = !settings()->music_shuffle;
     settings_save();
     ui_refresh_track();
@@ -273,6 +282,13 @@ static void shuffle_click(lv_event_t *e)
 static void repeat_click(lv_event_t *e)
 {
     (void)e;
+    if(src_bt) {                           /* desligado -> todas -> uma -> desligado */
+        const char *r = bt_now()->pl_repeat;
+        bt_cmd("repeat %s", !strcmp(r, "off") ? "alltracks" : !strcmp(r, "alltracks") ? "singletrack" : "off");
+        snprintf(bt_pending, sizeof bt_pending, "repeat");
+        btc_at = 0;
+        return;
+    }
     settings()->music_repeat = (settings()->music_repeat + 1) % 3;
     settings_save();
     ui_refresh_track();
@@ -524,9 +540,17 @@ static void refresh_view_bt(view_t *vw)
     if(b->pl_title[0]) set_text(vw->title, b->pl_title);
     else set_text(vw->title, tr(S_MUSIC_BT_PLAYING));
     const char *ar = b->pl_artist[0] ? b->pl_artist : dev;
-    if(vw->album) {
+    if(vw->album) {                        /* tela cheia: álbum · gênero · faixa N de M */
         set_text(vw->artist, ar);
-        set_text(vw->album, b->pl_album);
+        char al[220] = "";
+        size_t o = 0;
+        if(b->pl_album[0]) o += (size_t)snprintf(al, sizeof al, "%s", b->pl_album);
+        if(b->pl_genre[0] && o < sizeof al) o += (size_t)snprintf(al + o, sizeof al - o, "%s%s", o ? "  ·  " : "", b->pl_genre);
+        if(b->pl_trackno && o < sizeof al) {
+            if(b->pl_ntracks) snprintf(al + o, sizeof al - o, "%s%u / %u", o ? "  ·  " : "", b->pl_trackno, b->pl_ntracks);
+            else snprintf(al + o, sizeof al - o, "%s%u", o ? "  ·  " : "", b->pl_trackno);
+        }
+        set_text(vw->album, al);
     }
     else if(b->pl_album[0] && strcmp(b->pl_album, b->pl_title)) {
         snprintf(buf, sizeof buf, "%.140s  —  %.95s", ar, b->pl_album);
@@ -534,23 +558,31 @@ static void refresh_view_bt(view_t *vw)
     }
     else set_text(vw->artist, ar);
     if(vw->tech) {
-        snprintf(buf, sizeof buf, tr(S_MUSIC_BT_TECH), dev);
+        int n = snprintf(buf, sizeof buf, tr(S_MUSIC_BT_TECH), dev);
+        if(b->pl_trackno && n > 0 && n < (int)sizeof buf) {
+            if(b->pl_ntracks) snprintf(buf + n, sizeof buf - (size_t)n, "  ·  %u / %u", b->pl_trackno, b->pl_ntracks);
+            else snprintf(buf + n, sizeof buf - (size_t)n, "  ·  %u", b->pl_trackno);
+        }
         set_text(vw->tech, buf);
     }
     set_text(vw->play_lbl, !strcmp(b->pl_status, "playing") ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
+    lv_obj_set_state(vw->shuffle, LV_STATE_CHECKED, b->pl_shuffle[0] && strcmp(b->pl_shuffle, "off"));
+    lv_obj_set_state(vw->repeat, LV_STATE_CHECKED, b->pl_repeat[0] && strcmp(b->pl_repeat, "off"));
+    if(!strcmp(b->pl_repeat, "singletrack")) lv_obj_remove_flag(vw->badge, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(vw->badge, LV_OBJ_FLAG_HIDDEN);
     int mx = b->pl_dur > 1000 ? (int)(b->pl_dur / 1000) : 1;
     if(lv_slider_get_max_value(vw->slider) != mx) lv_slider_set_range(vw->slider, 0, mx);
     fmt_time(buf, sizeof buf, (int)b->pl_dur);
     set_text(vw->total, b->pl_dur ? buf : "--:--");
-    lv_obj_add_flag(vw->badge, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void refresh_view(view_t *vw)
 {
     if(!vw->title) return;
     /* botões que só valem para o cartão; o da fonte só com um celular conectado */
-    enable_obj(vw->shuffle, !src_bt);
-    enable_obj(vw->repeat, !src_bt);
+    const bt_info_t *bi = bt_now();
+    enable_obj(vw->shuffle, !src_bt || bi->pl_shuffle[0]);    /* o celular informa: pode tentar */
+    enable_obj(vw->repeat, !src_bt || bi->pl_repeat[0]);
     enable_obj(vw->queue, !src_bt && n_tracks > 0);
     if(vw->src) {
         if(bt_phone() || src_bt) lv_obj_remove_flag(vw->src, LV_OBJ_FLAG_HIDDEN);
@@ -697,7 +729,12 @@ static void ui_tick(lv_timer_t *t)
     static char bt_sig[160];
     char sig[160];
     const bt_info_t *b = bt_now();
-    snprintf(sig, sizeof sig, "%d%d%.15s|%.95s|%u", src_bt, bt_phone(), b->pl_status, b->pl_title, b->pl_dur);
+    if(bt_pending[0] && !strcmp(b->res_op, bt_pending) && strcmp(b->res_state, "andamento")) {
+        if(!strcmp(b->res_state, "erro")) bottombar_toast(tr(S_MUSIC_BT_NOSET));
+        bt_pending[0] = 0;
+    }
+    snprintf(sig, sizeof sig, "%d%d%.15s|%.80s|%u|%.12s%.12s%u", src_bt, bt_phone(), b->pl_status, b->pl_title, b->pl_dur,
+             b->pl_repeat, b->pl_shuffle, b->pl_trackno);
     if(s != last || strcmp(sig, bt_sig)) {
         last = s;
         snprintf(bt_sig, sizeof bt_sig, "%s", sig);

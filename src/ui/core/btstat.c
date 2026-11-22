@@ -70,7 +70,12 @@ void bt_read(bt_info_t *b)
             s = field(s, b->pl_album, sizeof b->pl_album);
             s = field(s, t, sizeof t); b->pl_dur = (unsigned)strtoul(t, NULL, 10);
             s = field(s, t, sizeof t); b->pl_pos = (unsigned)strtoul(t, NULL, 10);
-            field(s, t, sizeof t); b->pl_pos_at = atol(t);
+            s = field(s, t, sizeof t); b->pl_pos_at = atol(t);
+            s = field(s, b->pl_repeat, sizeof b->pl_repeat);
+            s = field(s, b->pl_shuffle, sizeof b->pl_shuffle);
+            s = field(s, b->pl_genre, sizeof b->pl_genre);
+            s = field(s, t, sizeof t); b->pl_trackno = (unsigned)strtoul(t, NULL, 10);
+            field(s, t, sizeof t); b->pl_ntracks = (unsigned)strtoul(t, NULL, 10);
         } else if(!strcmp(line, "stream")) {
             b->streaming = !strcmp(v, "active");
         } else if(!strcmp(line, "result")) {

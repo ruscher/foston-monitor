@@ -10,6 +10,7 @@
  *      pair|connect|disconnect|forget AA:BB:CC:DD:EE:FF
  *      accept | reject                responde o pedido de pareamento pendente
  *      play | pause | next | prev     controla a música do celular (AVRCP)
+ *      repeat off|singletrack|alltracks | shuffle off|alltracks
  *  - ao ligar, conecta uma vez os aparelhos pareados e confiáveis (como um rádio de carro).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
@@ -110,6 +111,12 @@ static void call_done(DBusPendingCall *pc, void *ud)
 {
     const char *what = ud;
     DBusMessage *r = dbus_pending_call_steal_reply(pc);
+    if(!strcmp(what, "reconnect")) {             /* automática: não apaga o resultado do usuário */
+        if(r) dbus_message_unref(r);
+        dbus_pending_call_unref(pc);
+        dirty = 1;
+        return;
+    }
     if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
         const char *msg = NULL;
         dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
@@ -138,7 +145,7 @@ static void call_async(const char *path, const char *iface, const char *method, 
     if(dbus_connection_send_with_reply(bus, m, &pc, timeout_ms) && pc)
         dbus_pending_call_set_notify(pc, call_done, (void *)what, NULL);
     dbus_message_unref(m);
-    snprintf(last_result, sizeof last_result, "%s|andamento|", what);
+    if(strcmp(what, "reconnect")) snprintf(last_result, sizeof last_result, "%s|andamento|", what);
 }
 
 static void set_bool(const char *path, const char *iface, const char *prop, int v)
@@ -155,6 +162,25 @@ static void set_bool(const char *path, const char *iface, const char *prop, int 
     dbus_message_iter_close_container(&it, &var);
     dbus_connection_send(bus, m, NULL);
     dbus_message_unref(m);
+}
+
+/* Properties.Set de uma string, sem esperar; o resultado vai para "result=" (what) */
+static void set_string_async(const char *path, const char *iface, const char *prop, const char *v, const char *what)
+{
+    DBusMessage *m = dbus_message_new_method_call(BLUEZ, path, "org.freedesktop.DBus.Properties", "Set");
+    if(!m) return;
+    DBusMessageIter it, var;
+    dbus_message_iter_init_append(m, &it);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &iface);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &prop);
+    dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "s", &var);
+    dbus_message_iter_append_basic(&var, DBUS_TYPE_STRING, &v);
+    dbus_message_iter_close_container(&it, &var);
+    DBusPendingCall *pc = NULL;
+    if(dbus_connection_send_with_reply(bus, m, &pc, 5000) && pc)
+        dbus_pending_call_set_notify(pc, call_done, (void *)what, NULL);
+    dbus_message_unref(m);
+    snprintf(last_result, sizeof last_result, "%s|andamento|", what);
 }
 
 /* ------------------------------------------------------ agente do BlueZ */
@@ -282,6 +308,9 @@ typedef struct {
     unsigned pl_dur, pl_pos;              /* ms (AVRCP Track.Duration, Position) */
     long pl_pos_at;                       /* CLOCK_MONOTONIC (ms) da leitura da posição */
     char stream[12];                      /* MediaTransport1.State: idle, pending, active */
+    char pl_repeat[16], pl_shuffle[16];   /* AVRCP: off/singletrack/alltracks/group; "" sem suporte */
+    char pl_genre[48];
+    unsigned pl_trackno, pl_ntracks;
 } state_t;
 
 static void var_get(DBusMessageIter *var, int type, void *out)
@@ -354,6 +383,8 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
         } else {
             if(!strcmp(k, "Status")) var_str(&var, s->pl_status, sizeof s->pl_status);
             else if(!strcmp(k, "Position")) var_get(&var, DBUS_TYPE_UINT32, &s->pl_pos);
+            else if(!strcmp(k, "Repeat")) var_str(&var, s->pl_repeat, sizeof s->pl_repeat);
+            else if(!strcmp(k, "Shuffle")) var_str(&var, s->pl_shuffle, sizeof s->pl_shuffle);
             else if(!strcmp(k, "Device")) var_str(&var, s->pl_dev, sizeof s->pl_dev);
             else if(!strcmp(k, "Track") && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
                 DBusMessageIter te;
@@ -369,6 +400,9 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
                     else if(!strcmp(tk, "Artist")) var_str(&tv, s->pl_artist, sizeof s->pl_artist);
                     else if(!strcmp(tk, "Album")) var_str(&tv, s->pl_album, sizeof s->pl_album);
                     else if(!strcmp(tk, "Duration")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_dur);
+                    else if(!strcmp(tk, "Genre")) var_str(&tv, s->pl_genre, sizeof s->pl_genre);
+                    else if(!strcmp(tk, "TrackNumber")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_trackno);
+                    else if(!strcmp(tk, "NumberOfTracks")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_ntracks);
                 }
             }
         }
@@ -450,8 +484,9 @@ static void write_state(const state_t *s)
         const char *who = "";
         for(int i = 0; i < s->ndev; i++)
             if(!strncmp(s->pl_dev, s->dev[i].path, strlen(s->dev[i].path))) who = s->dev[i].name;
-        fprintf(f, "player=%s|%s|%s|%s|%s|%u|%u|%ld\n", s->pl_status, s->pl_title, s->pl_artist, who, s->pl_album,
-                s->pl_dur, s->pl_pos, s->pl_pos_at);
+        fprintf(f, "player=%s|%s|%s|%s|%s|%u|%u|%ld|%s|%s|%s|%u|%u\n", s->pl_status, s->pl_title, s->pl_artist, who,
+                s->pl_album, s->pl_dur, s->pl_pos, s->pl_pos_at, s->pl_repeat, s->pl_shuffle, s->pl_genre,
+                s->pl_trackno, s->pl_ntracks);
     }
     if(s->stream[0]) fprintf(f, "stream=%s\n", s->stream);
     if(last_result[0]) fprintf(f, "result=%s\n", last_result);
@@ -494,6 +529,13 @@ static void command(char *line)
             call_async(player_path, "org.bluez.MediaPlayer1",
                        !strcmp(line, "play") ? "Play" : !strcmp(line, "pause") ? "Pause" :
                        !strcmp(line, "next") ? "Next" : "Previous", "player", 5000, DBUS_TYPE_INVALID);
+    } else if((!strcmp(line, "repeat") || !strcmp(line, "shuffle")) && player_path[0]) {
+        /* AVRCP: repeat off|singletrack|alltracks, shuffle off|alltracks */
+        static const char *ok[] = { "off", "singletrack", "alltracks", "group", NULL };
+        for(int i = 0; ok[i]; i++)
+            if(!strcmp(arg, ok[i]))
+                set_string_async(player_path, "org.bluez.MediaPlayer1", !strcmp(line, "repeat") ? "Repeat" : "Shuffle", arg,
+                                 !strcmp(line, "repeat") ? "repeat" : "shuffle");
     } else if(valid_addr(arg)) {
         reconnect_done = 3;                       /* o usuário decide: sem reconexão automática */
         dev_path(path, sizeof path, arg);
@@ -619,7 +661,7 @@ int main(int argc, char **argv)
             reconnect_done++;
             for(int i = 0; i < st.ndev; i++)
                 if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected)
-                    call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "connect", 30000, DBUS_TYPE_INVALID);
+                    call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
         if(scan_until && now >= scan_until) {

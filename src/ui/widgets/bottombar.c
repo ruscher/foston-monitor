@@ -109,6 +109,9 @@ static void toast_done(lv_timer_t *t)
     if(toast) { lv_obj_delete(toast); toast = NULL; }
 }
 
+static void show_toast(const char *msg);
+void bottombar_toast(const char *msg) { show_toast(msg); }
+
 static void show_toast(const char *msg)
 {
     if(toast) return;

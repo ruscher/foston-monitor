@@ -26,6 +26,9 @@ typedef struct {
     unsigned pl_dur, pl_pos;          /* ms; 0 = desconhecido */
     long pl_pos_at;                   /* CLOCK_MONOTONIC (ms) em que pl_pos valia */
     bool streaming;                   /* transporte A2DP ativo (áudio chegando) */
+    char pl_repeat[16], pl_shuffle[16];   /* AVRCP: off/singletrack/alltracks; "" sem suporte */
+    char pl_genre[48];
+    unsigned pl_trackno, pl_ntracks;  /* 0 = o celular não informa */
     char res_op[16], res_state[16], res_err[96];   /* resultado do último comando */
 } bt_info_t;
 

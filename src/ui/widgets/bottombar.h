@@ -7,5 +7,6 @@ void bottombar_set_active(int scr);
 void bottombar_open_recents(void);
 void bottombar_open_power(void);   /* diálogo de energia (barra ou botão físico) */
 void bottombar_close_power(void);
+void bottombar_toast(const char *msg);   /* aviso curto acima da barra (2,5 s) */
 bool bottombar_power_is_open(void);
 #endif
