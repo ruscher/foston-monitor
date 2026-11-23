@@ -131,7 +131,7 @@ for f in netsurf/frontends/bigfoston/res/*.css netsurf/frontends/bigfoston/res/*
     cp "$f" "$D/res/"
 done
 cp netsurf/frontends/bigfoston/res/en/Messages "$D/res/Messages"
-cp "$R/src/web/frontend/res/Choices" "$D/res/Choices"
+cp "$R/src/web/frontend/res/Choices" "$R/src/web/frontend/res/Messages.pt" "$D/res/"
 if [ "$MODE" = arm ]; then
     T=$OW/target
     for f in DejaVuSans.ttf DejaVuSans-Bold.ttf DejaVuSans-Oblique.ttf DejaVuSans-BoldOblique.ttf \

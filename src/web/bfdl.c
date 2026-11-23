@@ -244,7 +244,7 @@ int main(int argc, char **argv)
         if(r == CURLE_HTTP_RETURNED_ERROR) say("E http %ld", code);
         else if(r == CURLE_PEER_FAILED_VERIFICATION || r == CURLE_SSL_CONNECT_ERROR || r == CURLE_SSL_CACERT_BADFILE) say("E tls");
         else if(r == CURLE_WRITE_ERROR) say("E gravar");
-        else say("E rede %s", curl_easy_strerror(r));
+        else say("E rede %d %s", (int)r, curl_easy_strerror(r));
         return 1;
     }
     if(total > 0 && offset + got != total) { say("E incompleto"); return 1; }

@@ -1,8 +1,11 @@
 # Limitações conhecidas
 
-- **JavaScript**: Duktape (ES5 com partes do ES2015), sem JIT, lento no ARMv6; desligado
+- **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; **sem som** (o Chrome do PC
+  fica mudo; levar o áudio pelo cabo é o próximo passo); até ~12 quadros/s; downloads
+  completos só depois de baixados no PC (não dá para pausar).
+- **Modo leve — JavaScript**: Duktape (ES5 com partes do ES2015), sem JIT, lento no ARMv6; desligado
   por padrão (menu → JavaScript). Sites que dependem dele não funcionam; para eles, o
-  navegador remoto (fase 6, não feito).
+  modo completo pelo PC ([10](10-remote-browser.md)).
 - **Vídeo e DRM**: sem `<video>`, sem EME/Widevine ([19](19-youtube.md), [20](20-streaming-drm.md)).
 - **Páginas grandes**: um artigo de 1,2 MB de HTML usa ~40 MB no motor; a memória só volta
   ao fechar o app ([26](26-benchmarks.md)). O limite de 88 MB protege o resto do sistema.
@@ -10,11 +13,14 @@
 - **Navegação privada**: não existe como modo; os cookies já ficam só na RAM e o histórico
   pode ser desligado — não é anunciado como "privado".
 - **Senhas**: não são guardadas.
-- **Páginas internas do NetSurf** (erros, certificado) ainda em inglês.
+- **Páginas internas do NetSurf**: títulos, botões e os erros de rede traduzidos
+  (`res/Messages.pt`); textos raros ainda em inglês.
 - **Download de POST**: não pode ser repetido pelo `bfdl`.
 - **WebApps**: por enquanto aparecem na página inicial do Internet, não na grade da Início
   nem no Foston Glass. São atalhos: precisam de internet e abrem no navegador.
 - **Toque**: sem pinça (tela resistiva de um ponto); zoom pelo menu.
 - **Seleção de texto e colar**: ainda não.
+- **Modo leve — sites modernos**: sem CSS grid e com JavaScript limitado; sites como g1,
+  gov.br e o próprio biglinux.com.br ficam quebrados ou vazios (use o modo completo).
 - **Sem internet própria**: depende do PC (rede USB com compartilhamento) ou, no futuro,
   do celular por Bluetooth PAN.

@@ -1,6 +1,12 @@
 # BigFoston Web — app Internet
 
 Navegador do BigFoston OS para o FOSTON FS-707DC (ARM1176 ~468 MHz, 128 MB, 800×480).
+
+Dois modos, escolhidos sozinhos:
+
+- **Completo** (padrão quando o PC está ligado): o Chrome do PC navega e o FOSTON mostra —
+  qualquer site, inclusive com JavaScript pesado e YouTube ([10](10-remote-browser.md)).
+- **Leve** (sem o PC): motor NetSurf 3.11 no próprio aparelho — sites simples.
 Branch: `feat/bigfoston-web`. Estado em 23/11/2026: **fases 1 a 4 em andamento**,
 motor rodando no aparelho, interface testada no simulador.
 
@@ -53,6 +59,7 @@ NTP (o padrão já tenta `a.st1.ntp.br` e `pool.ntp.org`).
 ## Documentos
 
 - [02 — comparação de motores](02-engine-comparison.md)
+- [10 — modo completo pelo PC](10-remote-browser.md)
 - [07 — arquitetura](07-architecture.md) · [protocolo do motor](../../src/web/frontend/protocol.md)
 - [08 — build e instalação](08-buildroot-integration.md)
 - [16 — downloads](16-download-manager.md)
@@ -60,6 +67,5 @@ NTP (o padrão já tenta `a.st1.ntp.br` e `pool.ntp.org`).
 - [26 — medições](26-benchmarks.md)
 - [28 — recuperação](28-recovery.md) · [29 — limitações conhecidas](29-known-limitations.md)
 
-Próximas fases (ainda não feitas): WebApps na grade da Início e no Foston Glass,
-navegador remoto (Chromium no PC), alocador mais rápido no motor, tradução das páginas
-internas do NetSurf, testes de compatibilidade com sites reais no aparelho.
+Próximas fases (ainda não feitas): som do modo completo no FOSTON, WebApps na grade da
+Início e no Foston Glass, alocador mais rápido no motor local.

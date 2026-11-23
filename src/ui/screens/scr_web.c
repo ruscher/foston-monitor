@@ -23,11 +23,14 @@
 #include "../core/webdata.h"
 #include "../core/webproc.h"
 #include "../core/webdl.h"
+#include "../core/webremote.h"
+#include "../widgets/dialog.h"
 #include "../widgets/kbd.h"
 #include "../widgets/page.h"
 #include "../widgets/imgview.h"
 #include "../assets/icons/bf_icons.h"
 #include <ctype.h>
+#include <stdarg.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +38,14 @@
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <errno.h>
+#include <poll.h>
+#include <signal.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
 
 #define TB_H       52
 #define KB_H       200
@@ -51,7 +62,7 @@ static int ph;                              /* altura da página (área de conte
 static char cur_url[WEB_URL_MAX], cur_title[WEB_TITLE_MAX];
 static char last_url[WEB_URL_MAX];          /* reabre ao voltar ao app (vale entre telas) */
 static char pending_go[WEB_URL_MAX];        /* pedido antes do READY */
-static bool loading, engine_ready, stopping, page_kb;
+static bool loading, engine_ready, stopping, page_kb, error_page;
 static int sec_state, zoom_pct = 100;
 static int scroll_y, extent_h;
 
@@ -63,6 +74,22 @@ static float vel_y, vel_x;                  /* px por quadro, para a inércia */
 static uint32_t t_move;
 static lv_timer_t *scroll_t, *ind_t;
 static char feat_link[WEB_URL_MAX], feat_obj[WEB_URL_MAX];
+
+static bool remote_on;                      /* modo completo: o Chromium do PC navega */
+static lv_obj_t *pc_badge;
+
+/* comando para quem está navegando: o PC (modo completo) ou o motor local */
+static void eng_send(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void eng_send(const char *fmt, ...)
+{
+    char line[WEB_URL_MAX + 512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    if(remote_on) webremote_send("%s", line);
+    else webproc_send("%s", line);
+}
 
 static void show_start(bool on);
 static void go_url(const char *url);
@@ -114,6 +141,71 @@ static bool have_route(void)
 
 static bool clock_ok(void) { return time(NULL) > 1700000000; }   /* depois de nov/2023 */
 
+/* ---------------- diagnóstico da conexão ----------------
+ * A página de erro do motor diz "não foi possível"; aqui descobrimos por quê, num
+ * processo filho (getaddrinfo e connect bloqueiam): 0 = DNS ok (o problema é o site),
+ * 1 = DNS falha mas a internet passa (DNS bloqueado), 2 = nada passa (PC sem
+ * compartilhamento ou firewall). */
+static pid_t diag_pid;
+static lv_timer_t *diag_t;
+
+static int diag_child(const char *host)
+{
+    alarm(14);
+    struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
+    if(host[0] && getaddrinfo(host, "443", &hints, &res) == 0) { freeaddrinfo(res); return 0; }
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(443) };
+    inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
+    if(fd < 0) return 2;
+    if(connect(fd, (struct sockaddr *)&a, sizeof a) == 0) return 1;
+    if(errno != EINPROGRESS) return 2;
+    struct pollfd p = { fd, POLLOUT, 0 };
+    int err = 1;
+    socklen_t l = sizeof err;
+    if(poll(&p, 1, 5000) == 1 && !getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l) && err == 0) return 1;
+    return 2;
+}
+
+static void diag_tick(lv_timer_t *t)
+{
+    (void)t;
+    int st;
+    if(diag_pid <= 0 || waitpid(diag_pid, &st, WNOHANG) != diag_pid) return;
+    diag_pid = 0;
+    lv_timer_delete(diag_t);
+    diag_t = NULL;
+    int r = WIFEXITED(st) ? WEXITSTATUS(st) : 2;
+    if(r == 1) osd_show(&bf_icon_web, 0xf5a524, tr(S_WEB_DIAG_TITLE), tr(S_WEB_DIAG_DNS));
+    else if(r == 2) osd_show(&bf_icon_web, 0xe5484d, tr(S_WEB_DIAG_TITLE), tr(S_WEB_DIAG_BLOCK));
+}
+
+static bool have_route(void);
+
+static void diag_start(const char *url)
+{
+    if(diag_pid > 0) return;
+    if(!have_route()) { osd_show(&bf_icon_web, 0xe5484d, tr(S_WEB_DIAG_TITLE), tr(S_WEB_NO_NET)); return; }
+    char host[256];
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t n = strcspn(p, "/:?#");
+    if(n >= sizeof host) n = sizeof host - 1;
+    memcpy(host, p, n);
+    host[n] = 0;
+    pid_t c = fork();
+    if(c == 0) _exit(diag_child(host));
+    if(c < 0) return;
+    diag_pid = c;
+    diag_t = lv_timer_create(diag_tick, 200, NULL);
+}
+
+static void diag_stop(void)
+{
+    if(diag_t) { lv_timer_delete(diag_t); diag_t = NULL; }
+    if(diag_pid > 0) { kill(diag_pid, SIGKILL); waitpid(diag_pid, NULL, 0); diag_pid = 0; }
+}
+
 /* ---------------- barra ---------------- */
 
 static void update_bar(void)
@@ -136,15 +228,15 @@ static void update_bar(void)
     else lv_obj_add_flag(progress, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void back_click(lv_event_t *e) { (void)e; if(start && !lv_obj_has_flag(start, LV_OBJ_FLAG_HIDDEN) && !is_about(cur_url)) { show_start(false); return; } webproc_send("BACK"); }
-static void fwd_click(lv_event_t *e) { (void)e; webproc_send("FWD"); }
+static void back_click(lv_event_t *e) { (void)e; if(start && !lv_obj_has_flag(start, LV_OBJ_FLAG_HIDDEN) && !is_about(cur_url)) { show_start(false); return; } eng_send("BACK"); }
+static void fwd_click(lv_event_t *e) { (void)e; eng_send("FWD"); }
 
 static void reload_click(lv_event_t *e)
 {
     (void)e;
-    if(loading) webproc_send("STOP");
-    else if(!webproc_running() && last_url[0]) engine_start(last_url);
-    else webproc_send("RELOAD");
+    if(loading) eng_send("STOP");
+    else if(!remote_on && !webproc_running() && last_url[0]) engine_start(last_url);
+    else eng_send("RELOAD");
 }
 
 static void star_click(lv_event_t *e)
@@ -210,19 +302,19 @@ static void caret_visible(int y, int h)
     lv_obj_get_coords(page, &a);
     int kb_top = BF_SCREEN_H - KB_H;
     int bottom = a.y1 + y + h;
-    if(bottom > kb_top - 12) webproc_send("SCROLL 0 %d", bottom - (kb_top - 12) + 40);
-    else if(a.y1 + y < a.y1) webproc_send("SCROLL 0 %d", y - 20);
+    if(bottom > kb_top - 12) eng_send("SCROLL 0 %d", bottom - (kb_top - 12) + 40);
+    else if(a.y1 + y < a.y1) eng_send("SCROLL 0 %d", y - 20);
 }
 
 static void page_kb_key(kbd_key_t k, const char *text, void *ud)
 {
     (void)ud;
     switch(k) {
-    case KBD_TEXT: webproc_send("TEXT %s", text); break;
-    case KBD_BACKSPACE: webproc_send("KEY backspace"); break;
-    case KBD_ENTER: webproc_send("KEY enter"); page_kb_hide(); break;
-    case KBD_LEFT: webproc_send("KEY left"); break;
-    case KBD_RIGHT: webproc_send("KEY right"); break;
+    case KBD_TEXT: eng_send("TEXT %s", text); break;
+    case KBD_BACKSPACE: eng_send("KEY backspace"); break;
+    case KBD_ENTER: eng_send("KEY enter"); page_kb_hide(); break;
+    case KBD_LEFT: eng_send("KEY left"); break;
+    case KBD_RIGHT: eng_send("KEY right"); break;
     case KBD_CLOSE: page_kb_hide(); break;
     }
 }
@@ -272,8 +364,8 @@ static void ctx_click(lv_event_t *e)
     ctx_close();
     switch(what) {
     case 0: go_url(l); break;
-    case 1: webproc_send("DOWNLOAD %s", l); break;
-    case 2: webproc_send("DOWNLOAD %s", o); break;
+    case 1: eng_send("DOWNLOAD %s", l); break;
+    case 2: eng_send("DOWNLOAD %s", o); break;
     case 3: if(web_mark_add(l, l)) toast(tr(S_WEB_ADDED), l); break;
     }
 }
@@ -341,16 +433,23 @@ static void on_event(const char *l, void *ud)
     }
     else if(!strncmp(l, "READY", 5)) {
         engine_ready = true;
-        if(zoom_pct != 100) webproc_send("ZOOM %d", zoom_pct);
-        if(pending_go[0]) { webproc_send("GO %s", pending_go); pending_go[0] = 0; }
+        if(zoom_pct != 100) eng_send("ZOOM %d", zoom_pct);
+        if(pending_go[0]) { eng_send("GO %s", pending_go); pending_go[0] = 0; }
     }
     else if(!strncmp(l, "URL ", 4)) {
         snprintf(cur_url, sizeof cur_url, "%s", l + 4);
         if(!is_about(cur_url)) {
             snprintf(last_url, sizeof last_url, "%s", cur_url);
+            webremote_set_start_url(cur_url);
             show_start(false);
         }
         update_bar();
+    }
+    else if(!strncmp(l, "ERRPAGE ", 8)) {
+        /* página de erro de rede do motor: descobre a causa (rede, DNS ou o site) */
+        if((!strncmp(l + 8, "fetcherror", 10) || !strncmp(l + 8, "timeout", 7)) && !strncasecmp(cur_url, "http", 4))
+            diag_start(cur_url);
+        error_page = true;
     }
     else if(!strncmp(l, "TITLE ", 6)) {
         snprintf(cur_title, sizeof cur_title, "%s", l + 6);
@@ -358,7 +457,8 @@ static void on_event(const char *l, void *ud)
     }
     else if(!strncmp(l, "LOAD ", 5)) {
         loading = l[5] == '1';
-        if(!loading && !is_about(cur_url)) web_history_add(cur_title, cur_url);
+        if(loading) error_page = false;
+        else if(!is_about(cur_url) && !error_page) web_history_add(cur_title, cur_url);
         update_bar();
     }
     else if(!strncmp(l, "NAV ", 4) && sscanf(l + 4, "%d %d", &a, &b) == 2) {
@@ -402,6 +502,7 @@ static void on_event(const char *l, void *ud)
 
 static void engine_start(const char *url)
 {
+    if(remote_on) return;                         /* o PC está navegando */
     notice_hide();
     if(!webproc_available()) { show_notice(tr(S_WEB_NO_ENGINE), false); return; }
     webproc_opts_t o = { BF_SCREEN_W, ph, settings()->web_js, !settings()->web_no_images, NULL };
@@ -412,6 +513,52 @@ static void engine_start(const char *url)
     if(url && *url) snprintf(pending_go, sizeof pending_go, "%s", url);
     if(!webproc_start(&o, on_event, NULL, err, sizeof err)) { show_notice(err, true); return; }
     if(page) lv_image_set_src(page, webproc_image());
+}
+
+/* ---------------- modo completo (Chromium do PC) ---------------- */
+
+static void pair_answer(int button, void *ud)
+{
+    (void)ud;
+    webremote_pair_answer(button == 0);
+}
+
+static void on_remote(const char *l, void *ud)
+{
+    if(!strncmp(l, "PAIR ", 5)) {
+        const char *b[2] = { tr(S_WEB_PC_ALLOW), tr(S_WEB_CANCEL) };
+        char body[300];
+        snprintf(body, sizeof body, tr(S_WEB_PC_PAIR_BODY), l + 5);
+        dialog_open(LV_SYMBOL_USB, lv_color_hex(C_WEB), tr(S_WEB_PC_PAIR), body, b, 2, 0, -1, pair_answer, NULL);
+        return;
+    }
+    if(!strncmp(l, "REMOTE 1", 8)) {
+        remote_on = true;
+        stopping = true;
+        webproc_stop();                               /* a RAM do motor local fica livre */
+        engine_ready = true;
+        notice_hide();
+        page_kb_hide();
+        if(page) lv_image_set_src(page, webremote_image());
+        if(pc_badge) lv_obj_remove_flag(pc_badge, LV_OBJ_FLAG_HIDDEN);
+        /* o PC abre a última página (http/https); sem ela, a página inicial */
+        if(strncasecmp(last_url, "http", 4)) { cur_url[0] = 0; sec_state = 0; update_bar(); show_start(true); }
+        toast(tr(S_WEB_PC_ON), l[8] ? l + 9 : NULL);
+        return;
+    }
+    if(!strncmp(l, "REMOTE 0", 8)) {
+        remote_on = false;
+        loading = false;
+        page_kb_hide();
+        if(pc_badge) lv_obj_add_flag(pc_badge, LV_OBJ_FLAG_HIDDEN);
+        if(root) {
+            toast(tr(S_WEB_PC_OFF), NULL);
+            update_bar();
+            engine_start(last_url[0] ? last_url : NULL);   /* continua no motor local */
+        }
+        return;
+    }
+    if(remote_on) on_event(l, ud);
 }
 
 static void engine_stop(void)
@@ -429,11 +576,14 @@ static void go_url(const char *url)
     if(net && !have_route()) toast(tr(S_WEB_NO_NET), NULL);
     else if(!strncasecmp(url, "https:", 6) && !clock_ok()) toast(tr(S_WEB_CLOCK), NULL);
     panel_close();
-    show_start(false);
+    /* a página inicial some quando a página nova chega (evento URL): se o endereço for
+     * um download, ela continua na tela */
     snprintf(last_url, sizeof last_url, "%s", url);
+    webremote_set_start_url(url);
+    if(remote_on) { eng_send("GO %s", url); return; }
     if(!webproc_running()) { engine_start(url); return; }
     if(!engine_ready) { snprintf(pending_go, sizeof pending_go, "%s", url); return; }
-    webproc_send("GO %s", url);
+    eng_send("GO %s", url);
 }
 
 /* ---------------- toque na página ---------------- */
@@ -459,7 +609,7 @@ static void scroll_tick(lv_timer_t *t)
         vel_y *= 0.92f;
     }
     if(acc_x || acc_y) {
-        webproc_send("SCROLL %d %d", acc_x, acc_y);
+        eng_send("SCROLL %d %d", acc_x, acc_y);
         acc_x = acc_y = 0;
     }
 }
@@ -497,11 +647,11 @@ static void page_event(lv_event_t *e)
     else if(c == LV_EVENT_LONG_PRESSED) {
         if(!dragging) {
             long_sent = true;
-            webproc_send("LONG %d %d", t_start.x, t_start.y);
+            eng_send("LONG %d %d", t_start.x, t_start.y);
         }
     }
     else if(c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
-        if(!dragging && !long_sent && c == LV_EVENT_RELEASED) webproc_send("CLICK %d %d", t_start.x, t_start.y);
+        if(!dragging && !long_sent && c == LV_EVENT_RELEASED) eng_send("CLICK %d %d", t_start.x, t_start.y);
         if(dragging && lv_tick_elaps(t_move) > 80) vel_x = vel_y = 0;   /* parou antes de soltar */
         if(fabsf(vel_x) < 3) vel_x = 0;                  /* inércia só para gestos claros */
         dragging = false;
@@ -1023,8 +1173,8 @@ static void open_downloads(void)
         lv_obj_set_style_pad_column(row, BF_SP_S, 0);
         struct { int what; const char *sym; bf_str_t txt; bool show; } bt[] = {
             { 3, LV_SYMBOL_EYE_OPEN, S_WEB_OPEN, d->state == WEBDL_DONE },
-            { 0, LV_SYMBOL_PAUSE, S_WEB_PAUSE, d->state == WEBDL_RUNNING },
-            { 1, LV_SYMBOL_PLAY, S_WEB_RESUME, d->state == WEBDL_PAUSED || d->state == WEBDL_FAILED },
+            { 0, LV_SYMBOL_PAUSE, S_WEB_PAUSE, d->state == WEBDL_RUNNING && !d->via_pc },
+            { 1, LV_SYMBOL_PLAY, S_WEB_RESUME, (d->state == WEBDL_PAUSED || d->state == WEBDL_FAILED) && !d->via_pc },
             { 2, LV_SYMBOL_CLOSE, S_WEB_CANCEL, d->state != WEBDL_DONE },
         };
         for(size_t k = 0; k < sizeof bt / sizeof bt[0]; k++) {
@@ -1092,7 +1242,7 @@ static void zoom_click(lv_event_t *e)
     zoom_pct = z;
     settings()->web_zoom = z;
     settings_save();
-    webproc_send("ZOOM %d", z);
+    eng_send("ZOOM %d", z);
     lv_async_call((lv_async_cb_t)open_menu, NULL);
 }
 
@@ -1100,10 +1250,21 @@ static void opt_toggle(lv_event_t *e)
 {
     int w = (int)(intptr_t)lv_event_get_user_data(e);
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    if(w == 2) {                                      /* modo completo pelo PC */
+        settings()->web_pc = on;
+        settings_save();
+        if(on) webremote_listen(BF_SCREEN_W, ph, on_remote, NULL);
+        else {
+            bool was = remote_on;
+            webremote_stop();
+            if(was) on_remote("REMOTE 0", NULL);
+        }
+        return;
+    }
     if(w == 0) settings()->web_no_images = on;
     else settings()->web_js = on;
     settings_save();
-    restart_engine();                                 /* opções do motor valem ao iniciar */
+    if(!remote_on) restart_engine();                  /* opções do motor local valem ao iniciar */
 }
 
 static void open_menu(void)
@@ -1139,9 +1300,12 @@ static void open_menu(void)
     lv_obj_add_event_cb(b, zoom_click, LV_EVENT_CLICKED, (void *)1);
     page_switch_row(panel, tr(S_WEB_SAVE_DATA), settings()->web_no_images, opt_toggle, (void *)0);
     page_switch_row(panel, tr(S_WEB_JS), settings()->web_js, opt_toggle, (void *)1);
+    page_switch_row(panel, tr(S_WEB_PC_MODE), settings()->web_pc, opt_toggle, (void *)2);
+    panel_row(LV_SYMBOL_USB, tr(S_WEB_PC_STATUS), remote_on ? tr(S_WEB_PC_LINKED) : settings()->web_pc ? tr(S_WEB_PC_WAITING) : "-", NULL, NULL);
     panel_row(BF_SYMBOL_SEARCH, tr(S_WEB_ENGINE), web_search_name(settings()->web_search), menu_pick, (void *)5);
     char mem[32];
     snprintf(mem, sizeof mem, "%ld MB", (webproc_rss_kb() + 512) / 1024);
+    if(remote_on) snprintf(mem, sizeof mem, "%s", tr(S_WEB_PC_LINKED));
     panel_row(BF_SYMBOL_HDD, tr(S_WEB_MEMORY), webproc_running() ? mem : "-", NULL, NULL);
     panel_row(BF_SYMBOL_INFO, tr(S_WEB_ABOUT), "NetSurf 3.11", menu_pick, (void *)6);
 }
@@ -1203,6 +1367,13 @@ static void create(lv_obj_t *parent, int arg)
     addr_lbl = bf_label(addr_btn, "", BF_FONT_M, p->text);
     lv_label_set_long_mode(addr_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(addr_lbl, 1);
+    pc_badge = bf_label(toolbar, "PC", BF_FONT_S, lv_color_white());
+    lv_obj_set_style_bg_color(pc_badge, lv_color_hex(0x2ec27e), 0);
+    lv_obj_set_style_bg_opa(pc_badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(pc_badge, 8, 0);
+    lv_obj_set_style_pad_hor(pc_badge, 6, 0);
+    lv_obj_set_style_pad_ver(pc_badge, 2, 0);
+    lv_obj_add_flag(pc_badge, LV_OBJ_FLAG_HIDDEN);
     b_star = tool(toolbar, BF_SYMBOL_STAR, star_click);
     tool(toolbar, LV_SYMBOL_BARS, menu_click);
 
@@ -1236,6 +1407,9 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_add_flag(scroll_ind, LV_OBJ_FLAG_HIDDEN);
 
     scroll_t = lv_timer_create(scroll_tick, 30, NULL);
+    remote_on = false;
+    webremote_set_start_url(last_url);
+    if(settings()->web_pc) webremote_listen(BF_SCREEN_W, ph, on_remote, NULL);
     cur_url[0] = cur_title[0] = 0;
     sec_state = 0;
     loading = false;
@@ -1254,14 +1428,17 @@ static void destroy(void)
     if(scroll_t) { lv_timer_delete(scroll_t); scroll_t = NULL; }
     if(ind_t) { lv_timer_delete(ind_t); ind_t = NULL; }
     ctx_close();
+    diag_stop();
     page_kb_hide();
     edit_close();
     if(kb) { lv_obj_delete(kb); kb = NULL; }
     webdl_set_listener(NULL, NULL);
+    webremote_stop();
+    remote_on = false;
     engine_stop();                                    /* a RAM volta para o resto do sistema */
     web_data_flush();
     root = toolbar = b_back = b_fwd = b_reload = b_star = addr_btn = addr_lbl = addr_lock = NULL;
-    progress = page = start = panel = edit_row = edit_ta = edit_sugg = notice = scroll_ind = NULL;
+    progress = page = start = panel = edit_row = edit_ta = edit_sugg = notice = scroll_ind = pc_badge = NULL;
     page_kb = false;
 }
 
@@ -1277,7 +1454,11 @@ void scr_web_demo(const char *what)
     else if(!strcmp(what, "+edit")) edit_open();
     else if(!strcmp(what, "+close")) { panel_close(); edit_close(); }
     else if(!strncmp(what, "+type ", 6)) { if(edit_ta) { edit_fresh = false; edit_set_text(what + 6); } }
-    else if(!strncmp(what, "+scroll ", 8)) webproc_send("SCROLL 0 %d", atoi(what + 8));
+    else if(!strncmp(what, "+scroll ", 8)) eng_send("SCROLL 0 %d", atoi(what + 8));
+    else if(!strncmp(what, "+click ", 7)) eng_send("CLICK %s", what + 7);       /* coordenadas da página */
+    else if(!strncmp(what, "+key ", 5)) eng_send("KEY %s", what + 5);
+    else if(!strncmp(what, "+text ", 6)) eng_send("TEXT %s", what + 6);
+    else if(!strcmp(what, "+back")) eng_send("BACK");
     else if(!strncmp(what, "+mark ", 6) || !strncmp(what, "+app ", 5)) {   /* "+mark título\turl" */
         char t[WEB_URL_MAX + WEB_TITLE_MAX];
         snprintf(t, sizeof t, "%s", what + (what[1] == 'm' ? 6 : 5));

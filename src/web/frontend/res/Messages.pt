@@ -1,0 +1,60 @@
+# BigFoston Web: textos do NetSurf em português (carregado depois do inglês; a última
+# definição vale). Formato do NetSurf: chave:texto (os %s são preenchidos pelo motor).
+FetchErrorTitle:Não foi possível abrir a página
+FetchErrorDescription:Ocorreu um erro ao conectar a %s
+TimeoutTitle:A conexão demorou demais
+TimeoutDescription:Não foi possível conectar a %s. O site pode estar fora do ar ou ocupado demais para responder.
+PrivacyTitle:Conexão não segura
+PrivacyDescription:Houve um problema de segurança na comunicação com %s. Pode ser um erro de configuração do site ou uma tentativa de roubar informações (senhas, mensagens ou cartões). Se o relógio do aparelho estiver errado, acerte a hora e tente de novo.
+ViewCertificates:Ver o certificado
+ViewCertificatesNotPossible:As informações do certificado não estão disponíveis
+Backtosafety:Voltar com segurança
+Backtoprevious:Voltar
+Proceed:Continuar assim mesmo
+TryAgain:Tentar de novo
+LoginTitle:O site pede usuário e senha
+LoginDescription:O site %s (área "%s") pede usuário e senha para continuar.
+LoginAgainDescription:O usuário ou a senha não foram aceitos por %s (área "%s"). Tente de novo.
+Username:Usuário
+Password:Senha
+Login:Entrar
+Cancel:Cancelar
+Loading:Carregando
+Fetching:Baixando
+Processing:Processando
+Done:Pronto
+Redirecting:Redirecionando...
+Formatting:Formatando
+NoTitle:<Sem título>
+Form_Submit:Enviar
+Form_Reset:Limpar
+Form_Many:(Vários)
+Form_Drop:Toque para escolher um arquivo
+FormSubmit:Enviar o formulário para %s
+FormSelect:Toque para escolher
+SelectClose:Toque para fechar a lista
+Selecting:Escolhendo
+BadRedirect:Endereço de redirecionamento inválido
+FetchFailed:Não foi possível baixar o documento
+MiscError:Ocorreu um erro inesperado:
+NoMemory:A memória do navegador acabou. Feche a página e tente uma mais leve.
+UnacceptableType:O navegador não abre este tipo de conteúdo
+# motivos vindos da libcurl (curl_easy_strerror); a chave é o texto em inglês
+Could not resolve hostname:O nome do site não foi encontrado (DNS). Confira a internet: o PC precisa compartilhar a conexão pela rede USB e o firewall dele precisa liberar o DNS.
+Could not connect to server:Não foi possível conectar ao servidor. Sem internet, o site recusou a conexão ou um firewall bloqueia o caminho.
+Timeout was reached:A conexão demorou demais para responder.
+SSL connect error:Falha ao iniciar a conexão segura (HTTPS) com o site.
+Failure when receiving data from the peer:A conexão caiu enquanto a página chegava.
+Failed sending data to the peer:A conexão caiu enquanto o pedido era enviado.
+Server returned nothing (no headers, no data):O servidor não respondeu nada.
+SSL peer certificate or SSH remote key was not OK:O certificado do site não é válido.
+Number of redirects hit maximum amount:O site redirecionou vezes demais (laço de redirecionamento).
+Weird server reply:O servidor respondeu de um jeito inválido.
+Transferred a partial file:A página chegou incompleta.
+Unsupported protocol:Tipo de endereço não suportado.
+URL using bad/illegal format or missing URL:Endereço inválido.
+Problem with the SSL CA cert (path? access rights?):Os certificados do navegador não foram encontrados (res/ca-bundle.crt).
+Out of memory:A memória do navegador acabou.
+Unrecognized or bad HTTP Content or Transfer-Encoding:O site mandou a página num formato que o navegador não entende.
+Not2xx:O servidor respondeu com um erro.
+SSLError:O navegador não conseguiu confirmar a autenticidade do certificado do site. Veja os detalhes abaixo.

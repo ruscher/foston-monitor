@@ -13,6 +13,7 @@
 #include "clock.h"
 #include "devwatch.h"
 #include "powerkey.h"
+#include "ctl.h"
 #include "../widgets/topbar.h"
 #include "fmstat.h"
 #include "../widgets/bottombar.h"
@@ -131,6 +132,7 @@ void app_init(lv_display_t *d)
     fx_init();
     devwatch_init();
     powerkey_init();
+    ctl_init();
     fx_sound(FX_STARTUP);
 }
 

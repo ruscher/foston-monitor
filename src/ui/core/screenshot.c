@@ -26,6 +26,7 @@ int screenshot_run(const char *dir)
 #include "../screens/screens.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
+#include "webremote.h"
 #include "lodepng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -459,6 +460,14 @@ int screenshot_run(const char *dir)
         scr_web_demo("+close");
         scr_web_demo("+edit"); scr_web_demo("+type wiki"); pump(200); shot("47e-internet-endereco");
         scr_web_demo("+close");
+        if(getenv("BIGFOSTON_SHOT_PC")) {            /* modo completo: tools/bigfoston/bfweb-pc.py --host 127.0.0.1 */
+            for(int k = 0; k < 300 && !webremote_active(); k++) pump(100);
+            shot("48-internet-pc-ligado");
+            scr_web_demo("https://www.biglinux.com.br/pt-br/"); pump(9000); shot("48a-internet-pc-biglinux");
+            scr_web_demo("+scroll 600"); pump(2500);                    shot("48b-internet-pc-rolagem");
+            scr_web_demo("https://g1.globo.com"); pump(12000);          shot("48c-internet-pc-g1");
+            scr_web_demo("https://www.gov.br"); pump(10000);            shot("48d-internet-pc-govbr");
+        }
         scr_web_demo("+app BigLinux\thttps://www.biglinux.com.br");
         scr_web_demo("+start"); pump(100);          shot("47g-internet-webapps");
         go(SCR_HOME, HOME_ARG_APPS); pump(600);

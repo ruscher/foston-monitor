@@ -40,6 +40,7 @@ typedef struct {
     bool web_no_images; /* Internet: economizar dados (sem imagens) */
     int  web_search;    /* Internet: mecanismo de pesquisa (core/webdata.c) */
     int  web_zoom;      /* Internet: zoom em % (50..200) */
+    bool web_pc;        /* Internet: navegação completa pelo Chromium do PC (bfweb-pc.py) */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=BigFoston Web (PC)
+Comment=Navegação completa no app Internet do FOSTON pelo Chrome deste PC
+Exec=/usr/bin/python3 -I /usr/share/big-screen-monitor-display/bigfoston-web-pc.py
+Icon=big-screen-monitor-display
+NoDisplay=true
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
+X-KDE-autostart-phase=2

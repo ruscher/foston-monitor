@@ -35,6 +35,7 @@ A memória compartilhada (fd ou arquivo) tem `L*A*2` bytes, RGB565, linha a linh
 | `R x0 y0 x1 y1` | região pronta na memória compartilhada |
 | `URL u`, `TITLE t`, `STATUS s` | da janela ativa |
 | `LOAD 1` / `LOAD 0` | começou / terminou de carregar |
+| `ERRPAGE tipo` | a página mostrada é interna de erro (`fetcherror`, `timeout`, `privacy`, `auth`), antes do `LOAD 0` |
 | `NAV voltar avançar` | 0/1 |
 | `SEC n` | estado de segurança (6 = HTTPS ok, 3 = HTTP, 4/5 = HTTPS com problemas) |
 | `SCROLL x y largura altura` | posição e tamanho da página |

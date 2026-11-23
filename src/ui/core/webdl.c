@@ -35,6 +35,9 @@ typedef struct {
     char buf[512];
     size_t len;
     bool pausing, cancelling;
+    FILE *out;                       /* via PC: o .part aberto */
+    int pc_id;
+    uint32_t last_note;
 } job_t;
 
 static job_t jobs[MAX_DL];
@@ -401,10 +404,115 @@ void webdl_resume(int id)
     notify();
 }
 
+static void (*pc_cancel)(int pc_id);
+void webdl_set_pc_cancel(void (*cb)(int pc_id)) { pc_cancel = cb; }
+
+static job_t *pc_job(int pc_id)
+{
+    for(int i = 0; i < n_jobs; i++) if(jobs[i].d.via_pc && jobs[i].out && jobs[i].pc_id == pc_id) return &jobs[i];
+    return NULL;
+}
+
+static void pc_close(job_t *j, bool keep)
+{
+    char part[600];
+    snprintf(part, sizeof part, "%s.part", j->d.path);
+    if(j->out) { fclose(j->out); j->out = NULL; }
+    if(!keep) unlink(part);
+}
+
+int webdl_pc_begin(int pc_id, const char *name, long long total, const char *url)
+{
+    webdl_init();
+    /* reaproveita a fila: nome único, entrada na lista; mas sem bfdl */
+    if(n_jobs == MAX_DL) {
+        int k = -1;
+        for(int i = 0; i < n_jobs && k < 0; i++) if(jobs[i].pid <= 0 && !jobs[i].out && (jobs[i].d.state == WEBDL_DONE || jobs[i].d.state == WEBDL_FAILED)) k = i;
+        if(k < 0) return -1;
+        memmove(&jobs[k], &jobs[k + 1], sizeof jobs[0] * (size_t)(n_jobs - k - 1));
+        n_jobs--;
+    }
+    char safe[200];
+    webdl_safe_name(name, safe, sizeof safe);
+    job_t *j = &jobs[n_jobs];
+    memset(j, 0, sizeof *j);
+    j->fd = -1;
+    mkdir(webdl_dir(), 0755);
+    if(!unique_path(webdl_dir(), safe, j->d.path, sizeof j->d.path)) return -1;
+    if(total > 4294967295LL) return -1;                 /* FAT32 */
+    char part[600];
+    snprintf(part, sizeof part, "%s.part", j->d.path);
+    j->out = fopen(part, "wbx");
+    if(!j->out) return -1;
+    const char *slash = strrchr(j->d.path, '/');
+    snprintf(j->d.name, sizeof j->d.name, "%s", slash ? slash + 1 : j->d.path);
+    snprintf(j->d.url, sizeof j->d.url, "%s", url ? url : "");
+    j->d.total = total;
+    j->d.id = next_id++;
+    j->d.state = WEBDL_RUNNING;
+    j->d.via_pc = true;
+    j->pc_id = pc_id;
+    n_jobs++;
+    osd_show(&bf_icon_web, 0x3584e4, tr(S_WEB_DL_START), j->d.name);
+    notify();
+    return j->d.id;
+}
+
+bool webdl_pc_data(int pc_id, const void *data, size_t n)
+{
+    job_t *j = pc_job(pc_id);
+    if(!j) return false;
+    if(fwrite(data, 1, n, j->out) != n) {
+        fail(j, errno == ENOSPC ? "cartão sem espaço" : "erro ao gravar");
+        pc_close(j, false);
+        notify();
+        return false;
+    }
+    j->d.done += (long long)n;
+    if(lv_tick_elaps(j->last_note) > 400) { j->last_note = lv_tick_get(); notify(); }
+    return true;
+}
+
+void webdl_pc_end(int pc_id, long long size)
+{
+    job_t *j = pc_job(pc_id);
+    if(!j) return;
+    bool ok = fflush(j->out) == 0 && fsync(fileno(j->out)) == 0;
+    ok = fclose(j->out) == 0 && ok;
+    j->out = NULL;
+    char part[600];
+    snprintf(part, sizeof part, "%s.part", j->d.path);
+    if(!ok || j->d.done != size) { unlink(part); fail(j, ok ? "incompleto" : "erro ao gravar"); }
+    else if(rename(part, j->d.path)) { unlink(part); fail(j, "erro ao gravar"); }
+    else {
+        j->d.state = WEBDL_DONE;
+        j->d.total = size;
+        osd_show(&bf_icon_web, 0x2ec27e, tr(S_WEB_DL_DONE), j->d.name);
+    }
+    if(j->d.state == WEBDL_FAILED) osd_show(&bf_icon_web, 0xe5484d, tr(S_WEB_DL_FAIL), j->d.error);
+    save_list();
+    notify();
+}
+
+void webdl_pc_lost(void)
+{
+    for(int i = 0; i < n_jobs; i++)
+        if(jobs[i].d.via_pc && jobs[i].out) { pc_close(&jobs[i], false); fail(&jobs[i], "o PC desligou"); }
+    notify();
+}
+
 void webdl_cancel(int id)
 {
     job_t *j = job(id);
     if(!j) return;
+    if(j->d.via_pc && j->out) {                          /* vindo do PC: para lá também */
+        if(pc_cancel) pc_cancel(j->pc_id);
+        pc_close(j, false);
+        fail(j, tr(S_WEB_CANCEL));
+        save_list();
+        notify();
+        return;
+    }
     if(j->pid > 0) { j->cancelling = true; kill(j->pid, SIGTERM); return; }
     char part[600];
     snprintf(part, sizeof part, "%s.part", j->d.path);

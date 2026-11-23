@@ -20,6 +20,7 @@ typedef struct {
     long long total, done, speed;    /* bytes; speed em B/s */
     webdl_state_t state;
     char error[96];
+    bool via_pc;                     /* baixado pelo Chrome do PC e mandado pelo cabo (modo completo) */
 } webdl_t;
 
 typedef void (*webdl_listener)(void *ud);
@@ -36,6 +37,13 @@ void webdl_resume(int id);
 void webdl_cancel(int id);                   /* apaga o .part (o arquivo pronto fica) */
 void webdl_set_listener(webdl_listener cb, void *ud);   /* muda de estado ou progresso */
 void webdl_open_file(const char *path);      /* abre no app certo; senão nos Arquivos */
+/* modo completo: o PC baixa e manda o arquivo pelo cabo (core/webremote.c).
+ * begin devolve o id local (ou -1); data grava; end confere o tamanho e renomeia. */
+int  webdl_pc_begin(int pc_id, const char *name, long long total, const char *url);
+bool webdl_pc_data(int pc_id, const void *data, size_t n);
+void webdl_pc_end(int pc_id, long long size);
+void webdl_pc_lost(void);                   /* a ligação caiu: os que vinham pelo PC falham */
+void webdl_set_pc_cancel(void (*cb)(int pc_id));
 /* testes: nome seguro para FAT32 (sem caminho, sem caracteres proibidos) */
 void webdl_safe_name(const char *in, char *out, size_t n);
 #endif

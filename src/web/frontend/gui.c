@@ -375,10 +375,17 @@ static nserror gw_event(struct gui_window *g, enum gui_window_event ev)
 		out("LOAD 1");
 		report_nav(g);
 		break;
-	case GW_EVENT_STOP_THROBBER:
+	case GW_EVENT_STOP_THROBBER: {
+		/* página interna de erro (rede, tempo, certificado, senha): o shell diagnostica */
+		struct hlcache_handle *c = browser_window_get_content(g->bw);
+		nsurl *cu = c ? hlcache_handle_get_url(c) : NULL;
+		const char *cs = cu ? nsurl_access(cu) : "";
+		if (!strncmp(cs, "about:query/", 12))
+			out("ERRPAGE %s", cs + 12);
 		out("LOAD 0");
 		report_nav(g);
 		break;
+	}
 	case GW_EVENT_NEW_CONTENT:
 		g->scrollx = g->scrolly = g->panx = g->pany = 0;
 		g->pan = false;
@@ -907,6 +914,11 @@ int main(int argc, char **argv)
 	char *messages = filepath_find(respaths, "Messages");
 	if (messages_add_from_file(messages) != NSERROR_OK)
 		fprintf(stderr, "bfweb: sem Messages\n");
+	free(messages);
+	/* português por cima do inglês (a última definição de cada chave vale) */
+	messages = filepath_find(respaths, "Messages.pt");
+	if (messages && messages_add_from_file(messages) != NSERROR_OK)
+		fprintf(stderr, "bfweb: Messages.pt inválido\n");
 	free(messages);
 
 	if (netsurf_init(NULL) != NSERROR_OK) {

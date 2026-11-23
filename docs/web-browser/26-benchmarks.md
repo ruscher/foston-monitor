@@ -46,3 +46,20 @@ Otimização planejada (fase 8): alocador próprio no `bfweb` (o do musl é o ma
 
 `netsurf-all-3.11.tar.gz` (9,08 MB): inteiro e com pausa em 2,87 MB e retomada (Range +
 If-Range com ETag) — SHA-512 idêntico ao do tarball conferido nos dois casos.
+
+## 23/11/2026 — modo completo (Chrome 157 no PC, FOSTON pela rede USB, tema Glass 800×380)
+
+| Teste | Resultado |
+|---|---|
+| g1.globo.com: comando → página na tela | ~8 s |
+| página parada (biglinux.com.br) | shell 7 % de CPU |
+| rolando o g1 | shell 14 % |
+| vídeo do YouTube tocando | shell 58 %, MemAvailable ~68 MB (o GPS seguiu rodando) |
+| antes do controle de fluxo (página animada) | shell 68 % e comandos atrasados: corrigido com um quadro por vez (`Q`) e ~12 quadros/s |
+| download de 9,08 MB pelo PC | 13 s, SHA-512 idêntico no cartão |
+
+## Motor local no FOSTON, sem internet (firewall do PC bloqueando)
+
+A página de erro explica a causa em português ("O nome do site não foi encontrado (DNS)...")
+e o app faz um diagnóstico (DNS bloqueado × nada passa × site fora do ar). Antes, a libcurl
+estava sem as mensagens de erro (`BR2_PACKAGE_LIBCURL_VERBOSE`) e tudo virava "Error".
