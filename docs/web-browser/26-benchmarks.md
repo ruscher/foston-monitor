@@ -61,5 +61,42 @@ If-Range com ETag) — SHA-512 idêntico ao do tarball conferido nos dois casos.
 ## Motor local no FOSTON, sem internet (firewall do PC bloqueando)
 
 A página de erro explica a causa em português ("O nome do site não foi encontrado (DNS)...")
-e o app faz um diagnóstico (DNS bloqueado × nada passa × site fora do ar). Antes, a libcurl
-estava sem as mensagens de erro (`BR2_PACKAGE_LIBCURL_VERBOSE`) e tudo virava "Error".
+e o app faz um diagnóstico (DNS bloqueado × nada passa × site inexistente × site fora do
+ar). Antes, a libcurl estava sem as mensagens de erro (`BR2_PACKAGE_LIBCURL_VERBOSE`) e
+tudo virava "Error".
+
+## 23/11/2026 — motor local no FOSTON com internet (PC compartilhando, ufw liberado)
+
+`web-probe.py --ssh`, motor como root sem limite (as medidas nas condições do app, usuário
+`bigfoston`, nice 10 e 88 MB, deram os mesmos tempos). Uma página após a outra no mesmo
+processo: "CPU" e VmHWM são acumulados.
+
+| Página | Carregar | CPU (acum.) | VmRSS | MemAvailable depois |
+|---|---|---|---|---|
+| example.com | 3,4 s | 2,3 s | 14,0 MB | 79,5 MB |
+| biglinux.com.br (→ www → /en/ por `<meta refresh>`) | 20,8 s | 16,5 s | 30,3 MB | 55,3 MB |
+| pt.wikipedia.org/wiki/GPS (página de 43 700 px de altura) | 80,9 s | 69,1 s | 61,5 MB | 33,5 MB |
+| lite.duckduckgo.com (busca) | 6,5 s | 74,2 s | 61,4 MB | 34,0 MB |
+| g1.globo.com (fica vazio: depende de JavaScript) | 20,2 s | 90,0 s | 49,4 MB | 44,3 MB |
+| youtube.com, motor novo (só a casca, sem vídeo) | 45,9 s | — | — | 62,7 MB |
+| youtube.com de novo, mesmo motor | 5,1 s | — | — | 64,3 MB |
+
+Isolada (motor novo), a Wikipédia leva 77 s: ~12 s baixando e ~65 s processando, com
+52 s de CPU. A versão móvel (`pt.m.wikipedia.org`) dá o mesmo. Perfil dessa carga
+(`BFWEB_PROF`, 5436 amostras de 10 ms):
+
+| Onde | % |
+|---|---|
+| NetSurf (CSS, DOM, layout) | ~48 |
+| alocador do musl (`malloc`, `free`, `mmap`/`munmap`...) | ~18 |
+| OpenSSL: AES-GCM ~3,5 · troca de chaves (`bn_mul_mont`) 1,5 · certificados (ASN.1) ~2 | ~14 |
+| `clock_gettime` (sem vDSO no ARMv6: cada chamada é uma syscall) | 2,7 |
+| FreeType | 3,3 |
+
+Nenhuma parte sozinha muda o quadro: trocar AES por ChaCha20 economizaria ~1 s, um
+alocador mais rápido talvez 6–7 s. Para páginas pesadas o caminho é o modo completo.
+
+## bfdl no FOSTON (internet própria)
+
+`netsurf-all-3.11.tar.gz` (9,08 MB) direto para o cartão: pausado (SIGTERM) com 112 KB,
+retomado e concluído em 14 s (~0,65 MB/s); SHA-512 idêntico ao do tarball conferido.

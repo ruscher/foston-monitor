@@ -145,7 +145,7 @@ static bool clock_ok(void) { return time(NULL) > 1700000000; }   /* depois de no
  * A página de erro do motor diz "não foi possível"; aqui descobrimos por quê, num
  * processo filho (getaddrinfo e connect bloqueiam): 0 = DNS ok (o problema é o site),
  * 1 = DNS falha mas a internet passa (DNS bloqueado), 2 = nada passa (PC sem
- * compartilhamento ou firewall). */
+ * compartilhamento ou firewall), 3 = o DNS respondeu que o nome não existe. */
 static pid_t diag_pid;
 static lv_timer_t *diag_t;
 
@@ -153,7 +153,13 @@ static int diag_child(const char *host)
 {
     alarm(14);
     struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM }, *res = NULL;
-    if(host[0] && getaddrinfo(host, "443", &hints, &res) == 0) { freeaddrinfo(res); return 0; }
+    if(host[0]) {
+        int g = getaddrinfo(host, "443", &hints, &res);
+        if(g == 0) { freeaddrinfo(res); return 0; }
+        /* EAI_NONAME: um servidor DNS respondeu "não existe" (o DNS funciona: endereço
+         * errado); EAI_AGAIN e os outros: ninguém respondeu */
+        if(g == EAI_NONAME) return 3;
+    }
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(443) };
     inet_pton(AF_INET, "1.1.1.1", &a.sin_addr);
@@ -178,6 +184,7 @@ static void diag_tick(lv_timer_t *t)
     int r = WIFEXITED(st) ? WEXITSTATUS(st) : 2;
     if(r == 1) osd_show(&bf_icon_web, 0xf5a524, tr(S_WEB_DIAG_TITLE), tr(S_WEB_DIAG_DNS));
     else if(r == 2) osd_show(&bf_icon_web, 0xe5484d, tr(S_WEB_DIAG_TITLE), tr(S_WEB_DIAG_BLOCK));
+    else if(r == 3) osd_show(&bf_icon_web, 0xf5a524, tr(S_WEB_DIAG_TITLE), tr(S_WEB_DIAG_NONAME));
 }
 
 static bool have_route(void);

@@ -95,15 +95,29 @@ class Engine:
                 return line
         return None
 
-    def settle(self, quiet=0.6, timeout=60):
-        """espera LOAD 0 e depois quiet segundos sem redesenho"""
+    def settle(self, quiet=2.0, timeout=180):
+        """espera a página terminar (LOAD 0) e mais quiet segundos sem começar outra.
+
+        Um <meta http-equiv=refresh> recarrega 1 s depois do fim (o NetSurf não aceita
+        menos): nesse caso espera também a página seguinte, senão o fim dela seria
+        confundido com o da próxima URL."""
         t0 = time.time()
-        self.wait_for("LOAD 1", timeout)       # o LOAD 0 da página anterior não conta
-        got = self.wait_for("LOAD 0", timeout)
-        t_load = time.time() - t0
-        for line in self.lines(quiet):
-            self.events.append(line)
-        return got is not None, t_load
+        end = t0 + timeout
+        got = None
+        if self.wait_for("LOAD 1", timeout):  # o LOAD 0 da página anterior não conta
+            while time.time() < end:
+                got = self.wait_for("LOAD 0", end - time.time())
+                if not got:
+                    break
+                t_load = time.time() - t0
+                again = None
+                for line in self.lines(quiet):
+                    self.events.append(line)
+                    if line == "LOAD 1":
+                        again = line
+                if not again:
+                    return True, t_load
+        return False, time.time() - t0
 
     def screen(self):
         if self.args.ssh:
@@ -116,7 +130,11 @@ class Engine:
     def rss_kb(self):
         if self.args.ssh:
             r = subprocess.run(["ssh", "-o", "BatchMode=yes", self.args.ssh,
-                                "grep -E 'VmRSS|VmHWM' /proc/$(pidof bfweb)/status; grep MemAvailable /proc/meminfo"],
+                                # o shell pode ter o motor do app aberto: só o desta medição
+                                "for p in $(pidof bfweb); do grep -q bfweb-probe /proc/$p/cmdline && "
+                                "grep -E 'VmRSS|VmHWM' /proc/$p/status && "
+                                "awk '{printf \"CPU: %.1f s\\n\", ($14+$15)/100}' /proc/$p/stat; done; "
+                                "grep MemAvailable /proc/meminfo"],
                                capture_output=True, text=True)
             return r.stdout.strip().replace("\n", "  ")
         with open(f"/proc/{self.p.pid}/status") as f:

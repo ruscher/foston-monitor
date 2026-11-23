@@ -40,7 +40,7 @@ MiscError:Ocorreu um erro inesperado:
 NoMemory:A memória do navegador acabou. Feche a página e tente uma mais leve.
 UnacceptableType:O navegador não abre este tipo de conteúdo
 # motivos vindos da libcurl (curl_easy_strerror); a chave é o texto em inglês
-Could not resolve hostname:O nome do site não foi encontrado (DNS). Confira a internet: o PC precisa compartilhar a conexão pela rede USB e o firewall dele precisa liberar o DNS.
+Could not resolve hostname:O nome do site não foi encontrado (DNS). Confira se o endereço está certo e se o FOSTON tem internet (o PC compartilhando a conexão pela rede USB).
 Could not connect to server:Não foi possível conectar ao servidor. Sem internet, o site recusou a conexão ou um firewall bloqueia o caminho.
 Timeout was reached:A conexão demorou demais para responder.
 SSL connect error:Falha ao iniciar a conexão segura (HTTPS) com o site.

@@ -22,5 +22,10 @@
 - **Seleção de texto e colar**: ainda não.
 - **Modo leve — sites modernos**: sem CSS grid e com JavaScript limitado; sites como g1,
   gov.br e o próprio biglinux.com.br ficam quebrados ou vazios (use o modo completo).
+- **Modo leve — páginas pesadas**: uma página grande da Wikipédia leva ~80 s e ~60 MB no
+  aparelho (ARM1176 de 468 MHz, sem NEON nem instruções de AES); páginas simples, 3–7 s
+  ([26](26-benchmarks.md)).
+- **Atualizar o pacote do navegador com o app aberto**: o motor em execução continua com as
+  bibliotecas antigas até o app ser fechado (sair para a Início basta).
 - **Sem internet própria**: depende do PC (rede USB com compartilhamento) ou, no futuro,
   do celular por Bluetooth PAN.

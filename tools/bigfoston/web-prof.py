@@ -29,6 +29,9 @@ def main():
     ap.add_argument("binary")
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--lib", action="append", default=[], help="biblioteca não strippada (ex.: libc.so do sysroot)")
+    # o bfweb pede uma amostra a cada 2 ms, mas o ITIMER_PROF anda no ritmo do relógio
+    # do kernel: no FOSTON (HZ=100) é uma amostra a cada 10 ms de CPU
+    ap.add_argument("--interval-ms", type=float, default=10.0, help="intervalo real entre amostras (FOSTON: 10; PC: 2 ou 4)")
     a = ap.parse_args()
     maps, pcs = [], []
     for l in open(a.profile):
@@ -62,7 +65,7 @@ def main():
         else:
             by_func[f"[{obj}]"] += 1
     n = len(pcs) or 1
-    print(f"{len(pcs)} amostras ({len(pcs) * 2 / 1000:.1f} s de CPU)")
+    print(f"{len(pcs)} amostras (~{len(pcs) * a.interval_ms / 1000:.1f} s de CPU)")
     for o, c in by_obj.most_common(8):
         print(f"  {100 * c / n:5.1f}%  {o}")
     print()
