@@ -31,7 +31,8 @@ liga/desliga.
 |---|---|
 | Conexão | o PC se liga ao FOSTON em `192.168.7.2:7071` (só a rede USB): nenhuma porta aberta no PC, funciona até com o firewall do PC fechado |
 | Autorização | chave aleatória do PC (`~/.config/bigfoston-web/key`); o FOSTON pergunta uma vez e guarda em `<dados>/web/pcs.tsv` |
-| Navegador | Chrome headless com perfil próprio (`~/.local/share/bigfoston-web/chrome`, separado do seu Chrome), som mudo, user-agent normal do Chrome |
+| Navegador | Chrome headless com perfil próprio (`~/.local/share/bigfoston-web/chrome`, separado do seu Chrome), user-agent normal do Chrome |
+| Som | o Chrome toca numa saída virtual do PulseAudio/PipeWire só dele ("BigFoston-Web", não sai nos alto-falantes do PC; criada ao ligar, removida ao sair); o `parec` captura PCM 32 kHz estéreo e manda por uma **segunda conexão** (`192.168.7.2:7072`), só enquanto há som. No FOSTON, uma thread de prioridade maior recebe e outra toca no `/dev/dsp`: o som não espera a interface desenhar nem os quadros de vídeo. A conexão de som só entra com um código de uso único enviado pela conexão principal já autorizada. A música do Multimídia pausa quando o som começa; a voz do Big GPS tem prioridade. Sem `pactl`/`parec` no PC, o Chrome fica mudo como antes |
 | Imagem | screencast PNG do Chrome (só quando a página muda) → RGB565 → blocos de 32×32 que mudaram, zlib → o FOSTON aplica e confirma (`Q`); um quadro por vez e no máximo ~12 por segundo |
 | Comandos | os mesmos do motor local (`GO`, `CLICK`, `SCROLL`, `KEY`, `TEXT`, `LONG`...), viram eventos do Chrome (DevTools Protocol por pipe) |
 | Teclado | um script na página avisa quando um campo de texto ganha o foco: o teclado do FOSTON abre sozinho |
@@ -41,11 +42,12 @@ liga/desliga.
 | Downloads | o Chrome baixa (com a sessão dele) e o arquivo vai pelo cabo, em blocos de 128 KB confirmados, para `BigFoston/Downloads/<nome>.part` → renomeado ao conferir o tamanho |
 | Fim | o FOSTON fecha o app → o Chrome é encerrado 2 minutos depois (a RAM do PC volta); Ctrl+C, `kill` ou fim da sessão do PC encerram o Chrome junto com o script |
 
-Protocolo: tipo (1 byte) + tamanho (u32) + conteúdo; ver `src/ui/core/webremote.c`.
+Protocolo: tipo (1 byte) + tamanho (u32) + conteúdo; ver `src/ui/core/webremote.c` e
+`src/ui/core/webaudio.c` (som).
 
 ## Testado no FOSTON (23/11/2026)
 
 biglinux.com.br (site completo, fundo animado), g1.globo.com, gov.br, DuckDuckGo completo
 (toque no campo → teclado do FOSTON abriu sozinho → "distribuição biglinux" com acento →
-Enter → resultados), YouTube (busca e vídeo tocando, imagem sem som), download de 9 MB pelo
+Enter → resultados), YouTube (busca e vídeo tocando, com som), download de 9 MB pelo
 PC (13 s, SHA-512 conferido no cartão). Números em [26](26-benchmarks.md).

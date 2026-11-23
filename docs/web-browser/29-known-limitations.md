@@ -1,8 +1,8 @@
 # Limitações conhecidas
 
-- **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; **sem som** (o Chrome do PC
-  fica mudo; levar o áudio pelo cabo é o próximo passo); até ~12 quadros/s; downloads
-  completos só depois de baixados no PC (não dá para pausar).
+- **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; até ~12 quadros/s; o som
+  chega ~0,3 s atrás da imagem do Chrome e precisa de PulseAudio/PipeWire no PC (`pactl` e
+  `parec`); downloads completos só depois de baixados no PC (não dá para pausar).
 - **Modo leve — JavaScript**: Duktape (ES5 com partes do ES2015), sem JIT, lento no ARMv6; desligado
   por padrão (menu → JavaScript). Sites que dependem dele não funcionam; para eles, o
   modo completo pelo PC ([10](10-remote-browser.md)).

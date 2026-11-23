@@ -6,6 +6,7 @@
 #include "btaudio.h"
 #include "voice.h"
 #include "player.h"
+#include "webaudio.h"
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
@@ -94,7 +95,11 @@ static void speak(const char *text)
     snprintf(pathopt, sizeof pathopt, "--path=%s", dir);
     int pfd[2];
     if(pipe(pfd)) return;
-    bool music = player_state() == PL_PLAYING;
+    /* primeiro o som do app Internet (modo completo): ao soltar o /dev/dsp ele devolve a
+     * vez ao player e ao Bluetooth, que então são suspensos abaixo */
+    webaudio_hold(true);
+    /* o player segura o /dev/dsp também pausado: suspende sempre que está carregado */
+    bool music = player_state() != PL_STOPPED;
     if(music) player_suspend(true);
     bool bt = btaudio_live();                   /* música do celular: o bluealsa-aplay solta a saída */
     if(bt) btaudio_hold(true);
@@ -109,7 +114,7 @@ static void speak(const char *text)
         _exit(127);
     }
     close(pfd[1]);
-    if(pid < 0) { close(pfd[0]); if(music) player_suspend(false); if(bt) btaudio_hold(false); return; }
+    if(pid < 0) { close(pfd[0]); if(music) player_suspend(false); if(bt) btaudio_hold(false); webaudio_hold(false); return; }
     pthread_mutex_lock(&mu);
     child = pid;
     pthread_mutex_unlock(&mu);
@@ -145,6 +150,7 @@ static void speak(const char *text)
     pthread_mutex_unlock(&mu);
     if(music) player_suspend(false);
     if(bt) btaudio_hold(false);
+    webaudio_hold(false);
 }
 
 static void *worker(void *arg)

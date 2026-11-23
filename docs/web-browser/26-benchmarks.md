@@ -100,3 +100,15 @@ alocador mais rápido talvez 6–7 s. Para páginas pesadas o caminho é o modo 
 
 `netsurf-all-3.11.tar.gz` (9,08 MB) direto para o cartão: pausado (SIGTERM) com 112 KB,
 retomado e concluído em 14 s (~0,65 MB/s); SHA-512 idêntico ao do tarball conferido.
+
+## 23/11/2026 — som no modo completo
+
+Vídeo do YouTube tocando, estado do PCM (`/proc/asound/card0/pcm0p/sub0/status`) lido a
+cada 0,1 s no FOSTON:
+
+| Versão | Resultado |
+|---|---|
+| som pela mesma conexão da imagem, lido pela interface | 60 amostras: 40 `RUNNING`, 8 `XRUN`; intervalos de até 318 ms sem pacote de som (a interface desenhando o vídeo); shell 78 % |
+| conexão própria do som, threads com nice −8 | 180 s seguidos em `RUNNING`, nenhum `XRUN`; 67 s com duas rolagens no meio, nenhum `XRUN`; shell ~61 % |
+
+Taxa: 128 KB/s (PCM 32 kHz estéreo), só enquanto há som.

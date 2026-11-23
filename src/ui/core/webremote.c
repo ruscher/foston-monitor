@@ -3,6 +3,8 @@
  * Mensagens nos dois sentidos: tipo (1 byte) + tamanho (u32 LE) + conteúdo.
  *   PC -> FOSTON: H "chave\tnome" | E linha de evento | T x y l a (u16 LE) + zlib(RGB565) | P (fim do quadro)
  *   PC -> FOSTON (downloads): F "id\tnome\ttotal\turl" | G id (u32) + bloco | Z "id\ttamanho"
+ *   FOSTON -> PC (som): U código de uso único; o PC abre a porta WEBAUDIO_PORT, manda
+ *   "código\n" e depois PCM S16_LE estéreo 32 kHz (webaudio.c), só enquanto a página toca
  *   FOSTON -> PC: A "ok L A [url]" ou "no" | K linha de comando | Q quadro aplicado | q id (bloco gravado)
  * Controle de fluxo: o PC só manda um quadro novo depois do Q do anterior. */
 #ifndef _GNU_SOURCE
@@ -12,6 +14,7 @@
 #include "settings.h"
 #include "lodepng.h"
 #include "webdl.h"
+#include "webaudio.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -97,6 +100,7 @@ static void drop_client(void)
 {
     bool was = authed;
     webdl_pc_lost();
+    webaudio_set_token(NULL);                   /* derruba a conexão de som junto */
     if(cfd >= 0) close(cfd);
     cfd = -1;
     authed = pairing = false;
@@ -111,6 +115,16 @@ static void accept_ok(void)
     pairing = false;
     snprintf(a, sizeof a, "ok %d %d %s", fw, fh, start_url);
     raw_send('A', a, (uint32_t)strlen(a));
+    /* código para a conexão de som (só este PC, só esta ligação) */
+    uint8_t r[16];
+    char tok[40];
+    int u = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if(u >= 0 && read(u, r, sizeof r) == (ssize_t)sizeof r) {
+        for(int i = 0; i < 16; i++) snprintf(tok + 2 * i, 3, "%02x", r[i]);
+        webaudio_set_token(tok);
+        raw_send('U', tok, 32);
+    }
+    if(u >= 0) close(u);
     char m[100];
     snprintf(m, sizeof m, "REMOTE 1 %s", peer_name);
     emit(m);
@@ -291,6 +305,7 @@ bool webremote_listen(int width, int height, webremote_cb ecb, void *ud)
     }
     if(listen(lfd, 1)) { close(lfd); lfd = -1; return false; }
     tick = lv_timer_create(poll_cb, 15, NULL);
+    webaudio_listen();                  /* sem a porta de som: o modo completo segue mudo */
     return true;
 }
 
@@ -299,6 +314,7 @@ void webremote_stop(void)
     if(cfd >= 0) raw_send('K', "QUIT", 4);
     cb = NULL;                          /* sem "REMOTE 0" depois de fechar o app */
     drop_client();
+    webaudio_close();
     if(tick) { lv_timer_delete(tick); tick = NULL; }
     if(lfd >= 0) close(lfd);
     lfd = -1;

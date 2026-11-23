@@ -28,6 +28,7 @@ import fcntl
 import base64
 import io
 import json
+import re
 import os
 import secrets
 import select
@@ -49,6 +50,13 @@ except ImportError as e:               # pragma: no cover
 PORT = 7071
 TILE = 32
 MIN_FRAME_S = 0.08          # no máximo ~12 quadros por segundo (o FOSTON aplica no ritmo dele)
+# som: o Chrome toca numa saída virtual só dele (não sai no PC) e o que ela recebe vai pelo
+# cabo; S16_LE estéreo 32 kHz (src/ui/core/webaudio.h), blocos de 40 ms, só enquanto há som
+SINK = "bigfoston_web"
+AUDIO_PORT = 7072           # conexão só do som (o FOSTON a lê numa thread própria)
+AUDIO_RATE, AUDIO_CH = 32000, 2
+AUDIO_CHUNK = AUDIO_RATE * AUDIO_CH * 2 * 40 // 1000
+AUDIO_HANG_S = 1.0          # depois do último som, ainda manda 1 s (pausas curtas não cortam)
 VERBOSE = False
 CONF = os.path.expanduser("~/.config/bigfoston-web")
 DATA = os.path.expanduser("~/.local/share/bigfoston-web")
@@ -108,8 +116,59 @@ def log(*a):
 
 # ------------------------------------------------------------------ Chrome (CDP por pipe)
 
+def die_with_parent():
+    """no filho: morre junto com este script, mesmo num kill -9 (PR_SET_PDEATHSIG)"""
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)
+    except (OSError, AttributeError):
+        pass
+
+
+class AudioSink:
+    """Saída virtual (PulseAudio/PipeWire) só para o Chrome do FOSTON. Sem pactl/parec,
+    ok = False e o Chrome fica mudo, como antes."""
+
+    def __init__(self):
+        self.module = None
+        self.ok = False
+        if not (shutil.which("pactl") and shutil.which("parec")):
+            return
+        try:
+            sinks = subprocess.run(["pactl", "list", "short", "sinks"], capture_output=True,
+                                   text=True, timeout=5).stdout
+            if any(line.split("\t")[1:2] == [SINK] for line in sinks.splitlines()):
+                # sobrou de uma execução anterior (kill -9): reaproveita e remove ao sair
+                mods = subprocess.run(["pactl", "list", "short", "modules"], capture_output=True,
+                                      text=True, timeout=5).stdout
+                for line in mods.splitlines():
+                    f = line.split("\t")
+                    if len(f) > 2 and f[1] == "module-null-sink" and f"sink_name={SINK}" in f[2].split():
+                        self.module = f[0]
+                self.ok = True
+                return
+            r = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={SINK}",
+                                "sink_properties=device.description=BigFoston-Web"],
+                               capture_output=True, text=True, timeout=5)
+            if r.returncode == 0 and r.stdout.strip().isdigit():
+                self.module = r.stdout.strip()
+                self.ok = True
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    def close(self):
+        if self.module:
+            try:
+                subprocess.run(["pactl", "unload-module", self.module], timeout=5,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            self.module = None
+
+
 class Chrome:
-    def __init__(self, exe, w, h):
+    def __init__(self, exe, w, h, audio=False):
+        self.audio = audio
         os.makedirs(os.path.join(DATA, "chrome"), exist_ok=True)
         r_in, w_in = os.pipe()
         r_out, w_out = os.pipe()
@@ -119,18 +178,20 @@ class Chrome:
             os.dup2(a, 3)
             os.dup2(b, 4)
             os.setsid()
-            # o Chrome morre junto com este script, mesmo num kill -9 (sem isso ficava
-            # órfão: setsid o tira do Ctrl+C do terminal)
-            try:
-                import ctypes
-                ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)   # PR_SET_PDEATHSIG
-            except (OSError, AttributeError):
-                pass
+            die_with_parent()                # sem isso ficava órfão: setsid o tira do Ctrl+C
         args = [exe, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={DATA}/chrome",
-                "--no-first-run", "--no-default-browser-check", "--mute-audio", "--hide-scrollbars",
+                "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
                 "--lang=pt-BR", "--accept-lang=pt-BR,pt,en", f"--window-size={w},{h}",
                 "--force-device-scale-factor=1", "--disable-features=Translate", "about:blank"]
-        self.p = subprocess.Popen(args, preexec_fn=child, close_fds=False,
+        env = dict(os.environ)
+        if audio:
+            env["PULSE_SINK"] = SINK         # toca na saída virtual, não nos alto-falantes do PC
+            # endereço digitado no FOSTON não conta como gesto na página: sem isto o vídeo
+            # começaria mudo (perfil novo, sem histórico de mídia)
+            args.insert(-1, "--autoplay-policy=no-user-gesture-required")
+        else:
+            args.insert(-1, "--mute-audio")
+        self.p = subprocess.Popen(args, preexec_fn=child, close_fds=False, env=env,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         os.close(r_in)
         os.close(w_out)
@@ -269,6 +330,7 @@ class Session:
         self.zoom = 100
         self.last_scroll_q = 0
         self.dl_dir = os.path.join(DATA, "downloads-tmp")
+        self.arec, self.abuf, self.a_loud, self.asock = None, b"", 0.0, None
         targets = self.c.call("Target.getTargets")["targetInfos"]
         page = next((t for t in targets if t["type"] == "page"), None)
         if not page:
@@ -305,6 +367,7 @@ class Session:
         self.metrics()
         self.c.call("Page.startScreencast", {"format": "png", "everyNthFrame": 1, "maxWidth": w, "maxHeight": h},
                     session=s)
+        self.audio_start()
         self.f.event(f"READY {w} {h}")
         if start_url:
             self.go(start_url)
@@ -478,6 +541,73 @@ class Session:
             self.scroll_state()
         return True
 
+    def audio_start(self):
+        if not self.c.audio:
+            return
+        try:
+            self.arec = subprocess.Popen(
+                ["parec", f"--device={SINK}.monitor", "--format=s16le", f"--rate={AUDIO_RATE}",
+                 f"--channels={AUDIO_CH}", "--raw", "--latency-msec=20", "--client-name=BigFoston Web"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, preexec_fn=die_with_parent)
+            os.set_blocking(self.arec.stdout.fileno(), False)
+        except OSError:
+            self.arec = None
+
+    def audio_read(self):
+        try:
+            d = os.read(self.arec.stdout.fileno(), 1 << 16)
+        except BlockingIOError:
+            return
+        if not d:                            # parec saiu (servidor de som reiniciado)
+            self.audio_stop()
+            return
+        self.abuf += d
+        while len(self.abuf) >= AUDIO_CHUNK:
+            chunk, self.abuf = self.abuf[:AUDIO_CHUNK], self.abuf[AUDIO_CHUNK:]
+            now = time.time()
+            if np.abs(np.frombuffer(chunk, "<i2").astype(np.int32)).max() > 16:
+                if VERBOSE and now - self.a_loud >= AUDIO_HANG_S:
+                    log("som: tocando")
+                self.a_loud = now
+            if now - self.a_loud < AUDIO_HANG_S and self.asock:   # silêncio longo não ocupa o cabo
+                try:
+                    self.asock.sendall(chunk)
+                except OSError as e:
+                    log(f"som: conexão perdida ({e})")
+                    self.asock.close()
+                    self.asock = None
+
+    def audio_connect(self, token):
+        """o FOSTON mandou o código de uso único da conexão de som"""
+        if not self.arec or not re.fullmatch(rb"[0-9a-f]{32}", token):
+            return
+        try:
+            s = socket.create_connection((self.f.s.getpeername()[0], AUDIO_PORT), timeout=3)
+            s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            s.settimeout(2)                  # FOSTON travado: perde o som, não a imagem
+            s.sendall(token + b"\n")
+        except OSError as e:
+            log(f"som: sem conexão ({e})")
+            return
+        if self.asock:
+            self.asock.close()
+        self.asock = s
+
+    def audio_stop(self):
+        if self.asock:
+            self.asock.close()
+            self.asock = None
+        if self.arec:
+            try:
+                self.arec.terminate()
+                self.arec.wait(2)
+            except (OSError, subprocess.TimeoutExpired):
+                self.arec.kill()
+            self.arec = None
+
+    def close(self):
+        self.audio_stop()
+
     def set_title(self, title, url):
         title = " ".join(title.split())[:300]
         if not title or title == self.title:
@@ -602,7 +732,10 @@ class Session:
     def run(self):
         sock = self.f.s
         while True:
-            r, _, _ = select.select([self.c.rfd, sock], [], [], MIN_FRAME_S if self.pending_img else 1.0)
+            fds = [self.c.rfd, sock] + ([self.arec.stdout] if self.arec else [])
+            r, _, _ = select.select(fds, [], [], MIN_FRAME_S if self.pending_img else 1.0)
+            if self.arec and self.arec.stdout in r:
+                self.audio_read()
             if sock in r:
                 for t, payload in self.f.read():
                     if t == b"K":
@@ -610,6 +743,8 @@ class Session:
                         if VERBOSE:
                             log("cmd", line[:120])
                         self.command(line)
+                    elif t == b"U":                  # código da conexão de som
+                        self.audio_connect(payload)
                     elif t == b"Q":                  # o FOSTON aplicou o quadro
                         self.waiting_ack = False
                     elif t == b"q" and len(payload) == 4:   # bloco de download gravado
@@ -672,10 +807,13 @@ def main():
     finally:
         if getattr(serve, "chrome", None):
             serve.chrome.close()
+        if getattr(serve, "sink", None):
+            serve.sink.close()
 
 
 def serve(a, exe, key, name):
     serve.chrome = chrome = None
+    serve.sink = None
     idle_since = time.time()
     while True:
         try:
@@ -690,7 +828,7 @@ def serve(a, exe, key, name):
             continue
         try:
             # o FOSTON responde "A ok L A" (autorizado, largura e altura) ou "A no"
-            ans = None
+            ans, atoken = None, None
             end = time.time() + 120               # tempo para tocar em Permitir na tela
             while ans is None and time.time() < end:
                 r, _, _ = select.select([f.s], [], [], 1)
@@ -698,6 +836,8 @@ def serve(a, exe, key, name):
                     for t, p in f.read():
                         if t == b"A":
                             ans = p.decode().split()
+                        elif t == b"U":           # vem logo depois do A, às vezes no mesmo recv
+                            atoken = p
             if not ans or ans[0] != "ok":
                 log("o FOSTON recusou este PC" if ans else "sem resposta do FOSTON")
                 f.s.close()
@@ -707,8 +847,20 @@ def serve(a, exe, key, name):
             start = ans[3] if len(ans) > 3 else ""
             log(f"FOSTON ligado ({w}x{h})")
             if chrome is None or chrome.p.poll() is not None:
-                serve.chrome = chrome = Chrome(exe, w, h)
-            Session(chrome, f, w, h, start).run()
+                if serve.sink is None:
+                    serve.sink = AudioSink()
+                    log("som: " + ("saída virtual BigFoston-Web" if serve.sink.ok
+                                   else "sem pactl/parec, Chrome mudo"))
+                serve.chrome = chrome = Chrome(exe, w, h, audio=serve.sink.ok)
+            sess = None
+            try:
+                sess = Session(chrome, f, w, h, start)
+                if atoken:
+                    sess.audio_connect(atoken)
+                sess.run()
+            finally:
+                if sess:
+                    sess.close()
         except (EOFError, OSError, ValueError, TimeoutError, RuntimeError) as e:
             log(f"ligação encerrada: {e}")
         finally:
