@@ -48,6 +48,12 @@ int main(int argc, char **argv) {
     if(strcmp(web_history(0)->url, "https://s10.com") || strcmp(web_history(0)->title, "Nova")) { printf("FALHA hist topo %s\n", web_history(0)->url); fails++; }
     if(strcmp(web_history(1)->url, "https://s349.com")) { printf("FALHA hist 2o %s\n", web_history(1)->url); fails++; }
     if(web_apps_count() != 1) { puts("FALHA app"); fails++; }
+    /* recarga sem título (o Chrome reporta uma carga curta da página de busca ao sair
+     * dela): sobe para o topo mantendo o título conhecido; sem título nunca visto, o endereço */
+    web_history_add("", "https://s300.com");
+    if(strcmp(web_history(0)->url, "https://s300.com") || strcmp(web_history(0)->title, "t")) { printf("FALHA hist título mantido: %s\n", web_history(0)->title); fails++; }
+    web_history_add(NULL, "https://novo.com");
+    if(strcmp(web_history(0)->title, "https://novo.com")) { printf("FALHA hist sem título: %s\n", web_history(0)->title); fails++; }
     web_history_set_enabled(false); web_history_add("x", "https://nao.com");
     if(!strcmp(web_history(0)->url, "https://nao.com")) { puts("FALHA hist desligado gravou"); fails++; }
     printf("%s\n", fails ? "ERROS" : "webdata OK");

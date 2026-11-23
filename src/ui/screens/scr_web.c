@@ -252,7 +252,11 @@ static void star_click(lv_event_t *e)
     if(is_about(cur_url)) return;
     int i = web_mark_find(cur_url);
     if(i >= 0) { web_mark_remove(i); toast(tr(S_WEB_REMOVED), cur_title); }
-    else if(web_mark_add(cur_title[0] ? cur_title : cur_url, cur_url)) toast(tr(S_WEB_ADDED), cur_title);
+    else {
+        /* numa página de erro o título é o do erro, não o do site */
+        const char *t = cur_title[0] && !error_page ? cur_title : cur_url;
+        if(web_mark_add(t, cur_url)) toast(tr(S_WEB_ADDED), t);
+    }
     update_bar();
 }
 
@@ -444,7 +448,11 @@ static void on_event(const char *l, void *ud)
         if(pending_go[0]) { eng_send("GO %s", pending_go); pending_go[0] = 0; }
     }
     else if(!strncmp(l, "URL ", 4)) {
+        bool moved = strcmp(cur_url, l + 4) != 0;
         snprintf(cur_url, sizeof cur_url, "%s", l + 4);
+        /* endereço novo sem carga (history.pushState: vídeos do YouTube no modo completo,
+         * âncoras): entra no histórico já, e o TITLE que vem depois acerta o título */
+        if(moved && !loading && !error_page && !is_about(cur_url)) web_history_add(cur_title, cur_url);
         if(!is_about(cur_url)) {
             snprintf(last_url, sizeof last_url, "%s", cur_url);
             webremote_set_start_url(cur_url);
@@ -460,11 +468,14 @@ static void on_event(const char *l, void *ud)
     }
     else if(!strncmp(l, "TITLE ", 6)) {
         snprintf(cur_title, sizeof cur_title, "%s", l + 6);
-        web_history_set_title(cur_url, cur_title);
+        /* durante a carga o título vai para o histórico no LOAD 0, quando já se sabe se
+         * é a página de erro (o ERRPAGE vem depois do TITLE); aqui só as trocas de
+         * título de uma página já carregada */
+        if(!loading && !error_page) web_history_set_title(cur_url, cur_title);
     }
     else if(!strncmp(l, "LOAD ", 5)) {
         loading = l[5] == '1';
-        if(loading) error_page = false;
+        if(loading) { error_page = false; cur_title[0] = 0; }   /* página sem <title>: fica o endereço */
         else if(!is_about(cur_url) && !error_page) web_history_add(cur_title, cur_url);
         update_bar();
     }

@@ -74,6 +74,21 @@ PAGE_SCRIPT = r"""
     const a = ev.target.closest && ev.target.closest('a[target]');
     if (a && a.target !== '_self' && a.target !== '_top' && a.target !== '_parent') a.target = '_self';
   }, true);
+  // título da página: o Chrome não avisa trocas de document.title pelo Target.targetInfoChanged
+  if (window.top !== window) return;
+  let last = null;
+  const title = () => {
+    const v = document.title;
+    if (v !== last) { last = v; try { bfTitle(v); } catch (x) {} }
+  };
+  const watch = () => {
+    title();
+    if (document.head) new MutationObserver(title).observe(document.head,
+        { subtree: true, childList: true, characterData: true });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+  else watch();
+  window.addEventListener('load', title);
 })();
 """
 
@@ -104,6 +119,13 @@ class Chrome:
             os.dup2(a, 3)
             os.dup2(b, 4)
             os.setsid()
+            # o Chrome morre junto com este script, mesmo num kill -9 (sem isso ficava
+            # órfão: setsid o tira do Ctrl+C do terminal)
+            try:
+                import ctypes
+                ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGTERM)   # PR_SET_PDEATHSIG
+            except (OSError, AttributeError):
+                pass
         args = [exe, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={DATA}/chrome",
                 "--no-first-run", "--no-default-browser-check", "--mute-audio", "--hide-scrollbars",
                 "--lang=pt-BR", "--accept-lang=pt-BR,pt,en", f"--window-size={w},{h}",
@@ -117,6 +139,7 @@ class Chrome:
         self.next_id = 1
         self.pending = {}        # id -> callback
         self.events = []
+        self.session = None      # sessão CDP da ligação atual com o FOSTON
 
     def send(self, method, params=None, session=None, cb=None):
         i = self.next_id
@@ -251,7 +274,18 @@ class Session:
         if not page:
             page = {"targetId": self.c.call("Target.createTarget", {"url": "about:blank"})["targetId"]}
         self.tid = page["targetId"]
+        # a ligação anterior (o FOSTON reiniciou ou o app foi reaberto) deixou uma sessão
+        # anexada à mesma aba: sem desanexar, cada evento e cada quadro viriam em dobro
+        if self.c.session:
+            for m, p in [("Page.stopScreencast", {}), ("Target.detachFromTarget", {"sessionId": self.c.session})]:
+                try:
+                    self.c.call(m, p, session=self.c.session if m.startswith("Page.") else None, timeout=3)
+                except (RuntimeError, TimeoutError):
+                    pass
+            self.c.session = None
+        self.c.events = [m for m in self.c.events if "sessionId" not in m]
         self.sid = self.c.call("Target.attachToTarget", {"targetId": self.tid, "flatten": True})["sessionId"]
+        self.c.session = self.sid
         s = self.sid
         version = self.c.call("Browser.getVersion")
         major = version["product"].split("/")[1].split(".")[0]
@@ -261,6 +295,7 @@ class Session:
                      ("Target.setDiscoverTargets", {"discover": True}),
                      ("Network.setUserAgentOverride", {"userAgent": ua, "acceptLanguage": "pt-BR,pt;q=0.9,en;q=0.5"}),
                      ("Runtime.addBinding", {"name": "bfCaret"}),
+                     ("Runtime.addBinding", {"name": "bfTitle"}),
                      ("Page.addScriptToEvaluateOnNewDocument", {"source": PAGE_SCRIPT}),
                      ("Page.setLifecycleEventsEnabled", {"enabled": True})]:
             self.c.call(m, p, session=None if m.startswith("Target.") else s)
@@ -443,12 +478,27 @@ class Session:
             self.scroll_state()
         return True
 
+    def set_title(self, title, url):
+        title = " ".join(title.split())[:300]
+        if not title or title == self.title:
+            return
+        # sem <title> o Chrome usa o endereço (com ou sem "https://" e "www."): não é título
+        bare = url.split("://", 1)[-1]
+        tt = title.rstrip("/").rstrip(".")
+        if title.startswith(("http://", "https://")) or bare.startswith(tt) \
+                or bare.startswith("www.") and bare[4:].startswith(tt):
+            return
+        self.title = title
+        self.f.event(f"TITLE {title}")
+
     def on_event(self, m):
         if "id" in m:
             cb = self.c.pending.pop(m["id"], None)
             if cb:
                 cb(m)
             return
+        if m.get("sessionId", self.sid) != self.sid:
+            return                       # resto de uma sessão antiga
         meth, p = m.get("method", ""), m.get("params", {})
         if meth == "Page.screencastFrame":
             self.on_frame(p)
@@ -466,6 +516,7 @@ class Session:
                 self.f.event("ERRPAGE fetcherror")
             else:
                 self.url = url
+                self.title = ""                  # documento novo: o título vem de novo
                 self.f.event(f"URL {url}")
             self.f.event("CARET 0")
             self.nav_state()
@@ -475,10 +526,8 @@ class Session:
             self.nav_state()
         elif meth == "Target.targetInfoChanged":
             t = p.get("targetInfo", {})
-            if t.get("targetId") == self.tid and t.get("title") != self.title:
-                self.title = t.get("title", "")
-                if self.title and not self.title.startswith(("http://", "https://")):
-                    self.f.event(f"TITLE {self.title}")
+            if t.get("targetId") == self.tid:
+                self.set_title(t.get("title", ""), t.get("url", self.url))
         elif meth == "Target.targetCreated":
             t = p.get("targetInfo", {})
             if t.get("type") == "page" and t.get("targetId") != self.tid:
@@ -486,6 +535,8 @@ class Session:
                 if t.get("url") and t["url"] != "about:blank":
                     self.go(t["url"])
                 self.c.send("Target.closeTarget", {"targetId": t["targetId"]})
+        elif meth == "Runtime.bindingCalled" and p.get("name") == "bfTitle":
+            self.set_title(p.get("payload", ""), self.url)
         elif meth == "Runtime.bindingCalled" and p.get("name") == "bfCaret":
             v = p.get("payload", "0")
             if v == "0":
@@ -569,7 +620,8 @@ class Session:
             if self.c.rfd in r:
                 msgs = self.c.read(0)
                 # muitos quadros parados na fila: só o último importa
-                frames = [m for m in msgs if m.get("method") == "Page.screencastFrame"]
+                frames = [m for m in msgs if m.get("method") == "Page.screencastFrame"
+                          and m.get("sessionId", self.sid) == self.sid]
                 for m in frames[:-1]:
                     self.c.send("Page.screencastFrameAck", {"sessionId": m["params"]["sessionId"]}, session=self.sid)
                 for m in msgs:
@@ -610,7 +662,20 @@ def main():
     key = load_key()
     name = socket.gethostname()[:40]
     log(f"navegador: {exe}; esperando o FOSTON em {a.host}:{PORT}")
-    chrome = None
+    # kill (SIGTERM) e fim de sessão (SIGHUP) passam pelo finally abaixo, como o Ctrl+C
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(0))
+    try:
+        serve(a, exe, key, name)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if getattr(serve, "chrome", None):
+            serve.chrome.close()
+
+
+def serve(a, exe, key, name):
+    serve.chrome = chrome = None
     idle_since = time.time()
     while True:
         try:
@@ -619,7 +684,7 @@ def main():
             # sem o FOSTON por 2 minutos: fecha o Chrome (a RAM do PC volta)
             if chrome and time.time() - idle_since > 120:
                 chrome.close()
-                chrome = None
+                serve.chrome = chrome = None
                 log("Chrome fechado (FOSTON ausente)")
             time.sleep(2)
             continue
@@ -642,7 +707,7 @@ def main():
             start = ans[3] if len(ans) > 3 else ""
             log(f"FOSTON ligado ({w}x{h})")
             if chrome is None or chrome.p.poll() is not None:
-                chrome = Chrome(exe, w, h)
+                serve.chrome = chrome = Chrome(exe, w, h)
             Session(chrome, f, w, h, start).run()
         except (EOFError, OSError, ValueError, TimeoutError, RuntimeError) as e:
             log(f"ligação encerrada: {e}")
@@ -655,8 +720,6 @@ def main():
         if a.once:
             break
         time.sleep(1)
-    if chrome:
-        chrome.close()
 
 
 if __name__ == "__main__":

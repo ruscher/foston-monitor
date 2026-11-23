@@ -323,8 +323,11 @@ const web_item_t *web_history(int i) { return i >= 0 && i < n_hist ? &hist[i] : 
 void web_history_add(const char *title, const char *url)
 {
     if(!hist_on || !valid_url(url) || !strncasecmp(url, "about:", 6)) return;
+    char keep[sizeof hist[0].title] = "";
     for(int i = 0; i < n_hist; i++)               /* a mesma página sobe para o topo */
         if(!strcmp(hist[i].url, url)) {
+            /* sem título novo (recarga, página ainda sem <title>): fica o que já se sabia */
+            if(!(title && *title)) snprintf(keep, sizeof keep, "%s", hist[i].title);
             memmove(&hist[i], &hist[i + 1], sizeof hist[0] * (size_t)(n_hist - i - 1));
             n_hist--;
             break;
@@ -332,7 +335,7 @@ void web_history_add(const char *title, const char *url)
     if(n_hist == WEB_HIST_MAX) n_hist--;
     memmove(&hist[1], &hist[0], sizeof hist[0] * (size_t)n_hist);
     n_hist++;
-    copy_utf8(hist[0].title, sizeof hist[0].title, title && *title ? title : url);
+    copy_utf8(hist[0].title, sizeof hist[0].title, title && *title ? title : keep[0] ? keep : url);
     snprintf(hist[0].url, sizeof hist[0].url, "%s", url);
     clean(hist[0].title);
     hist[0].when = time(NULL);

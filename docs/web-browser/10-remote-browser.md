@@ -35,9 +35,11 @@ liga/desliga.
 | Imagem | screencast PNG do Chrome (só quando a página muda) → RGB565 → blocos de 32×32 que mudaram, zlib → o FOSTON aplica e confirma (`Q`); um quadro por vez e no máximo ~12 por segundo |
 | Comandos | os mesmos do motor local (`GO`, `CLICK`, `SCROLL`, `KEY`, `TEXT`, `LONG`...), viram eventos do Chrome (DevTools Protocol por pipe) |
 | Teclado | um script na página avisa quando um campo de texto ganha o foco: o teclado do FOSTON abre sozinho |
+| Título | o mesmo script avisa as trocas de `document.title` (o Chrome não as informa pelo `Target.targetInfoChanged`); páginas que trocam de endereço sem recarregar (vídeos do YouTube) entram no histórico com o título certo |
+| Reconexão | ao religar (FOSTON reiniciado, app reaberto), a sessão anterior do Chrome é desanexada; mensagens de outra sessão são descartadas |
 | Janelas novas | abrem na mesma aba |
 | Downloads | o Chrome baixa (com a sessão dele) e o arquivo vai pelo cabo, em blocos de 128 KB confirmados, para `BigFoston/Downloads/<nome>.part` → renomeado ao conferir o tamanho |
-| Fim | o FOSTON fecha o app → o Chrome é encerrado 2 minutos depois (a RAM do PC volta) |
+| Fim | o FOSTON fecha o app → o Chrome é encerrado 2 minutos depois (a RAM do PC volta); Ctrl+C, `kill` ou fim da sessão do PC encerram o Chrome junto com o script |
 
 Protocolo: tipo (1 byte) + tamanho (u32) + conteúdo; ver `src/ui/core/webremote.c`.
 
