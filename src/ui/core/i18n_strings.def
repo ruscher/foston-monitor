@@ -549,10 +549,8 @@ X(S_BS_CONNECTED,  "bs.connected", "Conectado a %s", "Connected to %s", "Conecta
 X(S_BS_FRAMES,     "bs.frames", "%u quadros recebidos", "%u frames received", "%u cuadros recibidos")
 X(S_BS_FAILED,     "bs.failed", "Não foi possível abrir a conexão", "Could not open the connection", "No se pudo abrir la conexión")
 X(S_BS_STEPS,      "bs.steps", "1. Ligue o FOSTON ao PC pelo cabo USB (rede USB, 192.168.7.2).\n2. No Big Screen Monitor do PC, ative o display \"FOSTON FS-707DC (BigFoston OS)\".\n3. O painel aparece aqui sozinho, com toque.", "1. Connect the FOSTON to the PC with the USB cable (USB network, 192.168.7.2).\n2. In the PC's Big Screen Monitor, enable the \"FOSTON FS-707DC (BigFoston OS)\" display.\n3. The panel shows up here by itself, with touch.", "1. Conecte el FOSTON al PC con el cable USB (red USB, 192.168.7.2).\n2. En el Big Screen Monitor del PC, active la pantalla \"FOSTON FS-707DC (BigFoston OS)\".\n3. El panel aparece aquí solo, con toque.")
-X(S_BS_OSD_ON,     "bs.osd_on", "Big Screen conectado", "Big Screen connected", "Big Screen conectado")
-X(S_BS_OSD_EXIT,   "bs.osd_exit", "Para sair, segure o canto superior esquerdo por 3 s", "To leave, hold the top-left corner for 3 s", "Para salir, mantenga la esquina superior izquierda 3 s")
 X(S_BS_OSD_OFF,    "bs.osd_off", "Big Screen desconectado", "Big Screen disconnected", "Big Screen desconectado")
-X(S_BS_EXIT_HINT,  "bs.exit_hint", "Para sair durante a transmissão, segure o canto superior esquerdo da tela por 3 segundos.", "To leave while streaming, hold the top-left corner of the screen for 3 seconds.", "Para salir durante la transmisión, mantenga la esquina superior izquierda 3 segundos.")
+X(S_BS_EXIT_HINT,  "bs.exit_hint", "Para sair durante a transmissão, toque na tela: aparece uma barra no topo com o X, que volta à tela inicial.", "To leave while streaming, tap the screen: a bar with an X shows up at the top and takes you back to the home screen.", "Para salir durante la transmisión, toque la pantalla: aparece una barra arriba con la X, que vuelve a la pantalla de inicio.")
 
 /* ---- Avisos de dispositivos ---- */
 X(S_DEV_HP_IN,      "dev.hp_in", "Fone conectado", "Headphones connected", "Auriculares conectados")
@@ -648,6 +646,16 @@ X(S_MAP_C_FOOD,     "map.c_food",     "Comer", "Food", "Comer")
 X(S_MAP_C_HOTEL,    "map.c_hotel",    "Hotéis", "Hotels", "Hoteles")
 X(S_MAP_POINT,      "map.point",      "Ponto marcado", "Marked point", "Punto marcado")
 X(S_DATE_SRC_GPS,   "date.src_gps",   "Acertada pelo GPS às %s", "Set from GPS at %s", "Ajustada por GPS a las %s")
+X(S_DATE_GPS,       "date.gps",       "Acertar data e hora pelo GPS", "Set date and time from GPS", "Ajustar fecha y hora por GPS")
+X(S_DATE_GPS_NOW,   "date.gps_now",   "Acertar agora", "Set now", "Ajustar ahora")
+X(S_DATE_GPS_FIX,   "date.gps_fix",   "GPS com posição: %c%c:%c%c:%c%c UTC (%d satélites)", "GPS has a position: %c%c:%c%c:%c%c UTC (%d satellites)", "GPS con posición: %c%c:%c%c:%c%c UTC (%d satélites)")
+X(S_DATE_GPS_SEARCH, "date.gps_search", "GPS procurando satélites (%d de %d em uso)…", "GPS searching for satellites (%d of %d in use)…", "GPS buscando satélites (%d de %d en uso)…")
+X(S_DATE_GPS_WAIT,  "date.gps_wait",  "GPS iniciando…", "GPS starting…", "GPS iniciando…")
+X(S_DATE_GPS_OFF,   "date.gps_off",   "GPS desligado: ligue-o em Ajustes > GPS ou pelo ícone da barra do topo", "GPS is off: turn it on in Settings > GPS or from the top bar icon", "GPS apagado: enciéndalo en Ajustes > GPS o desde el icono de la barra superior")
+X(S_DATE_GPS_NOFIX, "date.gps_nofix", "O GPS ainda não tem posição: vá para céu aberto e tente de novo", "The GPS has no position yet: go outdoors and try again", "El GPS aún no tiene posición: salga al aire libre e intente de nuevo")
+X(S_DATE_GPS_DONE,  "date.gps_done",  "Data e hora acertadas pelo GPS", "Date and time set from GPS", "Fecha y hora ajustadas por GPS")
+X(S_DATE_GPS_SAME,  "date.gps_same",  "O relógio já estava certo com o GPS", "The clock already matched the GPS", "El reloj ya coincidía con el GPS")
+X(S_DATE_GPS_HINT,  "date.gps_hint",  "Não precisa de rede: com posição, o GPS acerta o relógio sozinho (a cada 30 s, se diferir mais de 2 s). O fuso horário acima continua valendo.", "No network needed: with a position, the GPS sets the clock by itself (every 30 s, if it differs by more than 2 s). The time zone above still applies.", "No necesita red: con posición, el GPS ajusta el reloj solo (cada 30 s, si difiere más de 2 s). La zona horaria de arriba sigue valiendo.")
 X(S_MAP_RECENT,     "map.recent",     "Recentes", "Recent", "Recientes")
 
 /* ---- Bluetooth (core/btstat, scr_bluetooth) ---- */

@@ -272,6 +272,35 @@ int clock_sync_result(time_t *when, char *err, size_t n)
 }
 
 /* hora do GPS: "hhmmss.sss" e "ddmmyy" (UTC) do bfgps, só publicados com posição */
+static int gps_apply(void)
+{
+    gps_info_t g;
+    gps_read(&g);
+    if(!g.running) return CLK_GPS_OFF;
+    if(g.state < GPS_FIX2D || strlen(g.time) < 6 || strlen(g.date) != 6) return CLK_GPS_NOFIX;
+    struct tm t = {0};
+    if(sscanf(g.time, "%2d%2d%2d", &t.tm_hour, &t.tm_min, &t.tm_sec) != 3
+       || sscanf(g.date, "%2d%2d%2d", &t.tm_mday, &t.tm_mon, &t.tm_year) != 3) return CLK_GPS_NOFIX;
+    t.tm_mon -= 1;
+    t.tm_year += 100;                         /* 20yy */
+    time_t utc = timegm(&t);
+    if(utc < EPOCH_2024) return CLK_GPS_NOFIX;
+    time_t cur = time(NULL);
+    if(cur - utc <= 2 && utc - cur <= 2) {    /* já certo: só registra a origem */
+        pthread_mutex_lock(&lock);
+        clock_src_t s = src;
+        pthread_mutex_unlock(&lock);
+        if(s != CLK_GPS && s != CLK_NTP) set_source(CLK_GPS, "GPS");
+        return CLK_GPS_ALREADY;
+    }
+    struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
+    if(settimeofday(&tv, NULL)) return CLK_GPS_FAIL;
+    set_source(CLK_GPS, "GPS");
+    fprintf(stderr, "relogio: acertado pelo GPS para %ld (diferença %ld s)\n", (long)utc, (long)(utc - cur));
+    return CLK_GPS_SET;
+}
+
+/* automático: a cada 30 s, cedendo a um NTP das últimas 2 h */
 static void gps_clock(void)
 {
     static long last_try;
@@ -282,33 +311,23 @@ static void gps_clock(void)
     bool ntp_recent = src == CLK_NTP && time(NULL) - src_when < 2 * 3600;
     pthread_mutex_unlock(&lock);
     if(ntp_recent) return;
-    gps_info_t g;
-    gps_read(&g);
-    if(!g.running || g.state < GPS_FIX2D || strlen(g.time) < 6 || strlen(g.date) != 6) return;
-    struct tm t = {0};
-    if(sscanf(g.time, "%2d%2d%2d", &t.tm_hour, &t.tm_min, &t.tm_sec) != 3
-       || sscanf(g.date, "%2d%2d%2d", &t.tm_mday, &t.tm_mon, &t.tm_year) != 3) return;
-    t.tm_mon -= 1;
-    t.tm_year += 100;                         /* 20yy */
-    time_t utc = timegm(&t);
-    if(utc < EPOCH_2024) return;
-    time_t cur = time(NULL);
-    if(cur - utc <= 2 && utc - cur <= 2) {    /* já certo: só registra a origem */
-        if(src != CLK_GPS && src != CLK_NTP) set_source(CLK_GPS, "GPS");
-        return;
-    }
-    struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
-    if(settimeofday(&tv, NULL)) return;
-    set_source(CLK_GPS, "GPS");
-    fprintf(stderr, "relogio: acertado pelo GPS para %ld (diferença %ld s)\n", (long)utc, (long)(utc - cur));
+    gps_apply();
+}
+
+int clock_gps_set_now(void)
+{
+    if(!clock_can_set()) return CLK_GPS_FAIL;
+    return gps_apply();
 }
 
 void clock_tick(void)
 {
-    if(!settings()->auto_time || !clock_can_set()) return;
-    pthread_mutex_lock(&lock);
-    bool due = !busy && mono_s() >= next_sync;
-    pthread_mutex_unlock(&lock);
-    if(due) clock_sync_now();
-    gps_clock();
+    if(!clock_can_set()) return;
+    if(settings()->auto_time) {
+        pthread_mutex_lock(&lock);
+        bool due = !busy && mono_s() >= next_sync;
+        pthread_mutex_unlock(&lock);
+        if(due) clock_sync_now();
+    }
+    if(settings()->gps_time) gps_clock();
 }

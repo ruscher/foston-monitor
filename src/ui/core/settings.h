@@ -20,6 +20,7 @@ typedef struct {
     char tz[24];        /* fuso horário: id estável da tabela de core/clock.c */
     bool dst;           /* horário de verão manual (+1 h) nos fusos sem regra */
     bool auto_time;     /* atualizar a hora automaticamente (NTP) */
+    bool gps_time;      /* acertar a hora pelo GPS quando ele tiver posição */
     char ntp[160];      /* servidores NTP separados por espaço (host ou host:porta) */
     int  home_mode;     /* BF_HOME_*: grade, painel ou quiosque */
     unsigned home_apps; /* bits da tabela de apps da Início (scr_home.c, só cresce no fim):

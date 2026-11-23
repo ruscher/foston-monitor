@@ -13,7 +13,8 @@
  * Atualização automática: o ntpd do BusyBox ("-n -q", 12 s por servidor)
  * numa thread, ao iniciar e depois a cada 60 min (10 min após falha); sem NTP nas
  * últimas 2 h, a hora UTC do GPS (só com posição) acerta o relógio quando difere
- * mais de 2 s. No simulador nada disso mexe no relógio do PC. */
+ * mais de 2 s (chave própria, settings()->gps_time, independente do NTP).
+ * No simulador nada disso mexe no relógio do PC. */
 #ifndef BF_CLOCK_H
 #define BF_CLOCK_H
 #include <stdbool.h>
@@ -50,5 +51,8 @@ void clock_sync_now(void);       /* pede uma sincronização (em segundo plano) 
 bool clock_sync_busy(void);
 /* resultado da última tentativa: 0 nenhuma, 1 ok, -1 falha (err preenchido) */
 int  clock_sync_result(time_t *when, char *err, size_t n);
+/* acerta já pela hora do GPS, sem esperar nem ceder ao NTP. Devolve CLK_GPS_* */
+enum { CLK_GPS_SET = 1, CLK_GPS_ALREADY = 2, CLK_GPS_NOFIX = 0, CLK_GPS_OFF = -1, CLK_GPS_FAIL = -2 };
+int  clock_gps_set_now(void);
 void clock_tick(void);           /* 1 s: agenda as sincronizações automáticas */
 #endif

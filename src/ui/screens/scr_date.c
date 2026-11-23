@@ -1,6 +1,6 @@
 /* scr_date.c — Ajustes > Data.
  *   arg 0: data/hora atuais, origem, fuso, atualização automática (NTP),
- *          horário de verão e formato
+ *          hora pelo GPS, horário de verão e formato
  *   arg 1: ajustar data e hora (dia, mês, ano, hora, minuto)
  *   arg 2: escolher o fuso horário
  * O relógio em si fica em core/clock.c. */
@@ -8,6 +8,7 @@
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../core/clock.h"
+#include "../core/gpsstat.h"
 #include "../widgets/page.h"
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +19,7 @@ enum { ARG_MAIN, ARG_EDIT, ARG_ZONE };
 static lv_timer_t *timer;
 static lv_obj_t *now_lbl, *date_lbl, *src_lbl, *sync_lbl, *sync_btn, *zone_btn_lbl;
 static lv_obj_t *dst_sw, *dst_hint;
+static lv_obj_t *gps_lbl, *gps_btn, *gps_msg;
 
 /* -------------------------------------------------------- nomes de datas */
 
@@ -130,11 +132,49 @@ static void main_tick(lv_timer_t *t)
     lv_obj_set_style_text_color(sync_lbl, r < 0 && !busy ? p->warning : p->text_dim, 0);
     if(busy) lv_obj_add_state(sync_btn, LV_STATE_DISABLED);
     else lv_obj_remove_state(sync_btn, LV_STATE_DISABLED);
+
+    /* GPS: a hora UTC só vem com posição */
+    gps_info_t g;
+    gps_read(&g);
+    bool fix = g.running && g.state >= GPS_FIX2D && strlen(g.time) >= 6 && strlen(g.date) == 6;
+    if(fix) snprintf(b, sizeof b, tr(S_DATE_GPS_FIX), g.time[0], g.time[1], g.time[2], g.time[3],
+                     g.time[4], g.time[5], g.used);
+    else if(!g.running) snprintf(b, sizeof b, "%s", tr(gps_enabled() ? S_DATE_GPS_WAIT : S_DATE_GPS_OFF));
+    else snprintf(b, sizeof b, tr(S_DATE_GPS_SEARCH), g.used, g.view);
+    set_text_if(gps_lbl, b);
+    lv_obj_set_style_text_color(gps_lbl, fix ? p->text_dim : p->warning, 0);
+    if(fix) lv_obj_remove_state(gps_btn, LV_STATE_DISABLED);
+    else lv_obj_add_state(gps_btn, LV_STATE_DISABLED);
 }
 
 static void go_edit(lv_event_t *e) { (void)e; nav_go(SCR_DATE, ARG_EDIT); }
 static void go_zone(lv_event_t *e) { (void)e; nav_go(SCR_DATE, ARG_ZONE); }
 static void sync_click(lv_event_t *e) { (void)e; clock_sync_now(); main_tick(NULL); }
+
+static void gps_click(lv_event_t *e)
+{
+    (void)e;
+    const bf_palette_t *p = pal();
+    bf_str_t m;
+    bool bad = true;
+    switch(clock_gps_set_now()) {
+        case CLK_GPS_SET:     m = S_DATE_GPS_DONE; bad = false; break;
+        case CLK_GPS_ALREADY: m = S_DATE_GPS_SAME; bad = false; break;
+        case CLK_GPS_OFF:     m = S_DATE_GPS_OFF; break;
+        case CLK_GPS_NOFIX:   m = S_DATE_GPS_NOFIX; break;
+        default:              m = clock_can_set() ? S_DATE_SET_FAIL : S_DATE_SIM; break;
+    }
+    lv_label_set_text(gps_msg, tr(m));
+    lv_obj_set_style_text_color(gps_msg, bad ? p->warning : p->success, 0);
+    lv_obj_remove_flag(gps_msg, LV_OBJ_FLAG_HIDDEN);
+    main_tick(NULL);
+}
+
+static void sw_gps(lv_event_t *e)
+{
+    settings()->gps_time = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_save();
+}
 
 static void sw_auto(lv_event_t *e)
 {
@@ -228,6 +268,24 @@ static void create_main(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(sync_btn, LV_OPA_50, LV_STATE_DISABLED);
     lv_obj_add_event_cb(sync_btn, sync_click, LV_EVENT_CLICKED, NULL);
     hint(c, tr(S_DATE_AUTO_HINT), p->text_dim);
+
+    /* hora pelo GPS */
+    c = column_card(pg);
+    inner_switch(c, tr(S_DATE_GPS), settings()->gps_time, sw_gps);
+    sr = bf_plain(c);
+    lv_obj_set_size(sr, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(sr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(sr, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(sr, BF_SP_M, 0);
+    gps_lbl = bf_label(sr, "", BF_FONT_S, p->text_dim);
+    lv_obj_set_flex_grow(gps_lbl, 1);
+    lv_label_set_long_mode(gps_lbl, LV_LABEL_LONG_WRAP);
+    gps_btn = bf_button(sr, BF_SYMBOL_SATELLITE, tr(S_DATE_GPS_NOW), 0);
+    lv_obj_set_style_bg_opa(gps_btn, LV_OPA_50, LV_STATE_DISABLED);
+    lv_obj_add_event_cb(gps_btn, gps_click, LV_EVENT_CLICKED, NULL);
+    gps_msg = hint(c, "", p->text_dim);
+    lv_obj_add_flag(gps_msg, LV_OBJ_FLAG_HIDDEN);
+    hint(c, tr(S_DATE_GPS_HINT), p->text_dim);
 
     /* horário de verão */
     c = column_card(pg);
@@ -435,6 +493,7 @@ static void create_zone(lv_obj_t *parent)
 static void create(lv_obj_t *parent, int arg)
 {
     now_lbl = date_lbl = src_lbl = sync_lbl = sync_btn = zone_btn_lbl = dst_sw = dst_hint = NULL;
+    gps_lbl = gps_btn = gps_msg = NULL;
     if(arg == ARG_EDIT) create_edit(parent);
     else if(arg == ARG_ZONE) create_zone(parent);
     else create_main(parent);

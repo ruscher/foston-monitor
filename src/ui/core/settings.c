@@ -33,6 +33,7 @@ void settings_defaults(bf_settings_t *s)
     snprintf(s->tz, sizeof s->tz, "%s", "brasilia");
     s->dst = false;
     s->auto_time = true;
+    s->gps_time = true;
     snprintf(s->ntp, sizeof s->ntp, "%s", BF_NTP_DEFAULT);
     s->home_mode = BF_HOME_GRID;
     s->home_apps = BF_HOME_APPS_DEFAULT;
@@ -107,6 +108,7 @@ void settings_load(void)
         else if(!strcmp(k, "timezone"))  snprintf(cur.tz, sizeof cur.tz, "%.*s", (int)sizeof cur.tz - 1, v);
         else if(!strcmp(k, "dst"))       cur.dst = atoi(v) != 0;
         else if(!strcmp(k, "auto_time")) cur.auto_time = atoi(v) != 0;
+        else if(!strcmp(k, "gps_time"))  cur.gps_time = atoi(v) != 0;
         else if(!strcmp(k, "home_mode")) cur.home_mode = clampi(atoi(v), 0, BF_HOME__N - 1);
         else if(!strcmp(k, "home_apps")) cur.home_apps = (unsigned)strtoul(v, NULL, 0);
         else if(!strcmp(k, "ntp_servers")) snprintf(cur.ntp, sizeof cur.ntp, "%.159s", v);
@@ -148,8 +150,8 @@ bool settings_save(void)
     fprintf(f, "palette = %d\nwallpaper = %d\nwallpaper_image = %s\n", cur.palette, cur.wallpaper, cur.wall_image);
     fprintf(f, "animations = %d\nsounds = %d\nboot_sound = %d\n", cur.anim, cur.sounds, cur.boot_sound);
     fprintf(f, "dim_minutes = %d\ndevice_notices = %d\n", cur.dim_min, cur.notify);
-    fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\nntp_servers = %s\n",
-            cur.tz, cur.dst, cur.auto_time, cur.ntp);
+    fprintf(f, "timezone = %s\ndst = %d\nauto_time = %d\ngps_time = %d\nntp_servers = %s\n",
+            cur.tz, cur.dst, cur.auto_time, cur.gps_time, cur.ntp);
     fprintf(f, "home_mode = %d\nhome_apps = 0x%x\n", cur.home_mode, cur.home_apps);
     fprintf(f, "backlight = %d\n", cur.backlight);
     fprintf(f, "volume = %d\n", cur.volume);

@@ -1,8 +1,8 @@
 /* scr_bigscreen.c — app Big Screen: o FOSTON vira o painel do Big Screen
  * Monitor Display do PC (core/bigscreen.c, FSP por TCP na rede USB).
  * Enquanto espera: instruções e status. Conectado: o quadro do PC cobre a
- * tela inteira (camada superior) e os toques voltam ao PC; segurar o canto
- * superior esquerdo por 3 s sai. */
+ * tela inteira (camada superior) e os toques voltam ao PC; um toque mostra,
+ * por alguns segundos, uma barra no topo só com o "X", que sai para a Início. */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/bigscreen.h"
@@ -13,21 +13,21 @@
 #include <stdio.h>
 #include <string.h>
 
-#define EXIT_CORNER 96
-#define EXIT_HOLD_MS 3000
+#define BAR_H       64                 /* barra de sair no topo */
+#define BAR_SHOW_MS 4000               /* some sozinha após este tempo sem toque */
 
 static lv_timer_t *timer;
-static lv_obj_t *state_lbl, *detail_lbl, *err_lbl, *panel;
-static uint32_t corner_t;
-static bool corner_on;
+static lv_obj_t *state_lbl, *detail_lbl, *err_lbl, *panel, *bar;
+static uint32_t bar_t;
 static bs_state_t last_state = BS_OFF;
-static bool leaving;                   /* nav_back já pedido */
+static bool leaving;                   /* saída já pedida */
 
-static void leave(void)
+static void leave(bool home)
 {
     if(leaving) return;
     leaving = true;
-    nav_back();                        /* destroy() para o cliente */
+    if(home) nav_home();               /* "X": volta à tela principal do FOSTON */
+    else nav_back();                   /* destroy() para o cliente */
 }
 
 static void set_text_if(lv_obj_t *l, const char *t)
@@ -37,31 +37,59 @@ static void set_text_if(lv_obj_t *l, const char *t)
 
 /* ------------------------------------------------------------ painel */
 
+static void bar_close(lv_event_t *e) { (void)e; leave(true); }
+
+/* barra translúcida no topo, só com o "X" à direita; por cima do painel */
+static void bar_show(void)
+{
+    if(!panel) return;
+    bar_t = lv_tick_get();
+    if(bar) return;
+    bar = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(bar);
+    lv_obj_set_size(bar, BF_SCREEN_W, BAR_H);
+    lv_obj_set_pos(bar, 0, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_60, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_USER_1);   /* a faixa não vai ao PC */
+
+    lv_obj_t *x = lv_obj_create(bar);
+    lv_obj_remove_style_all(x);
+    lv_obj_set_size(x, 52, 52);
+    lv_obj_align(x, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_set_style_radius(x, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(x, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(x, LV_OPA_20, 0);
+    lv_obj_set_style_bg_opa(x, LV_OPA_50, LV_STATE_PRESSED);
+    lv_obj_set_ext_click_area(x, 6);
+    lv_obj_remove_flag(x, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(x, bar_close, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *l = lv_label_create(x);
+    lv_label_set_text(l, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_font(l, BF_FONT_L, 0);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    lv_obj_center(l);
+}
+
+static void bar_hide(void)
+{
+    if(!bar) return;
+    lv_obj_delete(bar);
+    bar = NULL;
+}
+
 static void panel_event(lv_event_t *e)
 {
     lv_event_code_t c = lv_event_get_code(e);
     lv_point_t pt;
     lv_indev_get_point(lv_indev_active(), &pt);
-    bool corner = pt.x < EXIT_CORNER && pt.y < EXIT_CORNER;
     if(c == LV_EVENT_PRESSED) {
         bs_touch(FSP_TOUCH_DOWN, pt.x, pt.y);
-        corner_on = corner;
-        corner_t = lv_tick_get();
+        bar_show();                    /* todo toque mostra (ou segura) a barra de sair */
     }
-    else if(c == LV_EVENT_PRESSING) {
-        bs_touch(FSP_TOUCH_MOVE, pt.x, pt.y);
-        if(!corner) corner_on = false;
-        if(corner_on && lv_tick_elaps(corner_t) >= EXIT_HOLD_MS) {
-            corner_on = false;
-            lv_indev_wait_release(lv_indev_active());
-            bs_touch(FSP_TOUCH_UP, pt.x, pt.y);
-            leave();
-        }
-    }
-    else if(c == LV_EVENT_RELEASED) {
-        bs_touch(FSP_TOUCH_UP, pt.x, pt.y);
-        corner_on = false;
-    }
+    else if(c == LV_EVENT_PRESSING) bs_touch(FSP_TOUCH_MOVE, pt.x, pt.y);
+    else if(c == LV_EVENT_RELEASED) bs_touch(FSP_TOUCH_UP, pt.x, pt.y);
 }
 
 static void panel_show(void)
@@ -79,6 +107,7 @@ static void panel_show(void)
 static void panel_hide(void)
 {
     if(!panel) return;
+    bar_hide();
     lv_obj_delete(panel);
     panel = NULL;
     /* o PC saiu: avisa que voltou a esperar (sem aviso quando quem sai é o usuário) */
@@ -95,16 +124,16 @@ static void tick(lv_timer_t *t)
         uint32_t t0 = lv_tick_get();
         if(!panel) {
             panel_show();
-            /* primeiro quadro: o aviso fica por cima do painel e ensina a sair */
-            osd_show(&bf_icon_bigscreen, 0x2a6fd0, tr(S_BS_OSD_ON), tr(S_BS_OSD_EXIT));
+            bar_show();                /* primeiro quadro: a barra aparece e mostra onde sair */
         }
         lv_area_t a = bs_last_dirty();
         if(a.x2 >= a.x1 && a.y2 >= a.y1) lv_obj_invalidate_area(panel, &a);
         lv_refr_now(NULL);
         bs_presented(lv_tick_elaps(t0));
     }
+    if(bar && lv_tick_elaps(bar_t) >= BAR_SHOW_MS) bar_hide();
     const bs_status_t *s = bs_status();
-    if(s->quit_requested) { leave(); return; }
+    if(s->quit_requested) { leave(false); return; }
     if(s->state != BS_CONNECTED) panel_hide();
     if(s->state == last_state && s->state != BS_CONNECTED) return;
     last_state = s->state;

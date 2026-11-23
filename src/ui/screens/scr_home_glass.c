@@ -104,7 +104,8 @@ static void gl_clock_tick(void)
 /* ---------------------------------------------------------------- conexão */
 
 static void open_bt(lv_event_t *e) { (void)e; nav_go(SCR_BLUETOOTH, 0); }
-static void open_gps(lv_event_t *e) { (void)e; nav_go(SCR_GPS, 0); }
+/* o card abre o mapa de navegação (Big GPS); a busca de satélites é o ícone GPS da barra do topo */
+static void open_gps(lv_event_t *e) { (void)e; nav_go(SCR_MAP, 0); }
 
 #define CONN_W 446                         /* largura do card Conexão (alinhado ao do relógio) */
 
@@ -498,6 +499,7 @@ static void apps_squares(lv_obj_t *t)
         lv_obj_set_style_radius(q, 7, 0);
         lv_obj_set_style_bg_color(q, CLR(GL_WHITE), 0);
         lv_obj_set_style_bg_opa(q, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(q, LV_OBJ_FLAG_CLICKABLE);   /* o toque é do botão Apps inteiro */
         lv_obj_align(q, LV_ALIGN_CENTER, k % 2 ? 15 : -15, k / 2 ? 15 : -15);
     }
 }
