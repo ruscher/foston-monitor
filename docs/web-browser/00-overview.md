@@ -39,6 +39,13 @@ motor rodando no aparelho, interface testada no simulador.
   abre Abrir / Baixar / Favoritar; campo de texto da página abre o teclado com acentos.
 - Menu: página inicial, favoritos, histórico (desligável), downloads, criar WebApp, zoom,
   economizar dados (sem imagens), JavaScript, mecanismo de pesquisa, memória, sobre.
+- **WebApps**: menu → criar WebApp no site aberto. O WebApp aparece no fim da grade de
+  apps (modo Grade e botão Apps do Foston Glass) com a inicial e uma cor; um toque abre o
+  site no Internet (título da barra = nome do WebApp), segurar o dedo oferece remover.
+  Também ficam na página inicial do Internet. São atalhos: precisam de internet.
+- **Tela cheia** (modo completo): o botão de tela cheia do site (vídeo do YouTube) ocupa os
+  800x480, sem as barras; o toque segue para a página; o botão × no canto (aparece por 3 s
+  e a cada toque) ou o botão do próprio site saem.
 
 ## Internet no aparelho
 
@@ -67,5 +74,4 @@ NTP (o padrão já tenta `a.st1.ntp.br` e `pool.ntp.org`).
 - [26 — medições](26-benchmarks.md)
 - [28 — recuperação](28-recovery.md) · [29 — limitações conhecidas](29-known-limitations.md)
 
-Próximas fases (ainda não feitas): som do modo completo no FOSTON, WebApps na grade da
-Início e no Foston Glass, alocador mais rápido no motor local.
+Próxima fase (ainda não feita): alocador mais rápido no motor local.

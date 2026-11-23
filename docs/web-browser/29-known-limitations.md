@@ -16,8 +16,11 @@
 - **Páginas internas do NetSurf**: títulos, botões e os erros de rede traduzidos
   (`res/Messages.pt`); textos raros ainda em inglês.
 - **Download de POST**: não pode ser repetido pelo `bfdl`.
-- **WebApps**: por enquanto aparecem na página inicial do Internet, não na grade da Início
-  nem no Foston Glass. São atalhos: precisam de internet e abrem no navegador.
+- **WebApps**: são atalhos (precisam de internet e abrem no Internet); não entram no modo
+  Quiosque nem no dock do Foston Glass (estão na grade do botão Apps); até 24.
+- **Tela cheia**: só no modo completo e só da página principal (um player dentro de
+  `<iframe>` de outro site não ocupa a tela toda); o Chrome headless recusa a tela cheia
+  real, então ela é emulada na página.
 - **Toque**: sem pinça (tela resistiva de um ponto); zoom pelo menu.
 - **Seleção de texto e colar**: ainda não.
 - **Modo leve — sites modernos**: sem CSS grid e com JavaScript limitado; sites como g1,

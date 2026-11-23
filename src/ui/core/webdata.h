@@ -49,11 +49,18 @@ void              web_history_set_title(const char *url, const char *title);
 void              web_history_remove(int i);
 void              web_history_clear(void);
 
+void              web_apps_load(void);              /* só os WebApps (tela de apps) */
 int               web_apps_count(void);
 const web_app_t  *web_app(int i);
-bool              web_app_add(const char *name, const char *url);
+int               web_app_find(const char *url);    /* índice ou -1 */
+bool              web_app_add(const char *name, const char *url);   /* false: inválido, cheio ou já existe */
 void              web_app_remove(int i);
 bool              web_app_rename(int i, const char *name);
+
+/* nome para mostrar (o nome, ou o domínio se o nome for vazio ou um endereço) e a
+ * inicial para o ícone (o primeiro caractere UTF-8 inteiro, em maiúscula se for ASCII) */
+const char *web_display_name(const char *name, const char *url, char *host, size_t n);
+void              web_initial(const char *text, char *out, size_t n);
 
 /* para testes no PC: pasta dos arquivos (padrão: data_path("web")) */
 void web_data_set_dir(const char *dir);

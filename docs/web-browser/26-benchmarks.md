@@ -112,3 +112,17 @@ cada 0,1 s no FOSTON:
 | conexão própria do som, threads com nice −8 | 180 s seguidos em `RUNNING`, nenhum `XRUN`; 67 s com duas rolagens no meio, nenhum `XRUN`; shell ~61 % |
 
 Taxa: 128 KB/s (PCM 32 kHz estéreo), só enquanto há som.
+
+## 23/11/2026 — YouTube parando ("Algo deu errado")
+
+Mesmo vídeo, Chrome 157 no PC, estado do `<video>` a cada 5 s:
+
+| Chrome | Resultado |
+|---|---|
+| headless | toca até ~35 s, erro do player aos ~45 s (sem erro de rede nem do `<video>`) |
+| headless, sem a marca de automação | idem |
+| com janela no Xvfb | idem |
+| com janela no Xvfb, sem a marca de automação | 120 s tocando, sem erro |
+
+PC com o Chrome no Xvfb tocando vídeo: Chrome ~50 % de um núcleo (somando os processos),
+`bfweb-pc.py` ~23 %.

@@ -82,8 +82,51 @@ PAGE_SCRIPT = r"""
     const a = ev.target.closest && ev.target.closest('a[target]');
     if (a && a.target !== '_self' && a.target !== '_top' && a.target !== '_parent') a.target = '_self';
   }, true);
-  // título da página: o Chrome não avisa trocas de document.title pelo Target.targetInfoChanged
+  // tela cheia: o Chrome headless recusa requestFullscreen ("not granted"). Emulada só na
+  // página principal: o elemento ocupa a área toda, o site vê fullscreenElement e os
+  // eventos normais, e o FOSTON esconde as barras (bfFull) e passa a página para 800x480.
   if (window.top !== window) return;
+  const fsStyle = document.createElement('style');
+  fsStyle.textContent = '.__bffs{position:fixed!important;inset:0!important;width:100vw!important;' +
+    'height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;' +
+    'transform:none!important;z-index:2147483647!important;background:#000!important}';
+  let fsEl = null;
+  const fsFire = el => [el, document].forEach(t => {
+    t.dispatchEvent(new Event('fullscreenchange', { bubbles: true }));
+    t.dispatchEvent(new Event('webkitfullscreenchange', { bubbles: true }));
+  });
+  for (const k of ['fullscreenElement', 'webkitFullscreenElement', 'webkitCurrentFullScreenElement'])
+    Object.defineProperty(Document.prototype, k, { get: () => fsEl, configurable: true });
+  for (const k of ['fullscreenEnabled', 'webkitFullscreenEnabled'])
+    Object.defineProperty(Document.prototype, k, { get: () => true, configurable: true });
+  Object.defineProperty(Document.prototype, 'webkitIsFullScreen', { get: () => !!fsEl, configurable: true });
+  const fsEnter = function () {
+    if (fsEl !== this) {
+      if (fsEl) fsEl.classList.remove('__bffs');
+      fsEl = this;
+      (document.head || document.documentElement).appendChild(fsStyle);
+      this.classList.add('__bffs');
+      try { bfFull('1'); } catch (x) {}
+      fsFire(this);
+    }
+    return Promise.resolve();
+  };
+  const fsLeave = function () {
+    const el = fsEl;
+    if (el) {
+      fsEl = null;
+      el.classList.remove('__bffs');
+      try { bfFull('0'); } catch (x) {}
+      fsFire(el);
+    }
+    return Promise.resolve();
+  };
+  Element.prototype.requestFullscreen = Element.prototype.webkitRequestFullscreen =
+    Element.prototype.webkitRequestFullScreen = fsEnter;
+  Document.prototype.exitFullscreen = Document.prototype.webkitExitFullscreen =
+    Document.prototype.webkitCancelFullScreen = fsLeave;
+  window.__bfExitFull = () => document.exitFullscreen();
+  // título da página: o Chrome não avisa trocas de document.title pelo Target.targetInfoChanged
   let last = null;
   const title = () => {
     const v = document.title;
@@ -166,10 +209,45 @@ class AudioSink:
             self.module = None
 
 
+def start_xvfb():
+    """Tela X virtual só do Chrome do FOSTON (invisível; número livre escolhido pelo próprio
+    Xvfb). Com ela o Chrome roda normal, com janela: o YouTube recusa tocar em Chrome
+    headless ou marcado como automatizado ("Algo deu errado" ~40 s depois de começar).
+    Devolve (processo, ":N") ou (None, None) sem Xvfb."""
+    exe = shutil.which("Xvfb")
+    if not exe:
+        return None, None
+    r, w = os.pipe()
+    try:
+        p = subprocess.Popen([exe, "-displayfd", str(w), "-screen", "0", "1024x768x24", "-nolisten", "tcp",
+                              "-noreset"], pass_fds=(w,), preexec_fn=die_with_parent,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        os.close(r)
+        os.close(w)
+        return None, None
+    os.close(w)
+    num = b""
+    end = time.time() + 10
+    while time.time() < end and not num.endswith(b"\n"):
+        ready, _, _ = select.select([r], [], [], 0.5)
+        if ready:
+            d = os.read(r, 16)
+            if not d:
+                break
+            num += d
+    os.close(r)
+    if not num.strip().isdigit():
+        p.kill()
+        return None, None
+    return p, ":" + num.strip().decode()
+
+
 class Chrome:
     def __init__(self, exe, w, h, audio=False):
         self.audio = audio
         os.makedirs(os.path.join(DATA, "chrome"), exist_ok=True)
+        self.xvfb, display = start_xvfb()
         r_in, w_in = os.pipe()
         r_out, w_out = os.pipe()
 
@@ -179,11 +257,23 @@ class Chrome:
             os.dup2(b, 4)
             os.setsid()
             die_with_parent()                # sem isso ficava órfão: setsid o tira do Ctrl+C
-        args = [exe, "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={DATA}/chrome",
+        args = [exe, "--remote-debugging-pipe", f"--user-data-dir={DATA}/chrome",
                 "--no-first-run", "--no-default-browser-check", "--hide-scrollbars",
                 "--lang=pt-BR", "--accept-lang=pt-BR,pt,en", f"--window-size={w},{h}",
-                "--force-device-scale-factor=1", "--disable-features=Translate", "about:blank"]
+                "--force-device-scale-factor=1", "--disable-features=Translate",
+                "--password-store=basic", "about:blank"]
         env = dict(os.environ)
+        if display:
+            # Chrome normal na tela virtual; sem a marca de "controlado por automação" (quem
+            # navega é a pessoa no FOSTON, não um robô)
+            env["DISPLAY"] = display
+            env.pop("WAYLAND_DISPLAY", None)
+            args[1:1] = ["--ozone-platform=x11", "--disable-blink-features=AutomationControlled"]
+            log(f"Chrome com janela na tela virtual {display}")
+        else:
+            args.insert(1, "--headless=new")
+            log("sem Xvfb: Chrome headless (o YouTube para de tocar depois de ~40 s; "
+                "instale o pacote xorg-server-xvfb)")
         if audio:
             env["PULSE_SINK"] = SINK         # toca na saída virtual, não nos alto-falantes do PC
             # endereço digitado no FOSTON não conta como gesto na página: sem isto o vídeo
@@ -251,6 +341,13 @@ class Chrome:
                 os.killpg(self.p.pid, signal.SIGKILL)
             except Exception:
                 pass
+        if self.xvfb:
+            self.xvfb.terminate()
+            try:
+                self.xvfb.wait(5)
+            except subprocess.TimeoutExpired:
+                self.xvfb.kill()
+            self.xvfb = None
 
 
 REAL = ["/usr/lib/chromium/chromium", "/opt/google/chrome/chrome", "/opt/brave.com/brave/brave",
@@ -331,6 +428,7 @@ class Session:
         self.last_scroll_q = 0
         self.dl_dir = os.path.join(DATA, "downloads-tmp")
         self.arec, self.abuf, self.a_loud, self.asock = None, b"", 0.0, None
+        self.full = False
         targets = self.c.call("Target.getTargets")["targetInfos"]
         page = next((t for t in targets if t["type"] == "page"), None)
         if not page:
@@ -358,6 +456,7 @@ class Session:
                      ("Network.setUserAgentOverride", {"userAgent": ua, "acceptLanguage": "pt-BR,pt;q=0.9,en;q=0.5"}),
                      ("Runtime.addBinding", {"name": "bfCaret"}),
                      ("Runtime.addBinding", {"name": "bfTitle"}),
+                     ("Runtime.addBinding", {"name": "bfFull"}),
                      ("Page.addScriptToEvaluateOnNewDocument", {"source": PAGE_SCRIPT}),
                      ("Page.setLifecycleEventsEnabled", {"enabled": True})]:
             self.c.call(m, p, session=None if m.startswith("Target.") else s)
@@ -465,6 +564,17 @@ class Session:
                     self.dl_finish(guid, notify=False)
         elif cmd == "REDRAW":
             self.prev = None
+        elif cmd == "SIZE" and len(nums) == 2 and 160 <= nums[0] <= 1920 and 120 <= nums[1] <= 1080:
+            # tela cheia no FOSTON (800x480) e de volta (800x380)
+            self.w, self.h = nums
+            self.prev = None
+            self.metrics()
+            self.c.send("Page.stopScreencast", {}, session=self.sid)
+            self.c.send("Page.startScreencast", {"format": "png", "everyNthFrame": 1,
+                                                 "maxWidth": self.w, "maxHeight": self.h}, session=self.sid)
+        elif cmd == "EXITFULL":                  # o FOSTON saiu da tela cheia pelo botão dele
+            self.c.send("Runtime.evaluate", {"expression": "window.__bfExitFull && __bfExitFull()"},
+                        session=self.sid)
         elif cmd == "QUIT":
             raise EOFError("o FOSTON pediu para sair")
 
@@ -647,6 +757,9 @@ class Session:
             else:
                 self.url = url
                 self.title = ""                  # documento novo: o título vem de novo
+                if self.full:                    # a página nova não está em tela cheia
+                    self.full = False
+                    self.f.event("FULL 0")
                 self.f.event(f"URL {url}")
             self.f.event("CARET 0")
             self.nav_state()
@@ -665,6 +778,9 @@ class Session:
                 if t.get("url") and t["url"] != "about:blank":
                     self.go(t["url"])
                 self.c.send("Target.closeTarget", {"targetId": t["targetId"]})
+        elif meth == "Runtime.bindingCalled" and p.get("name") == "bfFull":
+            self.full = p.get("payload") == "1"
+            self.f.event("FULL 1" if self.full else "FULL 0")
         elif meth == "Runtime.bindingCalled" and p.get("name") == "bfTitle":
             self.set_title(p.get("payload", ""), self.url)
         elif meth == "Runtime.bindingCalled" and p.get("name") == "bfCaret":
@@ -847,6 +963,8 @@ def serve(a, exe, key, name):
             start = ans[3] if len(ans) > 3 else ""
             log(f"FOSTON ligado ({w}x{h})")
             if chrome is None or chrome.p.poll() is not None:
+                if chrome:                       # o Chrome caiu: fecha a tela virtual dele também
+                    chrome.close()
                 if serve.sink is None:
                     serve.sink = AudioSink()
                     log("som: " + ("saída virtual BigFoston-Web" if serve.sink.ok

@@ -372,9 +372,41 @@ void web_history_clear(void)
 int web_apps_count(void) { return n_apps; }
 const web_app_t *web_app(int i) { return i >= 0 && i < n_apps ? &apps[i] : NULL; }
 
+void web_apps_load(void)
+{
+    n_apps = 0;
+    read_tsv("webapps.tsv", load_app);
+}
+
+int web_app_find(const char *url)
+{
+    for(int i = 0; i < n_apps; i++)
+        if(!strcmp(apps[i].url, url)) return i;
+    return -1;
+}
+
+const char *web_display_name(const char *name, const char *url, char *host, size_t n)
+{
+    if(name && *name && !strstr(name, "://")) return name;
+    web_host(url, host, n);
+    return host;
+}
+
+void web_initial(const char *text, char *out, size_t n)
+{
+    if(n < 5) { if(n) out[0] = 0; return; }
+    unsigned char c0 = (unsigned char)text[0];
+    if(!c0) { snprintf(out, n, "?"); return; }
+    int k = c0 >= 0xf0 ? 4 : c0 >= 0xe0 ? 3 : c0 >= 0xc0 ? 2 : 1;
+    int i = 0;
+    while(i < k && text[i]) { out[i] = text[i]; i++; }
+    out[i] = 0;
+    if(k == 1) out[0] = (char)toupper(c0);
+}
+
 bool web_app_add(const char *name, const char *url)
 {
-    if(!valid_url(url) || n_apps >= WEB_APPS_MAX || !name || !*name) return false;
+    if(!valid_url(url) || n_apps >= WEB_APPS_MAX || !name || !*name || web_app_find(url) >= 0) return false;
     static const unsigned hues[] = { 0x3584e4, 0x9b6ad6, 0x2ec27e, 0xe5534b, 0xe0a40c, 0x1fb5cc, 0xd6409f, 0x26a269 };
     unsigned h = 5381;
     for(const char *c = url; *c; c++) h = h * 33 + (unsigned char)*c;

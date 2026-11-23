@@ -48,9 +48,16 @@ static void fmt_ms(char *out, size_t n, int ms)
 
 /* ---------------------------------------------------------------- relógio */
 
+static void open_date(lv_event_t *e) { (void)e; nav_go(SCR_DATE, 0); }
+
 static void clock_card(lv_obj_t *p)
 {
     lv_obj_t *c = glass_card(p, 30, 21, 446, 88, 24);      /* folga à direita da data */
+    /* um toque abre Ajustes > Data e hora */
+    lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(c, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(c, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(c, open_date, LV_EVENT_CLICKED, NULL);
     clk = glass_label(c, "--:--", BF_FONT_CLOCK, GL_WHITE);
     lv_obj_align(clk, LV_ALIGN_LEFT_MID, 22, 2);
     lv_obj_t *div = lv_obj_create(c);

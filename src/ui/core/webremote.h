@@ -21,6 +21,9 @@ typedef void (*webremote_cb)(const char *line, void *ud);
 bool webremote_listen(int width, int height, webremote_cb cb, void *ud);
 void webremote_stop(void);
 bool webremote_active(void);                 /* PC autorizado e ligado */
+/* muda o tamanho da imagem (tela cheia: 800x480) e pede ao PC o mesmo tamanho; quem mostra
+ * a imagem precisa chamar lv_image_set_src de novo */
+bool webremote_resize(int w, int h);
 void webremote_set_start_url(const char *url);   /* página que o PC abre ao ligar */
 void webremote_pair_answer(bool allow);      /* resposta ao "PAIR" */
 void webremote_send(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

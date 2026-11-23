@@ -3,7 +3,22 @@
 #include "../core/theme.h"
 #include <string.h>
 
+static lv_obj_t *make(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *text, const char *label,
+                      uint32_t color, lv_event_cb_t cb, void *ud);
+
 lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *label,
+                      uint32_t color, lv_event_cb_t cb, void *ud)
+{
+    return make(parent, icon, NULL, label, color, cb, ud);
+}
+
+lv_obj_t *tile_create_text(lv_obj_t *parent, const char *text, const char *label,
+                           uint32_t color, lv_event_cb_t cb, void *ud)
+{
+    return make(parent, NULL, text, label, color, cb, ud);
+}
+
+static lv_obj_t *make(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *text, const char *label,
                       uint32_t color, lv_event_cb_t cb, void *ud)
 {
     const bf_palette_t *p = pal();
@@ -39,11 +54,20 @@ lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *
     lv_obj_remove_flag(sq, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(sq, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *img = lv_image_create(sq);
-    lv_image_set_src(img, icon);
-    lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-    lv_obj_center(img);
+    if(icon) {
+        lv_obj_t *img = lv_image_create(sq);
+        lv_image_set_src(img, icon);
+        lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
+        lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+        lv_obj_center(img);
+    }
+    else {                                       /* WebApp: a inicial do nome */
+        lv_obj_t *tx = lv_label_create(sq);
+        lv_label_set_text(tx, text ? text : "?");
+        lv_obj_set_style_text_font(tx, BF_FONT_L, 0);
+        lv_obj_set_style_text_color(tx, lv_color_white(), 0);
+        lv_obj_center(tx);
+    }
 
     lv_obj_t *l = lv_label_create(t);
     lv_label_set_text(l, label);

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -20,6 +21,9 @@ static size_t len;
 static void command(char *l)
 {
     if(!strcmp(l, "app web")) nav_go(SCR_WEB, 0);
+    else if(!strcmp(l, "app apps")) nav_go(SCR_HOME, HOME_ARG_APPS);   /* grade com todos os apps */
+    else if(!strncmp(l, "app webapp ", 11)) nav_go(SCR_WEB, WEB_ARG_APP0 + atoi(l + 11));
+    else if(!strncmp(l, "page ", 5)) scr_home_show_page(atoi(l + 5));
     else if(!strcmp(l, "app home") || !strcmp(l, "home")) nav_home();
     else if(!strncmp(l, "web ", 4)) {
         if(nav_current().scr == SCR_WEB) scr_web_demo(l + 4);

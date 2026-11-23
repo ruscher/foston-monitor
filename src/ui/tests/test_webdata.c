@@ -54,6 +54,19 @@ int main(int argc, char **argv) {
     if(strcmp(web_history(0)->url, "https://s300.com") || strcmp(web_history(0)->title, "t")) { printf("FALHA hist título mantido: %s\n", web_history(0)->title); fails++; }
     web_history_add(NULL, "https://novo.com");
     if(strcmp(web_history(0)->title, "https://novo.com")) { printf("FALHA hist sem título: %s\n", web_history(0)->title); fails++; }
+    /* WebApps: duplicado recusado, inicial UTF-8, nome que é endereço vira o domínio */
+    if(web_app_add("Outra", "https://pt.m.wikipedia.org")) { puts("FALHA app duplicado aceito"); fails++; }
+    if(web_app_find("https://pt.m.wikipedia.org") != 0) { puts("FALHA app_find"); fails++; }
+    char ini[8], host[64];
+    web_initial("ética", ini, sizeof ini);
+    if(strcmp(ini, "é")) { printf("FALHA inicial UTF-8: %s\n", ini); fails++; }
+    web_initial("wiki", ini, sizeof ini);
+    if(strcmp(ini, "W")) { printf("FALHA inicial: %s\n", ini); fails++; }
+    if(strcmp(web_display_name("https://x.com/a", "https://www.exemplo.com/a", host, sizeof host), "exemplo.com"))
+        { printf("FALHA nome-endereço: %s\n", host); fails++; }
+    if(strcmp(web_display_name("Meu app", "https://a.com", host, sizeof host), "Meu app")) { puts("FALHA nome"); fails++; }
+    web_apps_load();
+    if(web_apps_count() != 1) { printf("FALHA apps_load n=%d\n", web_apps_count()); fails++; }
     web_history_set_enabled(false); web_history_add("x", "https://nao.com");
     if(!strcmp(web_history(0)->url, "https://nao.com")) { puts("FALHA hist desligado gravou"); fails++; }
     printf("%s\n", fails ? "ERROS" : "webdata OK");

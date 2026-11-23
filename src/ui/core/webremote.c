@@ -324,6 +324,31 @@ void webremote_stop(void)
     rlen = rcap = 0;
 }
 
+bool webremote_resize(int w, int h)
+{
+    if(!fb) return false;
+    if(w == fw && h == fh) return true;
+    uint16_t *nb = calloc((size_t)w * h, 2);            /* preto até o primeiro quadro */
+    if(!nb) return false;
+    lv_image_cache_drop(&dsc);
+    free(fb);
+    fb = nb;
+    fw = w;
+    fh = h;
+    dsc.header.w = (uint32_t)fw;
+    dsc.header.h = (uint32_t)fh;
+    dsc.header.stride = (uint32_t)fw * 2;
+    dsc.data = (const uint8_t *)fb;
+    dsc.data_size = (uint32_t)((size_t)fw * fh * 2);
+    dx0 = dy0 = dx1 = dy1 = 0;
+    if(webremote_active()) {
+        char c[32];
+        int l = snprintf(c, sizeof c, "SIZE %d %d", w, h);
+        raw_send('K', c, (uint32_t)l);
+    }
+    return true;
+}
+
 bool webremote_active(void) { return cfd >= 0 && authed; }
 const lv_image_dsc_t *webremote_image(void) { return fb ? &dsc : NULL; }
 void webremote_set_start_url(const char *url) { snprintf(start_url, sizeof start_url, "%s", url ? url : ""); }

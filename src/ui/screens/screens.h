@@ -26,6 +26,9 @@ typedef enum {
 void home_glass_create(lv_obj_t *parent);
 void home_glass_destroy(void);
 
+/* Argumento de SCR_WEB: WEB_ARG_APP0 + n abre o WebApp n (tela de apps) */
+#define WEB_ARG_APP0 1000
+
 /* Argumento de SCR_RUN */
 #define RUN_ARG_NORMAL   0
 #define RUN_ARG_TERMINAL 1

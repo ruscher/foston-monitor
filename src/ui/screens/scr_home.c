@@ -14,6 +14,8 @@
 #include "../core/player.h"
 #include "../core/cover.h"
 #include "../widgets/tile.h"
+#include "../widgets/dialog.h"
+#include "../core/webdata.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
 #include <string.h>
@@ -47,7 +49,7 @@ static const app_t apps[] = {
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8
-#define MAX_PAGES ((N_APPS + PER_PAGE - 1) / PER_PAGE)
+#define MAX_PAGES ((N_APPS + WEB_APPS_MAX + PER_PAGE - 1) / PER_PAGE)   /* + WebApps no fim */
 #define I_SETTINGS 10
 
 int home_app_count(void) { return N_APPS; }
@@ -58,6 +60,31 @@ bool home_app_is_settings(int i) { return i == I_SETTINGS; }
 void home_app_open(int i) { if(i >= 0 && i < N_APPS) nav_go(apps[i].scr, apps[i].arg); }
 
 static void app_click(lv_event_t *e) { home_app_open((int)(intptr_t)lv_event_get_user_data(e)); }
+
+/* WebApps (criados no menu do Internet): no fim da grade; um toque abre o site no Internet,
+ * segurar o dedo oferece remover */
+static void webapp_click(lv_event_t *e)
+{
+    nav_go(SCR_WEB, WEB_ARG_APP0 + (int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void webapp_remove_answer(int button, void *ud)
+{
+    if(button != 0) return;
+    web_app_remove((int)(intptr_t)ud);
+    nav_show_now();                                /* refaz a grade sem ele */
+}
+
+static void webapp_long(lv_event_t *e)
+{
+    int j = (int)(intptr_t)lv_event_get_user_data(e);
+    if(j < 0 || j >= web_apps_count()) return;
+    char host[64], body[200];
+    snprintf(body, sizeof body, tr(S_WEB_APP_REMOVE_Q), web_display_name(web_app(j)->name, web_app(j)->url, host, sizeof host));
+    const char *b[2] = { tr(S_WEB_REMOVE), tr(S_WEB_CANCEL) };
+    dialog_open(LV_SYMBOL_TRASH, pal()->danger, tr(S_WEB_APP_REMOVE), body, b, 2, -1, 0,
+                webapp_remove_answer, (void *)(intptr_t)j);
+}
 
 /* ================================================================== grade */
 
@@ -121,9 +148,13 @@ static lv_obj_t *arrow(lv_obj_t *parent, const char *sym, int dir)
 static void create_grid(lv_obj_t *parent, bool kiosk)
 {
     const bf_palette_t *p = pal();
-    int list[N_APPS], n = 0;
+    int list[N_APPS + WEB_APPS_MAX], n = 0;
     for(int i = 0; i < N_APPS; i++)
         if(!kiosk || ((settings()->home_apps >> i & 1u) && i != I_SETTINGS)) list[n++] = i;
+    if(!kiosk) {                                   /* o quiosque mostra só os apps escolhidos */
+        web_apps_load();
+        for(int j = 0; j < web_apps_count(); j++) list[n++] = N_APPS + j;
+    }
     if(!n) {                           /* quiosque sem apps escolhidos */
         lv_obj_t *l = bf_label(parent, tr(S_HOME_KIOSK_EMPTY), BF_FONT_M, p->text_dim);
         lv_obj_set_width(l, 600);
@@ -152,8 +183,20 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
         lv_obj_add_flag(grid, LV_OBJ_FLAG_EVENT_BUBBLE);
         for(int k = pg * PER_PAGE; k < n && k < (pg + 1) * PER_PAGE; k++) {
             int i = list[k];
-            lv_obj_t *t = tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click,
-                                      (void *)(intptr_t)i);
+            lv_obj_t *t;
+            if(i < N_APPS)
+                t = tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click,
+                                (void *)(intptr_t)i);
+            else {
+                int j = i - N_APPS;
+                char host[64], ini[8];
+                const char *name = web_display_name(web_app(j)->name, web_app(j)->url, host, sizeof host);
+                web_initial(name, ini, sizeof ini);
+                t = tile_create_text(grid, ini, name, web_app(j)->color, NULL, NULL);
+                /* SHORT_CLICKED: não abre o site depois de segurar o dedo */
+                lv_obj_add_event_cb(t, webapp_click, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)j);
+                lv_obj_add_event_cb(t, webapp_long, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)j);
+            }
             /* entrada: os ícones da página visível sobem em sequência */
             if(pg == page) fx_slide_in(t, 0, 24, (uint32_t)(k - pg * PER_PAGE) * 30, 220);
         }
@@ -183,6 +226,8 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
 }
 
 /* ================================================================= painel */
+
+static void open_date(lv_event_t *e) { (void)e; nav_go(SCR_DATE, 0); }
 
 static lv_timer_t *panel_timer;
 static lv_obj_t *clk_lbl, *ampm_lbl, *date_lbl, *bat_icon, *bat_lbl, *song_lbl, *artist_lbl, *bar, *play_lbl;
@@ -368,15 +413,26 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(c, 6, 0);
-    lv_obj_t *row = bf_plain(c);
+    /* hora e data: um toque abre Ajustes > Data e hora (a bateria embaixo continua só informação) */
+    lv_obj_t *when = bf_plain(c);
+    lv_obj_set_size(when, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(when, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(when, 6, 0);
+    lv_obj_set_style_radius(when, BF_RADIUS_M, 0);
+    lv_obj_set_style_bg_color(when, p->surface2, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(when, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_add_flag(when, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(when, open_date, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *row = bf_plain(when);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_set_style_pad_column(row, BF_SP_S, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
     clk_lbl = bf_label(row, "", BF_FONT_CLOCK, p->text);
     ampm_lbl = bf_label(row, "", BF_FONT_M, p->text_dim);
     lv_obj_set_style_pad_bottom(ampm_lbl, 14, 0);
-    date_lbl = bf_label(c, "", BF_FONT_M, p->text);
+    date_lbl = bf_label(when, "", BF_FONT_M, p->text);
     bf_label_ellipsis(date_lbl, LV_PCT(100));
     lv_obj_t *brow = bf_plain(c);
     lv_obj_set_size(brow, LV_PCT(100), LV_SIZE_CONTENT);

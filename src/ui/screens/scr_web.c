@@ -97,6 +97,7 @@ static void engine_start(const char *url);
 static void panel_close(void);
 static void edit_close(void);
 static void page_kb_hide(void);
+static void page_event(lv_event_t *e);
 
 /* ---------------- utilidades ---------------- */
 
@@ -431,16 +432,105 @@ static void ctx_open(int x, int y, const char *link, const char *obj)
 }
 
 /* uma linha de evento do motor */
+/* ---------------- tela cheia (modo completo) ----------------
+ * O vídeo (ou o que a página pôs em tela cheia) ocupa os 800x480: a imagem da página vai
+ * para a camada de cima, por cima das barras, e o PC passa a renderizar nesse tamanho. O
+ * toque continua indo para a página; um botão no canto (some depois de 3 s, volta a cada
+ * toque) sai da tela cheia. */
+static lv_obj_t *fs_img, *fs_btn;
+static lv_timer_t *fs_t;
+
+static void fs_btn_hide(lv_timer_t *t)
+{
+    (void)t;
+    fs_t = NULL;
+    if(fs_btn) lv_obj_add_flag(fs_btn, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void fs_btn_show(void)
+{
+    if(!fs_btn) return;
+    lv_obj_remove_flag(fs_btn, LV_OBJ_FLAG_HIDDEN);
+    if(fs_t) lv_timer_reset(fs_t);
+    else {
+        fs_t = lv_timer_create(fs_btn_hide, 3000, NULL);
+        lv_timer_set_repeat_count(fs_t, 1);
+    }
+}
+
+static void fs_leave(bool tell_page);
+static void fs_exit_click(lv_event_t *e) { (void)e; fs_leave(true); }
+
+static void fs_img_event(lv_event_t *e)
+{
+    if(lv_event_get_code(e) == LV_EVENT_PRESSED) fs_btn_show();
+    page_event(e);
+}
+
+static void fs_enter(void)
+{
+    if(fs_img || !remote_on || !root) return;
+    if(!webremote_resize(BF_SCREEN_W, BF_SCREEN_H)) return;
+    page_kb_hide();
+    panel_close();
+    ctx_close();
+    fs_img = lv_image_create(lv_layer_top());
+    lv_obj_set_pos(fs_img, 0, 0);
+    lv_obj_set_size(fs_img, BF_SCREEN_W, BF_SCREEN_H);
+    lv_obj_set_style_bg_color(fs_img, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(fs_img, LV_OPA_COVER, 0);
+    lv_image_set_src(fs_img, webremote_image());
+    lv_obj_add_flag(fs_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(fs_img, LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_remove_flag(fs_img, LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_add_event_cb(fs_img, fs_img_event, LV_EVENT_ALL, NULL);
+    fs_btn = lv_button_create(lv_layer_top());
+    lv_obj_remove_style_all(fs_btn);
+    lv_obj_set_size(fs_btn, 56, 56);
+    lv_obj_align(fs_btn, LV_ALIGN_TOP_RIGHT, -12, 12);
+    lv_obj_set_style_radius(fs_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(fs_btn, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(fs_btn, LV_OPA_50, 0);
+    lv_obj_set_style_bg_opa(fs_btn, LV_OPA_80, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(fs_btn, 2, 0);
+    lv_obj_set_style_border_color(fs_btn, lv_color_white(), 0);
+    lv_obj_set_style_border_opa(fs_btn, LV_OPA_50, 0);
+    lv_obj_set_ext_click_area(fs_btn, 12);
+    lv_obj_t *x = bf_label(fs_btn, LV_SYMBOL_CLOSE, BF_FONT_M, lv_color_white());
+    lv_obj_center(x);
+    lv_obj_add_event_cb(fs_btn, fs_exit_click, LV_EVENT_CLICKED, NULL);
+    fs_btn_show();
+}
+
+static void fs_leave(bool tell_page)
+{
+    if(!fs_img) return;
+    if(fs_t) { lv_timer_delete(fs_t); fs_t = NULL; }
+    lv_obj_delete(fs_btn);
+    lv_obj_delete(fs_img);
+    fs_img = fs_btn = NULL;
+    dragging = false;
+    webremote_resize(BF_SCREEN_W, ph);
+    if(page && remote_on) lv_image_set_src(page, webremote_image());
+    if(page) lv_obj_invalidate(page);
+    if(tell_page) eng_send("EXITFULL");
+}
+
 static void on_event(const char *l, void *ud)
 {
     (void)ud;
     int a, b, c, d;
     if(!strncmp(l, "R ", 2) && sscanf(l + 2, "%d %d %d %d", &a, &b, &c, &d) == 4) {
-        if(!page) return;
+        lv_obj_t *v = fs_img ? fs_img : page;
+        if(!v) return;
         lv_area_t ar;
-        lv_obj_get_coords(page, &ar);
+        lv_obj_get_coords(v, &ar);
         lv_area_t r = { ar.x1 + a, ar.y1 + b, ar.x1 + c - 1, ar.y1 + d - 1 };
-        lv_obj_invalidate_area(page, &r);
+        lv_obj_invalidate_area(v, &r);
+    }
+    else if(!strncmp(l, "FULL ", 5)) {
+        if(l[5] == '1') fs_enter();
+        else fs_leave(false);
     }
     else if(!strncmp(l, "READY", 5)) {
         engine_ready = true;
@@ -565,6 +655,7 @@ static void on_remote(const char *l, void *ud)
         return;
     }
     if(!strncmp(l, "REMOTE 0", 8)) {
+        fs_leave(false);                              /* sem o PC não há tela cheia */
         remote_on = false;
         loading = false;
         page_kb_hide();
@@ -708,17 +799,10 @@ static lv_obj_t *tile(lv_obj_t *parent, const char *name, const char *url, unsig
     lv_obj_set_style_bg_grad_dir(ic, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(ic, LV_OPA_COVER, 0);
     lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
-    char ini[8] = "?";
-    char host[64];
-    web_host(url, host, sizeof host);
+    char ini[8], host[64];
     /* sem título (ou o título é o próprio endereço): mostra o domínio */
-    const char *src = name && *name && !strstr(name, "://") ? name : host;
-    /* primeira letra (UTF-8 inteiro), em maiúscula se for ASCII */
-    int n = 1;
-    unsigned char c0 = (unsigned char)src[0];
-    if(c0 >= 0xc0) n = c0 >= 0xf0 ? 4 : c0 >= 0xe0 ? 3 : 2;
-    snprintf(ini, sizeof ini, "%.*s", n, src);
-    if(n == 1) ini[0] = (char)toupper(c0);
+    const char *src = web_display_name(name, url, host, sizeof host);
+    web_initial(src, ini, sizeof ini);
     lv_obj_t *l = bf_label(ic, ini, BF_FONT_L, lv_color_white());
     lv_obj_center(l);
     lv_obj_t *t = bf_label(b, src, BF_FONT_S, pal()->text);
@@ -1242,7 +1326,8 @@ static void menu_pick(lv_event_t *e)
             if(!cut) cut = strstr(name, " - ");
             if(!cut) cut = strstr(name, " | ");
             if(cut && cut != name) *cut = 0;
-            if(web_app_add(name, cur_url)) toast(tr(S_WEB_APP_ADDED), name);
+            if(web_app_find(cur_url) >= 0) toast(tr(S_WEB_APP_EXISTS), name);
+            else if(web_app_add(name, cur_url)) toast(tr(S_WEB_APP_ADDED), name);
         }
         panel_close();
         break;
@@ -1334,12 +1419,15 @@ static void menu_click(lv_event_t *e) { (void)e; if(panel) panel_close(); else o
 
 static void create(lv_obj_t *parent, int arg)
 {
-    (void)arg;
     const bf_palette_t *p = pal();
     ph = BF_CONTENT_H - TB_H;
     zoom_pct = settings()->web_zoom ? settings()->web_zoom : 100;
     web_data_load();
     webdl_init();
+    /* WebApp tocado na tela de apps: abre o site dele (no lugar da última página) */
+    int app = arg - WEB_ARG_APP0;
+    if(arg >= WEB_ARG_APP0 && app < web_apps_count())
+        snprintf(last_url, sizeof last_url, "%s", web_app(app)->url);
 
     root = bf_plain(parent);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
@@ -1451,6 +1539,7 @@ static void destroy(void)
     edit_close();
     if(kb) { lv_obj_delete(kb); kb = NULL; }
     webdl_set_listener(NULL, NULL);
+    fs_leave(false);
     webremote_stop();
     remote_on = false;
     engine_stop();                                    /* a RAM volta para o resto do sistema */
@@ -1490,4 +1579,17 @@ void scr_web_demo(const char *what)
 }
 
 /* espera o motor (screenshot e testes): processa eventos até LOAD 0 ou o tempo */
-const bf_screen_def_t scr_web_def = { create, destroy, S_APP_WEB, NULL };
+/* título na barra e nos recentes: o nome do WebApp */
+static const char *title_fn(int arg)
+{
+    static char t[48];
+    int app = arg - WEB_ARG_APP0;
+    if(arg < WEB_ARG_APP0) return tr(S_APP_WEB);
+    if(app >= web_apps_count()) web_apps_load();
+    if(app >= web_apps_count()) return tr(S_APP_WEB);
+    char host[64];
+    snprintf(t, sizeof t, "%s", web_display_name(web_app(app)->name, web_app(app)->url, host, sizeof host));
+    return t;
+}
+
+const bf_screen_def_t scr_web_def = { create, destroy, S_APP_WEB, title_fn };
