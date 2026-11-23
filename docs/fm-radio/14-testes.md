@@ -30,12 +30,12 @@
 Conclusão: o KT0801A transmite **tudo o que sai pelo DAC**, em qualquer formato, como deduzido do CE,
 inclusive a voz das ligações (que chega ao DAC pelo DSP, sem passar pela ALSA).
 
-## Falta
+## Demais testes com o rádio
 
-- [ ] Modo *Só no rádio FM*: alto-falante mudo, som no rádio.
-- [ ] Troca de frequência com o FM ligado (o rádio acompanha).
+- [x] Modo *Só no rádio FM*: alto-falante mudo, som no rádio.
+- [x] Troca de frequência com o FM ligado (o rádio acompanha).
 - [x] Transmissão continuando com o app fechado (Multimídia, TV, GPS, Telefone).
-- [ ] Teste prolongado (30 min) e temporizador.
+- [x] Uso prolongado e temporizador (confirmados pelo usuário).
 
 
 
