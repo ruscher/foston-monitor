@@ -42,6 +42,7 @@ void settings_defaults(bf_settings_t *s)
     s->book_font = 1;
     s->book_space = 1;
     s->book_margin = 1;
+    s->web_zoom = 100;
     s->show_date = true;
     s->clock_24h = true;
     s->nav_voice = true;
@@ -121,6 +122,10 @@ void settings_load(void)
         else if(!strcmp(k, "music_bg"))      cur.music_bg = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "music_light"))   cur.music_light = atoi(v) != 0;
         else if(!strcmp(k, "gallery_sort"))  cur.gallery_sort = atoi(v) != 0;
+        else if(!strcmp(k, "web_js"))        cur.web_js = atoi(v) != 0;
+        else if(!strcmp(k, "web_no_images")) cur.web_no_images = atoi(v) != 0;
+        else if(!strcmp(k, "web_search"))    cur.web_search = clampi(atoi(v), 0, 15);
+        else if(!strcmp(k, "web_zoom"))      cur.web_zoom = clampi(atoi(v), 50, 200);
         else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
@@ -162,6 +167,8 @@ bool settings_save(void)
     fprintf(f, "music_bg = %d\n", cur.music_bg);
     fprintf(f, "music_light = %d\n", cur.music_light ? 1 : 0);
     fprintf(f, "gallery_sort = %d\n", cur.gallery_sort ? 1 : 0);
+    fprintf(f, "web_js = %d\nweb_no_images = %d\nweb_search = %d\nweb_zoom = %d\n",
+            cur.web_js ? 1 : 0, cur.web_no_images ? 1 : 0, cur.web_search, cur.web_zoom);
     fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);

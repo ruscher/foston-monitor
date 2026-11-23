@@ -39,10 +39,61 @@ ICONS = [
     ("sdcard",     0xF7C2),  # sd-card
     ("gallery",    0xF302),  # images
     ("phone",      0xF095),  # phone (Telefone)
+    ("web",        None),    # Internet: globo com órbita (desenho próprio, render_web)
 ]
 
 
+def render_web():
+    """Internet (BigFoston Web): o globo do Font Awesome (F0AC) com uma órbita inclinada
+    que passa por trás e pela frente dele e um satélite, como as órbitas do logo FOSTONOS.
+    Desenhado em 4x e reduzido (bordas suaves); a órbita da frente tem um vão em volta."""
+    from PIL import ImageChops
+    k = 4
+    S = SIZE * k
+    c = S / 2
+    font = ImageFont.truetype(FA, int(GLYPH * 0.78 * k))
+    l, t, r, b = font.getbbox(chr(0xF0AC))
+    globe = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(globe).text((c - (r - l) / 2 - l, c - (b - t) / 2 - t), chr(0xF0AC), font=font, fill=255)
+    rad = max(r - l, b - t) / 2
+    solid = Image.new("L", (S, S), 0)                       # silhueta do globo (oclusão)
+    ImageDraw.Draw(solid).ellipse((c - rad, c - rad, c + rad, c + rad), fill=255)
+
+    def ring(width):
+        im = Image.new("L", (S, S), 0)
+        rw, rh = S * 0.485, S * 0.17
+        ImageDraw.Draw(im).ellipse((c - rw, c - rh, c + rw, c + rh), outline=255, width=width)
+        return im.rotate(22, resample=Image.BICUBIC, center=(c, c))
+
+    def half(front):                                         # metade de baixo = frente
+        im = Image.new("L", (S, S), 0)
+        ImageDraw.Draw(im).rectangle((0, c, S, S) if front else (0, 0, S, c), fill=255)
+        return im.rotate(22, resample=Image.NEAREST, center=(c, c))
+
+    thin, gap = ring(3 * k), ring(9 * k)
+    front, back = half(True), half(False)
+    # globo sem o vão da órbita da frente; órbita de trás escondida pelo globo
+    out = ImageChops.subtract(globe, ImageChops.multiply(gap, front))
+    out = ImageChops.lighter(out, ImageChops.multiply(thin, front))
+    out = ImageChops.lighter(out, ImageChops.subtract(ImageChops.multiply(thin, back), solid))
+    # satélite na órbita, em cima à direita, com vão em volta
+    import math
+    a = math.radians(-22 - 38)
+    rw, rh = S * 0.485, S * 0.17
+    x, y = c + rw * math.cos(math.radians(-38)), c + rh * math.sin(math.radians(-38))
+    ang = math.radians(-22)
+    sx = c + (x - c) * math.cos(ang) - (y - c) * math.sin(ang)
+    sy = c + (x - c) * math.sin(ang) + (y - c) * math.cos(ang)
+    d = ImageDraw.Draw(out)
+    d.ellipse((sx - 6.5 * k, sy - 6.5 * k, sx + 6.5 * k, sy + 6.5 * k), fill=0)
+    d.ellipse((sx - 3.5 * k, sy - 3.5 * k, sx + 3.5 * k, sy + 3.5 * k), fill=255)
+    del a
+    return out.resize((SIZE, SIZE), Image.LANCZOS)
+
+
 def render(cp):
+    if cp is None:
+        return render_web()
     font = ImageFont.truetype(FA, GLYPH)
     ch = chr(cp)
     l, t, r, b = font.getbbox(ch)

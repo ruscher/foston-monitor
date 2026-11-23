@@ -95,7 +95,7 @@ APP_OBJS   := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS) $(BIGGPS_SRCS))
 LVGL_OBJS  := $(patsubst %.c,$(BUILD)/%.o,$(LVGL_SRCS) $(ASSET_SRCS) $(EXTRA_SRCS))
 DEPS       := $(APP_OBJS:.o=.d)
 
-.PHONY: all sim headless target target-hostcheck screenshots run clean size
+.PHONY: all sim headless target target-hostcheck screenshots run clean size test
 
 all: $(BIN)
 
@@ -151,6 +151,14 @@ screenshots: sim
 	@printf 'ls -la /data\n$$ dmesg | tail -n 20\ncat /proc/cpuinfo\n' > build/shotdata/history.txt
 	@mkdir -p $(SHOT_DIR) && rm -f $(SHOT_DIR)/*.png
 	BIGFOSTON_DATA=build/shotdata ./build/sim/bigfoston-shell --screenshot $(SHOT_DIR)
+
+# testes de unidade no PC (ASan/UBSan)
+HOST_CC ?= gcc
+test:
+	@rm -rf build/test/webdata && mkdir -p build/test/webdata
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_webdata.c core/webdata.c -o build/test/test_webdata
+	./build/test/test_webdata build/test/webdata
 
 run: sim
 	./build/sim/bigfoston-shell

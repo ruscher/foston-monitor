@@ -1,0 +1,2 @@
+# Ferramentas do frontend bigfoston. SPDX-License-Identifier: GPL-2.0-only
+PKG_CONFIG ?= pkg-config

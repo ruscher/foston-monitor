@@ -36,6 +36,10 @@ typedef struct {
     int  music_bg;      /* 0 cor do tema, 1 cor da capa, 2 papel de parede */
     bool music_light;   /* tela cheia em modo claro */
     bool gallery_sort;  /* Galeria: false recentes primeiro, true por nome */
+    bool web_js;        /* Internet: JavaScript (Duktape, limitado e lento no ARMv6) */
+    bool web_no_images; /* Internet: economizar dados (sem imagens) */
+    int  web_search;    /* Internet: mecanismo de pesquisa (core/webdata.c) */
+    int  web_zoom;      /* Internet: zoom em % (50..200) */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */

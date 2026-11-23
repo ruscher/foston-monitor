@@ -1,0 +1,7 @@
+# BigFoston Web: opções do NetSurf (o resto vem de set_defaults em gui.c)
+font_size:120
+font_min_size:90
+scale:100
+remove_backgrounds:0
+enable_PDF_compression:0
+suppress_curl_debug:1

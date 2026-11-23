@@ -73,6 +73,7 @@ Ficam de fora, por falta de driver: TV, transmissor FM e microfone. Bluetooth: o
 | Big Screen (painel do PC) | **FUNCIONANDO** | FSP por TCP na rede USB, 36 quadros/s | 
 | Avisos de dispositivos (fone, carregador, USB, SD) | **FUNCIONANDO** | |
 | Galeria (JPEG, PNG, GIF, BMP, SVG) | **FUNCIONANDO** | miniaturas numa thread com cache no cartão; visualizador no layout do leitor (barra do sistema visível, controles com um toque): zoom, girar, barra entre as fotos e GIF animado | [apps.md](apps.md) |
+| Internet (BigFoston Web) | **EM ANDAMENTO** | motor NetSurf 3.11 num processo sem privilégios (roda no FOSTON), favoritos, histórico, WebApps, downloads com pausa/retomada; falta testar com internet no aparelho | [web-browser](web-browser/00-overview.md) |
 | Controle de volume (barra superior e Multimídia) | **FUNCIONANDO** (simulador; ícone no aparelho) | barra vertical, mudo | [09-interface-ux-ui.md](09-interface-ux-ui.md) |
 | TV, Bluetooth, FM, USB | **NÃO IMPLEMENTADO** | telas dizem "Não disponível neste hardware ainda" e o que falta |
 

@@ -417,6 +417,55 @@ int screenshot_run(const char *dir)
     scr_gallery_demo(5); pump(50);  shot("37e-galeria-foto-zoom");
     scr_gallery_demo(6); pump(100); shot("37f-galeria-voltar");     /* Voltar fecha a foto, fica na Galeria */
     scr_gallery_demo(2); pump(50);
+    {   /* Internet: motor do PC (firmware/build/web/host/dist, tools/bigfoston/build-web.sh host) */
+        const char *wd = getenv("BIGFOSTON_WEB_DIR");
+        static const char host_dist[] = "../../firmware/build/web/host/dist";
+        char b[600];
+        snprintf(b, sizeof b, "%s/bfweb", host_dist);
+        if(!wd && access(b, X_OK) == 0) setenv("BIGFOSTON_WEB_DIR", host_dist, 1);
+        char page[600], url[1100];
+        snprintf(page, sizeof page, "%s/web-demo.html", data_dir());
+        FILE *f = fopen(page, "w");
+        if(f) {
+            fputs("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><title>Notícias do BigFoston</title>"
+                  "<style>body{font-family:sans-serif;margin:0;background:#f4f6fb;color:#1a1a2e}"
+                  "header{background:#3584e4;color:#fff;padding:14px 20px;font-size:24px;font-weight:bold}"
+                  "main{padding:8px 20px} .c{background:#fff;border-radius:10px;padding:12px 16px;margin:10px 0;border:1px solid #d5dbe8}"
+                  "h2{margin:0 0 6px;font-size:19px;color:#1d4f9a} a{color:#3584e4}</style></head><body>"
+                  "<header>BigFoston Web</header><main>"
+                  "<div class=\"c\"><h2>Navegação leve no FOSTON</h2>Páginas simples, formulários, favoritos, histórico e downloads"
+                  " direto para o cartão. Motor NetSurf 3.11 num processo separado, sem privilégios.</div>"
+                  "<div class=\"c\"><h2>Pesquisa</h2><form action=\"https://html.duckduckgo.com/html/\"><input name=\"q\" value=\"previsão do tempo\" size=\"30\">"
+                  " <button>Pesquisar</button></form></div>"
+                  "<div class=\"c\"><h2>Links</h2><a href=\"https://pt.m.wikipedia.org\">Wikipédia</a> · "
+                  "<a href=\"https://github.com/ruscher/foston-monitor\">foston-monitor no GitHub</a></div>", f);
+            for(int i = 1; i <= 12; i++) fprintf(f, "<div class=\"c\"><h2>Seção %d</h2>Texto para rolar a página.</div>", i);
+            fputs("</main></body></html>", f);
+            fclose(f);
+        }
+        snprintf(url, sizeof url, "file://%s", page);
+        if(page[0] != '/') {                                  /* caminho relativo: absoluto para o file:// */
+            char cwd[400];
+            if(getcwd(cwd, sizeof cwd)) snprintf(url, sizeof url, "file://%s/%s", cwd, page);
+        }
+        go(SCR_WEB, 0); pump(1500);                 shot("47-internet-inicio");
+        scr_web_demo("+mark Wikipédia\thttps://pt.m.wikipedia.org");
+        scr_web_demo("+mark GitHub\thttps://github.com");
+        scr_web_demo("+mark DuckDuckGo\thttps://html.duckduckgo.com/html/");
+        scr_web_demo("+start"); pump(100);          shot("47a-internet-inicio-favoritos");
+        scr_web_demo(url); pump(4000);              shot("47b-internet-pagina");
+        scr_web_demo("+scroll 300"); pump(800);     shot("47c-internet-rolagem");
+        scr_web_demo("+menu"); pump(200);           shot("47d-internet-menu");
+        scr_web_demo("+close");
+        scr_web_demo("+edit"); scr_web_demo("+type wiki"); pump(200); shot("47e-internet-endereco");
+        scr_web_demo("+close");
+        scr_web_demo("+app BigLinux\thttps://www.biglinux.com.br");
+        scr_web_demo("+start"); pump(100);          shot("47g-internet-webapps");
+        go(SCR_HOME, HOME_ARG_APPS); pump(600);
+        scr_home_show_page(1); pump(400);           shot("47f-apps-com-internet");
+        scr_home_show_page(0);
+        go(SCR_HOME, 0); pump(300);
+    }
     go(SCR_BOOK, 0);                shot("24-livro");
     {
         char f[600];

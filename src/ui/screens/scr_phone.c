@@ -15,6 +15,7 @@
 #include "../core/phonestat.h"
 #include "../widgets/page.h"
 #include "../widgets/dialog.h"
+#include "../widgets/kbd.h"
 #include "../widgets/glass.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -233,58 +234,12 @@ static lv_obj_t *avatar(lv_obj_t *parent, const char *name, int size)
 
 /* ---------------------------------------------------------- teclado de texto (pt-BR) */
 
-static const char *const kb_lc[] = {
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
-    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "\n",
-    "a", "s", "d", "f", "g", "h", "j", "k", "l", "\xC3\xA7", "\n",
-    "ABC", "z", "x", "c", "v", "b", "n", "m", ",", ".", "?", "\n",
-    LV_SYMBOL_KEYBOARD, "1#", "\xC3\xA1\xC3\xA3", " ", LV_SYMBOL_OK, ""
-};
-static const char *const kb_uc[] = {
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
-    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "\n",
-    "A", "S", "D", "F", "G", "H", "J", "K", "L", "\xC3\x87", "\n",
-    "abc", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "!", "\n",
-    LV_SYMBOL_KEYBOARD, "1#", "\xC3\xA1\xC3\xA3", " ", LV_SYMBOL_OK, ""
-};
-static const char *const kb_acc[] = {
-    "\xC3\xA1", "\xC3\xA0", "\xC3\xA2", "\xC3\xA3", "\xC3\xA9", "\xC3\xAA", "\xC3\xAD", "\xC3\xB3", "\xC3\xB4", "\xC3\xB5", "\n",
-    "\xC3\xBA", "\xC3\xBC", "\xC3\xA7", "\xC3\x81", "\xC3\x83", "\xC3\x89", "\xC3\x8D", "\xC3\x93", "\xC3\x95", "\xC3\x87", "\n",
-    "abc", "-", "'", "\"", ":", ";", "(", ")", "@", LV_SYMBOL_BACKSPACE, "\n",
-    LV_SYMBOL_KEYBOARD, "1#", " ", LV_SYMBOL_OK, ""
-};
-#define KF LV_KEYBOARD_CTRL_BUTTON_FLAGS
-static const lv_buttonmatrix_ctrl_t kb_ctrl_txt[] = {
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, LV_BUTTONMATRIX_CTRL_CHECKED | 6,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    KF | 6, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    KF | 4, KF | 4, KF | 4, 18, LV_BUTTONMATRIX_CTRL_CHECKED | 6,
-};
-static const lv_buttonmatrix_ctrl_t kb_ctrl_acc[] = {
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
-    KF | 6, 4, 4, 4, 4, 4, 4, 4, 4, LV_BUTTONMATRIX_CTRL_CHECKED | 6,
-    KF | 4, KF | 4, 22, LV_BUTTONMATRIX_CTRL_CHECKED | 6,
-};
-
 static lv_obj_t *search_kb_ta;
 static void kb_close(lv_event_t *e);
 
-/* o botão "áã" troca para os acentos; o resto é o tratamento normal do LVGL */
-static void kb_event(lv_event_t *e)
-{
-    lv_obj_t *kb = lv_event_get_target(e);
-    uint32_t id = lv_buttonmatrix_get_selected_button(kb);
-    if(id == LV_BUTTONMATRIX_BUTTON_NONE) return;
-    const char *t = lv_buttonmatrix_get_button_text(kb, id);
-    if(t && !strcmp(t, "\xC3\xA1\xC3\xA3")) { lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_USER_1); return; }
-    lv_keyboard_def_event_cb(e);
-}
-
 static lv_obj_t *kb_open(lv_obj_t *ta, lv_event_cb_t on_done)
 {
-    lv_obj_t *kb = lv_keyboard_create(lv_layer_top());
+    lv_obj_t *kb = kbd_create(lv_layer_top(), NULL);   /* teclado pt-BR com acentos (widgets/kbd) */
     lv_obj_set_size(kb, BF_SCREEN_W, 200);
     lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_font(kb, BF_FONT_M, 0);
@@ -296,12 +251,6 @@ static lv_obj_t *kb_open(lv_obj_t *ta, lv_event_cb_t on_done)
     lv_obj_set_style_radius(kb, 10, LV_PART_ITEMS);
     lv_obj_set_style_bg_color(kb, lv_color_hex(0x1E4878), LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_bg_color(kb, lv_color_hex(GL_LIGHT), LV_PART_ITEMS | LV_STATE_PRESSED);
-    lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_LOWER, kb_lc, kb_ctrl_txt);
-    lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_TEXT_UPPER, kb_uc, kb_ctrl_txt);
-    lv_keyboard_set_map(kb, LV_KEYBOARD_MODE_USER_1, kb_acc, kb_ctrl_acc);
-    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
-    lv_obj_add_event_cb(kb, kb_event, LV_EVENT_VALUE_CHANGED, NULL);
     lv_keyboard_set_textarea(kb, ta);
     lv_obj_add_event_cb(kb, on_done, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(kb, on_done, LV_EVENT_CANCEL, NULL);

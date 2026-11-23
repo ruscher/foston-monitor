@@ -794,6 +794,13 @@ static void destroy(void)
     root = NULL;
 }
 
+/* outro app (Internet: downloads) abre os Arquivos nesta pasta */
+void files_open_dir(const char *dir)
+{
+    snprintf(cwd, sizeof cwd, "%s", dir);
+    nav_go(SCR_FILES, 0);
+}
+
 void scr_files_demo(const char *path)
 {
     struct stat st;
