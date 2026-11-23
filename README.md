@@ -10,7 +10,7 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
-![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.3.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
+![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.4.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -18,7 +18,7 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
-[🐧 BigFoston OS](#-bigfoston-os-030-linux-no-próprio-aparelho) •
+[🐧 BigFoston OS](#-bigfoston-os-040-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -54,14 +54,35 @@
 
 ---
 
-## 🐧 BigFoston OS 0.3.0: Linux no próprio aparelho
+## 🐧 BigFoston OS 0.4.0: Linux no próprio aparelho
 
 Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
 BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
 tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
-Brasil, rotas e voz.
+Brasil, rotas e voz; Bluetooth com o celular, Telefone, TV digital e transmissor FM.
 
-**Novidades da 0.3.0:**
+**Novidades da 0.4.0:**
+
+| | O que mudou | Estado |
+|---|---|---|
+| 🪟 | **Foston Glass**: quarta tela inicial, com cartões de vidro (relógio, Conexão com o celular, música) e um dock de apps; navegação na barra superior | funcionando no aparelho |
+| 📞 | **Telefone** pelo celular conectado: discador, contatos e histórico (PBAP), mensagens com conversas e resposta (MAP), aviso de chamada em qualquer tela | agenda de 5363 contatos em ~1 min; ligação real reconhecida |
+| 🎙️ | **Voz da ligação no FOSTON** (alto-falante e microfone, pelo DSP), com silenciar, volume, em espera, juntar chamadas e gravar | funcionando com os arquivos do aparelho no cartão |
+| 📺 | **TV digital** (ISDB-T 1seg, Siano): busca de canais, imagem e som, gravação no cartão e reprodução | **13,7 quadros/s**; 11 canais com nome em ~2 min |
+| 📻 | **FM Transmitir** (KT0801A): leva o som do FOSTON (música, TV, voz do GPS, ligações) a um rádio externo | ouvido num rádio a 88,1 MHz |
+| 🎵 | Multimídia: música do celular com aleatório/repetir, faixa, gênero e álbum; gravações do Telefone | Bluetooth sem cortes: 0 em 60 s |
+| 🕰️ | Ajustes > Data: **acertar data e hora pelo GPS**, automático (chave própria, sem precisar de rede) ou pelo botão "Acertar agora" | ainda não testado no aparelho |
+| 🖥️ | Big Screen: um toque mostra uma barra no topo com o **X** de sair para a Início (no lugar de segurar o canto por 3 s) | ainda não testado no aparelho |
+| 🧩 | FM Transmitir na grade Apps; GPS do cartão Conexão abre o mapa (os satélites ficam no ícone da barra); botão Apps responde no quadrado inteiro | ainda não testado no aparelho |
+
+> 📞 Telefone, TV e FM têm documentação própria: [Telefone](docs/phone/00-visao-geral.md) ·
+> [TV](docs/tv/00-visao-geral.md) · [FM Transmitir](docs/fm-radio/00-visao-geral.md) ·
+> [Foston Glass](docs/foston-glass/00-visao-geral.md). O FOSTON não tem receptor de rádio AM/FM,
+> só o transmissor. A entrada AV-IN e o EPG da TV ainda estão por fazer.
+
+<details>
+<summary><b>Novidades da 0.3.0</b></summary>
+
 
 | | O que mudou | Medido no aparelho |
 |---|---|---|
@@ -77,6 +98,8 @@ Brasil, rotas e voz.
 > BlueALSA (initrd 3,7 MB; a variante estática sem Bluetooth é `bigfoston_fs707dc_static_defconfig`).
 > Fones e caixas, viva-voz e teclados Bluetooth ainda não estão prontos. Detalhes em
 > [recuperação do hardware](docs/hardware-enablement/00-overview.md).
+
+</details>
 
 <details>
 <summary><b>Novidades da 0.2.0</b></summary>
