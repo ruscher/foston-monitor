@@ -96,6 +96,8 @@ bool calib_load(bf_calib_t *c)
 static struct {
     int fd;
     bool have_cal, down;
+    bool seen;              /* a pressão atual já foi entregue ao LVGL */
+    bool up_pending;        /* soltou na mesma leitura em que encostou: solta na próxima */
     bf_calib_t cal;
     int32_t rx, ry;         /* bruto, último valor do evdev */
     lv_point_t pt;          /* calibrado e filtrado */
@@ -139,17 +141,24 @@ static void ts_read(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
     struct input_event ev;
-    while(read(ts.fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
+    /* Toque curto com a interface ocupada (vídeo em tela cheia: ~60 ms por quadro): o
+     * "encostou" e o "soltou" chegam juntos numa leitura só e o LVGL via só o estado final,
+     * solto; o toque sumia. Então entrega a pressão agora e a soltura na leitura seguinte
+     * (main.c chama de novo enquanto touch_pending()). */
+    if(ts.up_pending) ts.up_pending = ts.down = false;
+    else while(read(ts.fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
         if(ev.type == EV_ABS && ev.code == ABS_X) ts.rx = ev.value;
         else if(ev.type == EV_ABS && ev.code == ABS_Y) ts.ry = ev.value;
         else if(ev.type == EV_KEY && ev.code == BTN_TOUCH) {
+            if(!ev.value && ts.down && !ts.seen) { ts.up_pending = true; break; }
             ts.down = ev.value != 0;
-            if(ts.down) ts.filt_n = 0;             /* novo toque: o filtro recomeça */
+            if(ts.down) { ts.filt_n = 0; ts.seen = false; }   /* novo toque: o filtro recomeça */
         }
         else if(ev.type == EV_SYN) ts_map();
     }
     data->point = ts.pt;
     data->state = ts.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    if(ts.down) ts.seen = true;
 }
 
 lv_indev_t *touch_create(const char *dev)
@@ -170,6 +179,8 @@ lv_indev_t *touch_create(const char *dev)
 }
 
 int touch_fd(void) { return ts.fd; }
+
+bool touch_pending(void) { return ts.up_pending; }
 
 bool touch_last_raw(bf_pt_t *out)
 {

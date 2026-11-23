@@ -332,9 +332,14 @@ Estado geral do projeto: [implementation-status.md](implementation-status.md).
 Cinco alvos (cantos a 50 px da borda + centro), média das amostras enquanto o
 toque dura, ajuste afim por mínimos quadrados e erro residual exibido. Salva em
 `$BIGFOSTON_DATA/pointercal` no formato do tslib (`a b c d e f s 800 480`).
-A aplicação no driver é `touch_calibration_apply()` em `src/ui/core/touch_calib.c`,
-hoje um *stub* porque o driver do touchscreen do MT3351 ainda não existe — ponto de
-integração previsto: envolver o `read_cb` do `lv_evdev` com a transformação.
+Sem arquivo do usuário vale a calibração de fábrica (`/etc/bigfoston/touchcal`).
+O leitor de toque é próprio (`src/ui/core/touch_calib.c`): lê o evdev do driver
+`mt3351-ts`, aplica a transformação afim (`touch_calibration_apply()`) e filtra (mediana
+de 3 amostras, média com a anterior, zona morta de 2 px). É lido por evento: o laço
+principal espera no fd do toque. Com a interface ocupada (vídeo em tela cheia: ~60 ms por
+quadro) um toque curto chegava inteiro, "encostou" e "soltou", numa leitura só, e o LVGL
+via só o estado final; o toque sumia. Agora a pressão é entregue primeiro e a soltura na
+leitura seguinte (`touch_pending()`, que o laço principal consulta antes de esperar).
 
 ## Internacionalização
 

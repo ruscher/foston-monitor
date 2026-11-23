@@ -54,6 +54,16 @@ static void pm_update(void)
     if(lv_tick_elaps(pm_since) > 700) pm_close();   /* dá tempo de ler */
 }
 
+/* segura os toques durante a troca; se demorar (um serviço lento), um toque fecha a janela e
+ * a troca segue por trás (a etiqueta e Ajustes mostram o estado) */
+static uint32_t pm_opened;
+
+static void pm_box_click(lv_event_t *e)
+{
+    (void)e;
+    if(lv_tick_elaps(pm_opened) > 10000) pm_close();
+}
+
 static void pm_open(void)
 {
     if(pm_box || !settings()->perf_modal) return;
@@ -64,6 +74,8 @@ static void pm_open(void)
     lv_obj_set_style_bg_color(pm_box, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(pm_box, LV_OPA_50, 0);
     lv_obj_add_flag(pm_box, LV_OBJ_FLAG_CLICKABLE);       /* segura os toques enquanto troca */
+    lv_obj_add_event_cb(pm_box, pm_box_click, LV_EVENT_CLICKED, NULL);
+    pm_opened = lv_tick_get();
     lv_obj_t *card = lv_obj_create(pm_box);
     lv_obj_remove_style_all(card);
     lv_obj_set_size(card, 520, LV_SIZE_CONTENT);
@@ -249,7 +261,10 @@ static void tick(lv_timer_t *t)
         dlg_bd = NULL;
         lv_obj_delete_async(d);
     }
-    bool show = settings()->perf_tag && !tag_hidden && (st == PM_ON || st == PM_ENTERING);
+    /* nada de etiqueta por cima da janela de progresso ou do diálogo (ficava acesa sobre o
+     * fundo escurecido), nem em Ajustes > Modo performance (o cartão de estado já diz) */
+    bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
+                (st == PM_ON || st == PM_ENTERING);
     if(show) {
         lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);
         if(lv_obj_has_flag(tag, LV_OBJ_FLAG_HIDDEN)) {

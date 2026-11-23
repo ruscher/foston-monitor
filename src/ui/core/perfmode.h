@@ -30,6 +30,9 @@ pm_state_t perfmode_state(void);
 /* na inicialização: um shell anterior parou serviços e não religou (travou, foi atualizado)?
  * religa agora (estado PM_LEAVING); true se havia algo a religar */
 bool       perfmode_recover(void);
+/* grupos PM_SVC_* parados por este modo agora (as telas mostram "pausado" em vez de
+ * "indisponível"); o bit liga antes do stop e desliga depois do start */
+unsigned   perfmode_paused(void);
 /* passo atual de 0 a total (para a barra) */
 void       perfmode_progress(int *done, int *total);
 #endif

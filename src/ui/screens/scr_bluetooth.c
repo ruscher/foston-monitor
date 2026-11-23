@@ -5,6 +5,8 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/btstat.h"
+#include "../core/perfmode.h"
+#include "../core/perfui.h"
 #include "../widgets/page.h"
 #include "../widgets/dialog.h"
 #include <stdio.h>
@@ -192,6 +194,56 @@ static lv_obj_t *action_button(lv_obj_t *parent, const char *sym, lv_event_cb_t 
     return b;
 }
 
+/* ---------------------------------------------------------------- pausado pelo modo performance */
+
+static void create(lv_obj_t *parent, int arg);
+static lv_obj_t *paused_pg, *paused_parent;
+static int paused_wait;
+
+/* o Bluetooth voltou (ou o modo desligou e passou tempo bastante): refaz a página de verdade */
+static void paused_check(lv_timer_t *t)
+{
+    (void)t;
+    if(perfmode_paused() & PM_SVC_BT) { paused_wait = 0; return; }
+    bt_info_t b;
+    bt_read(&b);
+    if(!b.available && ++paused_wait < 10) return;
+    lv_timer_delete(tick);
+    tick = NULL;
+    lv_obj_t *par = paused_parent;
+    lv_obj_delete(paused_pg);
+    paused_pg = NULL;
+    create(par, 0);
+}
+
+static void paused_off(lv_event_t *e) { (void)e; perfui_disable(); }
+
+static void paused_page(lv_obj_t *parent, lv_obj_t *pg)
+{
+    const bf_palette_t *p = pal();
+    page_header(pg, LV_SYMBOL_BLUETOOTH, lv_color_hex(C_BT), tr(S_APP_BLUETOOTH), tr(S_BT_SUB));
+    lv_obj_t *c = bf_card(pg);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_color(c, lv_color_hex(0xe66100), 0);
+    lv_obj_set_style_border_side(c, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(c, 4, 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, BF_SP_S, 0);
+    char title[96];
+    snprintf(title, sizeof title, LV_SYMBOL_CHARGE "  %s", tr(S_PERFM_PAUSED));
+    bf_label(c, title, BF_FONT_M, lv_color_hex(0xe66100));
+    lv_obj_t *m = bf_label(c, tr(S_PERFM_PAUSED_LONG), BF_FONT_S, p->text_dim);
+    lv_obj_set_width(m, LV_PCT(100));
+    lv_label_set_long_mode(m, LV_LABEL_LONG_WRAP);
+    lv_obj_t *b = bf_button(c, LV_SYMBOL_CHARGE, tr(S_PERFM_NOW_OFF), 1);
+    lv_obj_set_height(b, 52);
+    lv_obj_add_event_cb(b, paused_off, LV_EVENT_CLICKED, NULL);
+    paused_pg = pg;
+    paused_parent = parent;
+    paused_wait = 0;
+    tick = lv_timer_create(paused_check, 1000, NULL);
+}
+
 static void create(lv_obj_t *parent, int arg)
 {
     (void)arg;
@@ -200,6 +252,10 @@ static void create(lv_obj_t *parent, int arg)
     switched_at = 0;
     lv_obj_t *pg = page_create(parent);
     bt_read(&cur);
+    if(!cur.available && (perfmode_paused() & PM_SVC_BT)) {
+        paused_page(parent, pg);
+        return;
+    }
     if(!cur.available) {
         page_header(pg, LV_SYMBOL_BLUETOOTH, lv_color_hex(C_BT), tr(S_APP_BLUETOOTH), tr(S_BT_SUB));
         page_unavailable(pg, tr(S_BT_NOAGENT));
@@ -260,6 +316,7 @@ static void destroy(void)
 {
     if(tick) lv_timer_delete(tick);
     tick = NULL;
+    paused_pg = paused_parent = NULL;
 }
 
 const bf_screen_def_t scr_bluetooth_def = { create, destroy, S_APP_BLUETOOTH, NULL };

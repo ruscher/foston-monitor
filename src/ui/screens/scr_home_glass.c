@@ -16,6 +16,7 @@
 #include "../core/btstat.h"
 #include "../core/gpsstat.h"
 #include "../core/phonestat.h"
+#include "../core/perfmode.h"
 #include "../widgets/glass.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
@@ -223,7 +224,9 @@ static void conn_tick(void)
     for(int i = 0; i < b.ndev; i++)
         if(b.dev[i].connected) { if(!nconn) dev = b.dev[i].name; nconn++; }
     char devb[96];
-    if(!b.available) st = tr(S_GL_UNAVAILABLE);
+    unsigned paused = perfmode_paused();
+    if(!b.available && (paused & PM_SVC_BT)) st = tr(S_PERFM_PAUSED);
+    else if(!b.available) st = tr(S_GL_UNAVAILABLE);
     else if(!b.powered) st = tr(S_BT_ST_OFF);
     else if(nconn) {
         st = tr(S_BT_CONNECTED);
@@ -257,7 +260,8 @@ static void conn_tick(void)
     gps_read(&g);
     int lvl = -1;                         /* sem barras quando não há medida */
     bf_str_t gs;
-    if(!gps_available()) gs = S_GL_UNAVAILABLE;
+    if(paused & PM_SVC_GPS) gs = S_PERFM_PAUSED;
+    else if(!gps_available()) gs = S_GL_UNAVAILABLE;
     else if(!gps_enabled() && !g.running) gs = S_GPS_DISABLED;
     else if(g.state <= GPS_STARTING) gs = S_GPS_STARTING;
     else if(g.state == GPS_SEARCHING) { gs = g.view ? S_GL_GPS_SEARCH : S_GL_GPS_NOSIG; lvl = 0; }

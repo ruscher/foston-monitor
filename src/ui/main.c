@@ -49,6 +49,7 @@ static void wait_events(uint32_t ms)
 #ifdef BIGFOSTON_TARGET
     struct pollfd pf[2];
     int n = 0, ti = -1, ki = -1;
+    if(touch_indev && touch_pending()) { lv_indev_read(touch_indev); return; }
     if(touch_indev && touch_fd() >= 0) { ti = n; pf[n++] = (struct pollfd){ touch_fd(), POLLIN, 0 }; }
     if(powerkey_fd() >= 0) { ki = n; pf[n++] = (struct pollfd){ powerkey_fd(), POLLIN, 0 }; }
     if(poll(pf, (nfds_t)n, (int)ms) > 0) {

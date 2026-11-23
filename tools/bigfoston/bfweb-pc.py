@@ -465,6 +465,7 @@ class Session:
         self.url, self.title = "", ""
         self.loading = False
         self.zoom = 100
+        self.last_click = (0.0, 0, 0)    # hora e lugar do último toque (duplo toque = dblclick)
         self.last_scroll_q = 0
         self.dl_dir = os.path.join(DATA, "downloads-tmp")
         self.arec, self.abuf, self.a_loud, self.asock = None, b"", 0.0, None
@@ -580,9 +581,15 @@ class Session:
             self.c.send("Page.stopLoading", {}, session=self.sid)
         elif cmd == "CLICK" and len(nums) == 2:
             x, y = nums
+            # dois toques rápidos no mesmo lugar são um duplo clique (tela cheia do YouTube,
+            # selecionar palavra): o Chrome só gera o dblclick com clickCount 2
+            now = time.monotonic()
+            t0, x0, y0 = self.last_click
+            n = 2 if now - t0 < 0.45 and abs(x - x0) < 24 and abs(y - y0) < 24 else 1
+            self.last_click = (0.0 if n == 2 else now, x, y)
             self.mouse("mouseMoved", x, y)
-            self.mouse("mousePressed", x, y, button="left", clickCount=1)
-            self.mouse("mouseReleased", x, y, button="left", clickCount=1)
+            self.mouse("mousePressed", x, y, button="left", clickCount=n)
+            self.mouse("mouseReleased", x, y, button="left", clickCount=n)
         elif cmd == "LONG" and len(nums) == 2:
             self.feat(*nums)
         elif cmd == "SCROLL" and len(nums) == 2:

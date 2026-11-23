@@ -13,6 +13,7 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/phonestat.h"
+#include "../core/perfmode.h"
 #include "../widgets/page.h"
 #include "../widgets/dialog.h"
 #include "../widgets/kbd.h"
@@ -1446,7 +1447,8 @@ static void refresh(void)
     ph_read(&cur);
     char b[200], b2[96] = "";
     /* ao lado das abas: o celular, a operadora; antena e bateria dele */
-    if(!cur.available) snprintf(b, sizeof b, "%s", tr(S_PH_NOSERVICE));
+    if(!cur.available && (perfmode_paused() & PM_SVC_PHONE)) snprintf(b, sizeof b, "%s", tr(S_PERFM_PAUSED));
+    else if(!cur.available) snprintf(b, sizeof b, "%s", tr(S_PH_NOSERVICE));
     else if(!cur.link) snprintf(b, sizeof b, "%s", tr(S_PH_NOPHONE));
     else {
         snprintf(b, sizeof b, "%s", cur.dev);

@@ -27,5 +27,6 @@ bool touch_last_raw(bf_pt_t *out);
 /* Ponteiro LVGL lendo o evdev do toque e aplicando a calibração afim (pointercal). */
 lv_indev_t *touch_create(const char *dev);
 int touch_fd(void);                      /* fd do evdev do toque (-1 sem) */
+bool touch_pending(void);                /* há uma soltura guardada: ler de novo já */
 #endif
 #endif

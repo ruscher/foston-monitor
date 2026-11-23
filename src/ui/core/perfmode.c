@@ -7,11 +7,16 @@
 #endif
 #include "perfmode.h"
 #include <dirent.h>
+#include <errno.h>
+#include <signal.h>
+#include <time.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -37,14 +42,16 @@ static pm_state_t state = PM_OFF;
 static bool desired, busy, prio_set;
 static unsigned groups;                 /* grupos pedidos na entrada */
 static _Atomic int done, total;
+static _Atomic unsigned paused;          /* grupos parados agora (perfmode_paused) */
 static bool stopped[N_SVC];             /* o que este modo parou (e vai religar); só a thread */
 
-static bool running(const char *name)
+/* pid do processo com esse nome (comm), 0 se não há */
+static pid_t find_proc(const char *name)
 {
     DIR *d = opendir("/proc");
     if(!d) return false;
     struct dirent *e;
-    bool found = false;
+    pid_t found = 0;
     while(!found && (e = readdir(d))) {
         if(e->d_name[0] < '1' || e->d_name[0] > '9') continue;
         char p[300], comm[32];
@@ -53,7 +60,7 @@ static bool running(const char *name)
         if(!f) continue;
         if(fgets(comm, sizeof comm, f)) {
             comm[strcspn(comm, "\n")] = 0;
-            found = !strcmp(comm, name);
+            if(!strcmp(comm, name)) found = (pid_t)atoi(e->d_name);
         }
         fclose(f);
     }
@@ -61,18 +68,48 @@ static bool running(const char *name)
     return found;
 }
 
-static void run(const char *script, const char *arg)
+static bool running(const char *name) { return find_proc(name) != 0; }
+
+static uint64_t now_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
+}
+
+/* roda o script com prazo: um serviço que não responde (o bluetoothd parado logo depois de
+ * subir, com o chip ainda carregando, girava para sempre ignorando o SIGTERM e o "stop"
+ * esperava junto, com a janela de progresso segurando os toques). Estourou: mata o script
+ * (o grupo dele) e devolve false. */
+static bool run(const char *script, const char *arg, unsigned limit_ms)
 {
     pid_t p = fork();
     if(p == 0) {
+        setpgid(0, 0);
         int nul = open("/dev/null", O_RDWR);
         if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
         setpriority(PRIO_PROCESS, 0, 0);
         execl(script, script, arg, (char *)NULL);
         _exit(127);
     }
-    if(p > 0) waitpid(p, NULL, 0);
+    if(p < 0) return false;
+    setpgid(p, p);
+    uint64_t end = now_ms() + limit_ms;
+    for(;;) {
+        pid_t r = waitpid(p, NULL, WNOHANG);
+        if(r == p || (r < 0 && errno != EINTR)) return true;
+        if(now_ms() >= end) break;
+        usleep(50000);
+    }
+    kill(-p, SIGKILL);
+    waitpid(p, NULL, 0);
+    return false;
 }
+
+#define STOP_MS   8000u                 /* o mais lento medido: ~1 s */
+#define START_MS 20000u                 /* o Bluetooth carrega o firmware do chip: ~4 s */
+#define SETTLE_MS 4000u                 /* não para o que acabou de subir antes disso */
+static uint64_t started_at;             /* quando a última volta terminou */
 
 /* o que está parado fica anotado na RAM (/run some ao desligar): se o shell reiniciar no
  * meio do modo (travou, foi atualizado), o próximo religa tudo (perfmode_recover). Anota
@@ -87,8 +124,29 @@ static void note_write(void)
     if(fclose(f) == 0) rename(NOTE ".new", NOTE);
 }
 
+static unsigned stopped_groups(void)
+{
+    unsigned g = 0;
+    for(int i = 0; i < N_SVC; i++) if(stopped[i]) g |= svc[i].group;
+    return g;
+}
+
+static bool still_wanted(void)
+{
+    pthread_mutex_lock(&mu);
+    bool d = desired;
+    pthread_mutex_unlock(&mu);
+    return d;
+}
+
 static void do_enter(unsigned g)
 {
+    /* religou há pouco (o vídeo voltou logo depois de parar): deixa os serviços terminarem
+     * de subir antes de parar de novo; desistiu no meio, nem para */
+    while(now_ms() - started_at < SETTLE_MS) {
+        if(!still_wanted()) return;
+        usleep(100000);
+    }
     bool pick[N_SVC];
     int n = 0;
     for(int i = 0; i < N_SVC; i++) {
@@ -100,8 +158,16 @@ static void do_enter(unsigned g)
     for(int i = 0; i < N_SVC; i++) {
         if(!pick[i]) continue;
         stopped[i] = true;
+        paused = stopped_groups();
         note_write();
-        run(svc[i].script, "stop");
+        /* não parou no prazo (ou o script saiu e o processo ficou): à força */
+        if(!run(svc[i].script, "stop", STOP_MS) || running(svc[i].proc)) {
+            pid_t pid;
+            for(int k = 0; k < 20 && (pid = find_proc(svc[i].proc)); k++) {
+                kill(pid, k < 10 ? SIGTERM : SIGKILL);
+                usleep(100000);
+            }
+        }
         done++;
     }
 }
@@ -114,11 +180,13 @@ static void do_leave(void)
     total = n;
     for(int i = N_SVC - 1; i >= 0; i--) {
         if(!stopped[i]) continue;
-        if(!running(svc[i].proc)) run(svc[i].script, "start");
+        if(!running(svc[i].proc)) run(svc[i].script, "start", START_MS);
         stopped[i] = false;
+        paused = stopped_groups();
         done++;
     }
     unlink(NOTE);
+    started_at = now_ms();
 }
 
 static void *worker(void *arg)
@@ -191,6 +259,7 @@ bool perfmode_recover(void)
             if(!strcmp(line, svc[i].script) && !stopped[i]) { stopped[i] = true; n++; }
     }
     fclose(f);
+    paused = stopped_groups();
     bool go = n && state == PM_OFF && !busy;
     if(go) { state = PM_ON; desired = false; kick(); go = state == PM_LEAVING; }
     pthread_mutex_unlock(&mu);
@@ -205,6 +274,8 @@ pm_state_t perfmode_state(void)
     pthread_mutex_unlock(&mu);
     return s;
 }
+
+unsigned perfmode_paused(void) { return paused; }
 
 void perfmode_progress(int *d, int *t)
 {
