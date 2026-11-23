@@ -159,6 +159,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_webdata.c core/webdata.c -o build/test/test_webdata
 	./build/test/test_webdata build/test/webdata
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_lz4dec.c core/lz4dec.c -llz4 -o build/test/test_lz4dec
+	./build/test/test_lz4dec
 
 run: sim
 	./build/sim/bigfoston-shell

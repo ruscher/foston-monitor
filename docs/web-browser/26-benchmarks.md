@@ -126,3 +126,26 @@ Mesmo vídeo, Chrome 157 no PC, estado do `<video>` a cada 5 s:
 
 PC com o Chrome no Xvfb tocando vídeo: Chrome ~50 % de um núcleo (somando os processos),
 `bfweb-pc.py` ~23 %.
+
+## 23/11/2026 — fluidez do vídeo no modo completo
+
+Medido no FOSTON (`tools/bigfoston` + programa de teste em C no aparelho):
+
+| Etapa | Antes | Agora |
+|---|---|---|
+| descomprimir um quadro de vídeo 800x380 (593 KB) | inflate do lodepng 225 ms (zlib: 107 ms) | LZ4 57 ms (`core/lz4dec.c`) |
+| cabo USB (TCP bruto PC → FOSTON) | 3,2 MB/s | idem |
+| copiar 608 KB na RAM / na memória da tela | 9,5 ms / 64–71 MB/s | idem |
+| quadros em trânsito | 1 (o PC esperava o Q) | 2 |
+| limite de quadros no PC | 12/s | 25/s |
+| tela cheia | LVGL redesenha 800x480 | meia resolução (400x240, ampliada 2x) direto na memória da tela |
+
+Resultado (YouTube, `bfweb-pc.py --verbose`):
+
+| Situação | Antes | Agora | Shell |
+|---|---|---|---|
+| vídeo na página (800x380) | ~3–4 quadros/s | 15–17 quadros/s | ~40 % (rede do kernel ~35 %) |
+| vídeo em tela cheia | — | 17–21 quadros/s | ~59 % |
+
+Modo performance (serviços com o aparelho parado): GPS ~4 %, demais ~0 %; parar os 7
+serviços leva ~2,9 s e religar ~6 s (4,5 s são o firmware do Bluetooth).

@@ -2,6 +2,9 @@
  *
  * Mensagens nos dois sentidos: tipo (1 byte) + tamanho (u32 LE) + conteúdo.
  *   PC -> FOSTON: H "chave\tnome" | E linha de evento | T x y l a (u16 LE) + zlib(RGB565) | P (fim do quadro)
+ *   PC -> FOSTON (com "lz4" em C): L x y l a + bloco LZ4 (RGB565) | H idem em meia resolução,
+ *   ampliado 2x aqui (vídeo em tela cheia: 4x menos dados e descompressão)
+ *   FOSTON -> PC: C capacidades ("lz4 half"), logo depois do A
  *   PC -> FOSTON (downloads): F "id\tnome\ttotal\turl" | G id (u32) + bloco | Z "id\ttamanho"
  *   FOSTON -> PC (som): U código de uso único; o PC abre a porta WEBAUDIO_PORT, manda
  *   "código\n" e depois PCM S16_LE estéreo 32 kHz (webaudio.c), só enquanto a página toca
@@ -15,6 +18,10 @@
 #include "lodepng.h"
 #include "webdl.h"
 #include "webaudio.h"
+#include "lz4dec.h"
+#include <linux/fb.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -42,6 +49,7 @@ static size_t rlen, rcap;
 static bool authed, pairing;
 static char peer_key[80], peer_name[64], start_url[1024];
 static int dx0, dy0, dx1, dy1;               /* região alterada desde o último P */
+static bool direct;                          /* tela cheia: quadros direto na memória da tela */
 
 static void emit(const char *l) { if(cb) cb(l, cb_ud); }
 
@@ -101,6 +109,7 @@ static void drop_client(void)
     bool was = authed;
     webdl_pc_lost();
     webaudio_set_token(NULL);                   /* derruba a conexão de som junto */
+    direct = false;
     if(cfd >= 0) close(cfd);
     cfd = -1;
     authed = pairing = false;
@@ -125,6 +134,7 @@ static void accept_ok(void)
         raw_send('U', tok, 32);
     }
     if(u >= 0) close(u);
+    raw_send('C', "lz4 half", 8);               /* PC antigo ignora: segue com zlib */
     char m[100];
     snprintf(m, sizeof m, "REMOTE 1 %s", peer_name);
     emit(m);
@@ -138,6 +148,100 @@ void webremote_pair_answer(bool allow)
 }
 
 /* bloco de imagem: valida tudo (vem da rede) antes de tocar na memória */
+static void mark(int x, int y, int w, int h)
+{
+    if(dx1 <= dx0) { dx0 = x; dy0 = y; dx1 = x + w; dy1 = y + h; }
+    else {
+        if(x < dx0) dx0 = x;
+        if(y < dy0) dy0 = y;
+        if(x + w > dx1) dx1 = x + w;
+        if(y + h > dy1) dy1 = y + h;
+    }
+}
+
+static uint8_t *tmp;                         /* bloco descomprimido antes de ir para fb */
+static size_t tmp_cap;
+
+static bool tmp_fit(size_t n)
+{
+    if(n <= tmp_cap) return true;
+    uint8_t *t = realloc(tmp, n);
+    if(!t) return false;
+    tmp = t;
+    tmp_cap = n;
+    return true;
+}
+
+/* L (half = false) e H (half = true): bloco LZ4 de RGB565 */
+static void tile_lz4(const uint8_t *p, uint32_t n, bool half)
+{
+    if(n < 8 || !fb) return;
+    int x = p[0] | p[1] << 8, y = p[2] | p[3] << 8, w = p[4] | p[5] << 8, h = p[6] | p[7] << 8;
+    int k = half ? 2 : 1;
+    if(w <= 0 || h <= 0 || (x + w) * k > fw || (y + h) * k > fh) return;
+    size_t need = (size_t)w * h * 2;
+    if(!half && x == 0 && w == fw) {            /* fileiras inteiras: direto no lugar */
+        if(lz4_block_decode(p + 8, n - 8, (uint8_t *)(fb + (size_t)y * fw), need) != (long)need) return;
+        mark(0, y, fw, h);
+        return;
+    }
+    if(!tmp_fit(need) || lz4_block_decode(p + 8, n - 8, tmp, need) != (long)need) return;
+    const uint16_t *src = (const uint16_t *)tmp;
+    if(!half) {
+        for(int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * fw + x, src + (size_t)r * w, (size_t)w * 2);
+        mark(x, y, w, h);
+        return;
+    }
+    for(int r = 0; r < h; r++) {                 /* cada pixel vira 2x2 */
+        uint16_t *d = fb + (size_t)(y + r) * 2 * fw + x * 2;
+        uint32_t *d32 = (uint32_t *)d;           /* fw e x*2 pares: alinhado em 4 */
+        const uint16_t *sr = src + (size_t)r * w;
+        for(int c = 0; c < w; c++) d32[c] = (uint32_t)sr[c] * 0x10001u;
+        memcpy(d + fw, d, (size_t)w * 4);
+    }
+    mark(x * 2, y * 2, w * 2, h * 2);
+}
+
+/* ---- modo direto (tela cheia): o quadro vai do fb para a memória da tela, sem o LVGL ---- */
+static uint8_t *scr_mem;
+static size_t scr_len;
+static int scr_line, scr_xres, scr_yres;
+
+static bool scr_map(void)
+{
+    if(scr_mem) return true;
+    int fd = open("/dev/fb0", O_RDWR | O_CLOEXEC);
+    if(fd < 0) return false;
+    struct fb_fix_screeninfo fi;
+    struct fb_var_screeninfo vi;
+    if(ioctl(fd, FBIOGET_FSCREENINFO, &fi) || ioctl(fd, FBIOGET_VSCREENINFO, &vi) || vi.bits_per_pixel != 16) {
+        close(fd);
+        return false;
+    }
+    void *m = mmap(NULL, fi.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if(m == MAP_FAILED) return false;
+    scr_mem = (uint8_t *)m + (size_t)vi.yoffset * fi.line_length + (size_t)vi.xoffset * 2;
+    scr_len = fi.smem_len;
+    scr_line = (int)fi.line_length;
+    scr_xres = (int)vi.xres;
+    scr_yres = (int)vi.yres;
+    return true;
+}
+
+bool webremote_set_direct(bool on)
+{
+    if(on && (!scr_map() || scr_xres < fw || scr_yres < fh)) on = false;
+    direct = on;
+    return on;
+}
+
+static void direct_copy(void)
+{
+    for(int r = dy0; r < dy1; r++)
+        memcpy(scr_mem + (size_t)r * scr_line + (size_t)dx0 * 2, fb + (size_t)r * fw + dx0, (size_t)(dx1 - dx0) * 2);
+}
+
 static void tile(const uint8_t *p, uint32_t n)
 {
     if(n < 8 || !fb) return;
@@ -151,13 +255,7 @@ static void tile(const uint8_t *p, uint32_t n)
     if(lodepng_zlib_decompress(&out, &outn, p + 8, n - 8, &s) || outn != (size_t)w * h * 2) { free(out); return; }
     for(int r = 0; r < h; r++) memcpy(fb + (size_t)(y + r) * fw + x, out + (size_t)r * w * 2, (size_t)w * 2);
     free(out);
-    if(dx1 <= dx0) { dx0 = x; dy0 = y; dx1 = x + w; dy1 = y + h; }
-    else {
-        if(x < dx0) dx0 = x;
-        if(y < dy0) dy0 = y;
-        if(x + w > dx1) dx1 = x + w;
-        if(y + h > dy1) dy1 = y + h;
-    }
+    mark(x, y, w, h);
 }
 
 static void message(char t, const uint8_t *p, uint32_t n)
@@ -187,6 +285,8 @@ static void message(char t, const uint8_t *p, uint32_t n)
         emit(line);
     }
     else if(t == 'T') tile(p, n);
+    else if(t == 'L') tile_lz4(p, n, false);
+    else if(t == 'H') tile_lz4(p, n, true);
     else if(t == 'F') {                               /* download pelo PC: "id\tnome\ttotal\turl" */
         char s[1600];
         snprintf(s, sizeof s, "%.*s", (int)(n < sizeof s - 1 ? n : sizeof s - 1), (const char *)p);
@@ -210,7 +310,11 @@ static void message(char t, const uint8_t *p, uint32_t n)
     }
     else if(t == 'P') {
         raw_send('Q', NULL, 0);                     /* aplicado: o PC pode mandar o próximo */
-        if(dx1 > dx0) {
+        if(dx1 > dx0 && direct) {                   /* tela cheia sem nada por cima: direto na tela */
+            direct_copy();
+            dx0 = dy0 = dx1 = dy1 = 0;
+        }
+        else if(dx1 > dx0) {
             char r[64];
             snprintf(r, sizeof r, "R %d %d %d %d", dx0, dy0, dx1, dy1);
             dx0 = dy0 = dx1 = dy1 = 0;

@@ -98,9 +98,14 @@ static void *play_thread(void *arg)
 
 bool fx_audio_present(void) { return access("/dev/dsp", W_OK) == 0; }
 
+static bool quiet;                   /* vídeo tocando: sem sons, animações nem tela escurecendo */
+
+void fx_quiet(bool on) { quiet = on; }
+
 void fx_sound(fx_sound_t s)
 {
     const bf_settings_t *cfg = settings();
+    if(quiet) return;
     if(s == FX_STARTUP ? !cfg->boot_sound : !cfg->sounds) return;
     if(player_state() != PL_STOPPED) return;      /* o Multimídia é dono do /dev/dsp */
     int expected = 0;
@@ -134,7 +139,7 @@ void fx_tick(void)
 {
     int min = settings()->dim_min;
     const bf_status_provider_t *p = status_provider();
-    if(dim_cover || min <= 0 || p->backlight_get() < 0) return;
+    if(quiet || dim_cover || min <= 0 || p->backlight_get() < 0) return;
     if(lv_display_get_inactive_time(NULL) < (uint32_t)min * 60000u) return;
     p->backlight_set(5);
     dim_cover = lv_obj_create(lv_layer_sys());
@@ -172,7 +177,7 @@ void fx_init(void)
 
 /* ------------------------------------------------------------- animações */
 
-lv_anim_enable_t fx_anim(void) { return settings()->anim ? LV_ANIM_ON : LV_ANIM_OFF; }
+lv_anim_enable_t fx_anim(void) { return settings()->anim && !quiet ? LV_ANIM_ON : LV_ANIM_OFF; }
 
 static void tx_cb(void *o, int32_t v) { lv_obj_set_style_translate_x(o, v, 0); }
 static void ty_cb(void *o, int32_t v) { lv_obj_set_style_translate_y(o, v, 0); }

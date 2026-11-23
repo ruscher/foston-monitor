@@ -24,6 +24,9 @@ bool webremote_active(void);                 /* PC autorizado e ligado */
 /* muda o tamanho da imagem (tela cheia: 800x480) e pede ao PC o mesmo tamanho; quem mostra
  * a imagem precisa chamar lv_image_set_src de novo */
 bool webremote_resize(int w, int h);
+/* tela cheia sem nada por cima: os quadros vão direto para a memória da tela (sem "R" nem
+ * redesenho do LVGL, que deve estar com a invalidação desligada). false: não deu (fica no LVGL) */
+bool webremote_set_direct(bool on);
 void webremote_set_start_url(const char *url);   /* página que o PC abre ao ligar */
 void webremote_pair_answer(bool allow);      /* resposta ao "PAIR" */
 void webremote_send(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

@@ -49,7 +49,7 @@ except ImportError as e:               # pragma: no cover
 
 PORT = 7071
 TILE = 32
-MIN_FRAME_S = 0.08          # no máximo ~12 quadros por segundo (o FOSTON aplica no ritmo dele)
+MIN_FRAME_S = 0.04          # no máximo ~25 quadros por segundo (o FOSTON confirma cada um: Q)
 # som: o Chrome toca numa saída virtual só dele (não sai no PC) e o que ela recebe vai pelo
 # cabo; S16_LE estéreo 32 kHz (src/ui/core/webaudio.h), blocos de 40 ms, só enquanto há som
 SINK = "bigfoston_web"
@@ -82,12 +82,23 @@ PAGE_SCRIPT = r"""
     const a = ev.target.closest && ev.target.closest('a[target]');
     if (a && a.target !== '_self' && a.target !== '_top' && a.target !== '_parent') a.target = '_self';
   }, true);
+  // vídeo tocando (para o modo performance do FOSTON): playing/pause/ended dos <video>
+  const vid = Math.random().toString(36).slice(2, 8);
+  let vlast = null;
+  const vcheck = () => {
+    const on = [...document.querySelectorAll('video')].some(v => !v.paused && !v.ended);
+    if (on !== vlast) { vlast = on; try { bfVideo(vid + (on ? ' 1' : ' 0')); } catch (x) {} }
+  };
+  for (const ev of ['playing', 'pause', 'ended', 'emptied'])
+    document.addEventListener(ev, () => setTimeout(vcheck, 0), true);
+  window.addEventListener('pagehide', () => { try { bfVideo(vid + ' 0'); } catch (x) {} });
   // tela cheia: o Chrome headless recusa requestFullscreen ("not granted"). Emulada só na
   // página principal: o elemento ocupa a área toda, o site vê fullscreenElement e os
   // eventos normais, e o FOSTON esconde as barras (bfFull) e passa a página para 800x480.
   if (window.top !== window) return;
   const fsStyle = document.createElement('style');
-  fsStyle.textContent = '.__bffs{position:fixed!important;inset:0!important;width:100vw!important;' +
+  fsStyle.textContent = 'html{overflow:hidden!important}' +
+    '.__bffs{position:fixed!important;inset:0!important;width:100vw!important;' +
     'height:100vh!important;max-width:none!important;max-height:none!important;margin:0!important;' +
     'transform:none!important;z-index:2147483647!important;background:#000!important}';
   let fsEl = null;
@@ -158,6 +169,30 @@ def log(*a):
 
 
 # ------------------------------------------------------------------ Chrome (CDP por pipe)
+
+def load_lz4():
+    """compressão LZ4 de bloco pela liblz4 do sistema (ctypes; nada para instalar). O FOSTON
+    descomprime LZ4 ~4x mais rápido que o inflate (225 -> 57 ms num quadro de vídeo)."""
+    import ctypes
+    import ctypes.util
+    name = ctypes.util.find_library("lz4") or "liblz4.so.1"
+    try:
+        lib = ctypes.CDLL(name)
+        lib.LZ4_compressBound.argtypes = [ctypes.c_int]
+        lib.LZ4_compress_fast.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    except (OSError, AttributeError):
+        return None
+
+    def compress(data):
+        cap = lib.LZ4_compressBound(len(data))
+        out = ctypes.create_string_buffer(cap)
+        n = lib.LZ4_compress_fast(data, out, len(data), cap, 1)
+        return out.raw[:n] if n > 0 else None
+    return compress
+
+
+LZ4 = load_lz4()
+
 
 def die_with_parent():
     """no filho: morre junto com este script, mesmo num kill -9 (PR_SET_PDEATHSIG)"""
@@ -413,11 +448,15 @@ class Foston:
 # ------------------------------------------------------------------ sessão
 
 class Session:
-    def __init__(self, chrome, foston, w, h, start_url):
+    def __init__(self, chrome, foston, w, h, start_url, caps=()):
         self.c, self.f = chrome, foston
         self.w, self.h = w, h
         self.prev = None                 # último quadro RGB565 (h, w) uint16 enviado
-        self.waiting_ack = False         # um quadro no FOSTON ainda não aplicado
+        self.inflight = 0                # quadros mandados e ainda não aplicados no FOSTON (Q)
+        self.caps = set(caps)            # "lz4", "half": o que o FOSTON entende (mensagem C)
+        self.scale = 1                   # 2: vídeo em tela cheia em meia resolução
+        self.video = {}                  # quadro da página -> <video> tocando
+        self.st_t, self.st_n, self.st_b, self.st_ms = time.time(), 0, 0, 0.0
         self.pending_img = None          # quadro mais novo esperando a vez
         self.last_sent = 0.0
         self.dls = {}                    # guid -> {"id", "name", "url", "file", "sent"}
@@ -457,8 +496,12 @@ class Session:
                      ("Runtime.addBinding", {"name": "bfCaret"}),
                      ("Runtime.addBinding", {"name": "bfTitle"}),
                      ("Runtime.addBinding", {"name": "bfFull"}),
+                     ("Runtime.addBinding", {"name": "bfVideo"}),
                      ("Page.addScriptToEvaluateOnNewDocument", {"source": PAGE_SCRIPT}),
-                     ("Page.setLifecycleEventsEnabled", {"enabled": True})]:
+                     ("Page.setLifecycleEventsEnabled", {"enabled": True}),
+                     # o FOSTON desenha o próprio indicador de rolagem; --hide-scrollbars só
+                     # vale no headless
+                     ("Emulation.setScrollbarsHidden", {"hidden": True})]:
             self.c.call(m, p, session=None if m.startswith("Target.") else s)
         os.makedirs(self.dl_dir, exist_ok=True)
         self.c.call("Browser.setDownloadBehavior", {"behavior": "allowAndName", "downloadPath": self.dl_dir,
@@ -567,11 +610,20 @@ class Session:
         elif cmd == "SIZE" and len(nums) == 2 and 160 <= nums[0] <= 1920 and 120 <= nums[1] <= 1080:
             # tela cheia no FOSTON (800x480) e de volta (800x380)
             self.w, self.h = nums
+            self.scale = 1
             self.prev = None
             self.metrics()
             self.c.send("Page.stopScreencast", {}, session=self.sid)
             self.c.send("Page.startScreencast", {"format": "png", "everyNthFrame": 1,
                                                  "maxWidth": self.w, "maxHeight": self.h}, session=self.sid)
+        elif cmd == "SCALE" and nums and nums[0] in (1, 2):
+            # vídeo em tela cheia: o Chrome já entrega a imagem reduzida (menos trabalho para todos)
+            self.scale = nums[0] if "half" in self.caps and LZ4 else 1
+            self.prev = None
+            self.c.send("Page.stopScreencast", {}, session=self.sid)
+            self.c.send("Page.startScreencast", {"format": "png", "everyNthFrame": 1,
+                                                 "maxWidth": self.w // self.scale,
+                                                 "maxHeight": self.h // self.scale}, session=self.sid)
         elif cmd == "EXITFULL":                  # o FOSTON saiu da tela cheia pelo botão dele
             self.c.send("Runtime.evaluate", {"expression": "window.__bfExitFull && __bfExitFull()"},
                         session=self.sid)
@@ -602,50 +654,85 @@ class Session:
 
     def pump(self):
         """manda o quadro pendente se o FOSTON já aplicou o anterior e respeitando o ritmo"""
-        if self.pending_img is None or self.waiting_ack or time.time() - self.last_sent < MIN_FRAME_S:
+        # dois quadros em trânsito: o PC prepara e o cabo leva o próximo enquanto o FOSTON
+        # ainda aplica o anterior
+        if self.pending_img is None or self.inflight >= 2 or time.time() - self.last_sent < MIN_FRAME_S:
             return
         data, self.pending_img = self.pending_img, None
         if self.send_frame(data):
-            self.waiting_ack = True
+            self.inflight += 1
             self.last_sent = time.time()
 
     def send_frame(self, data):
+        t0 = time.time()
+        k = self.scale if "half" in self.caps and LZ4 else 1
+        W, H = self.w // k, self.h // k
         img = Image.open(io.BytesIO(base64.b64decode(data))).convert("RGB")
-        if img.size != (self.w, self.h):
-            canvas = Image.new("RGB", (self.w, self.h), (255, 255, 255))
-            canvas.paste(img.crop((0, 0, min(img.width, self.w), min(img.height, self.h))), (0, 0))
+        if img.size != (W, H):
+            if k > 1 and img.width > W:          # o Chrome ainda manda no tamanho inteiro
+                img = img.resize((img.width // k, img.height // k), Image.BILINEAR)
+            canvas = Image.new("RGB", (W, H), (255, 255, 255))
+            canvas.paste(img.crop((0, 0, min(img.width, W), min(img.height, H))), (0, 0))
             img = canvas
         a = np.asarray(img, dtype=np.uint16)
         cur = ((a[:, :, 0] >> 3) << 11) | ((a[:, :, 1] >> 2) << 5) | (a[:, :, 2] >> 3)
         cur = cur.astype("<u2")
         if self.prev is None or self.prev.shape != cur.shape:
-            changed = np.ones(((self.h + TILE - 1) // TILE, (self.w + TILE - 1) // TILE), bool)
+            changed = np.ones(((H + TILE - 1) // TILE, (W + TILE - 1) // TILE), bool)
         else:
             diff = cur != self.prev
-            ph, pw = -self.h % TILE, -self.w % TILE
+            ph, pw = -H % TILE, -W % TILE
             d = np.pad(diff, ((0, ph), (0, pw)))
             changed = d.reshape(d.shape[0] // TILE, TILE, d.shape[1] // TILE, TILE).any(axis=(1, 3))
         self.prev = cur
         rows, cols = np.nonzero(changed)
         if not len(rows):
             return False
-        # junta blocos vizinhos da mesma fileira (menos cabeçalhos, zlib melhor)
-        sent = 0
+        # trechos contínuos de cada fileira de blocos; trechos iguais em fileiras seguidas viram
+        # um retângulo só (vídeo: poucos retângulos grandes, menos cabeçalhos, LZ4 melhor)
+        rects = []                               # [x0, x1, y0, y1] em blocos
+        open_by_span = {}
         for ty in np.unique(rows):
             xs = cols[rows == ty]
-            start = prev_x = xs[0]
-            for tx in list(xs[1:]) + [None]:
-                if tx is not None and tx == prev_x + 1:
-                    prev_x = tx
-                    continue
-                x0, y0 = int(start) * TILE, int(ty) * TILE
-                x1, y1 = min(self.w, (int(prev_x) + 1) * TILE), min(self.h, y0 + TILE)
-                block = np.ascontiguousarray(cur[y0:y1, x0:x1]).tobytes()
-                self.f.send(b"T", struct.pack("<HHHH", x0, y0, x1 - x0, y1 - y0) + zlib.compress(block, 1))
-                sent += 1
-                if tx is not None:
-                    start = prev_x = tx
+            runs, start = [], xs[0]
+            for i in range(1, len(xs) + 1):
+                if i == len(xs) or xs[i] != xs[i - 1] + 1:
+                    runs.append((int(start), int(xs[i - 1]) + 1))
+                    if i < len(xs):
+                        start = xs[i]
+            nxt = {}
+            for span in runs:
+                r = open_by_span.get(span)
+                if r is not None and r[3] == ty:
+                    r[3] = ty + 1
+                else:
+                    r = [span[0], span[1], int(ty), int(ty) + 1]
+                    rects.append(r)
+                nxt[span] = r
+            open_by_span = nxt
+        kind = b"H" if k > 1 else b"L" if LZ4 and "lz4" in self.caps else b"T"
+        nbytes = 0
+        for bx0, bx1, by0, by1 in rects:
+            x0, y0 = bx0 * TILE, by0 * TILE
+            x1, y1 = min(W, bx1 * TILE), min(H, by1 * TILE)
+            # até ~240 KB crus por mensagem (o FOSTON aceita até 1 MB)
+            step = max(1, 122880 // max(1, x1 - x0))
+            for ys in range(y0, y1, step):
+                ye = min(y1, ys + step)
+                block = np.ascontiguousarray(cur[ys:ye, x0:x1]).tobytes()
+                z = LZ4(block) if kind != b"T" else zlib.compress(block, 1)
+                msg = struct.pack("<HHHH", x0, ys, x1 - x0, ye - ys) + z
+                self.f.send(kind, msg)
+                nbytes += len(msg)
         self.f.send(b"P", b"")
+        self.st_n += 1
+        self.st_b += nbytes
+        self.st_ms += (time.time() - t0) * 1000
+        if VERBOSE and time.time() - self.st_t >= 5:
+            dt = time.time() - self.st_t
+            log(f"imagem: {self.st_n / dt:.1f} quadros/s, {self.st_b / max(1, self.st_n) / 1024:.0f} KB/quadro, "
+                f"{self.st_ms / max(1, self.st_n):.0f} ms no PC, {kind.decode()} {W}x{H}")
+            self.st_t, self.st_n, self.st_b, self.st_ms = time.time(), 0, 0, 0.0
         if time.time() - self.last_scroll_q > 0.3:
             self.last_scroll_q = time.time()
             self.scroll_state()
@@ -757,6 +844,9 @@ class Session:
             else:
                 self.url = url
                 self.title = ""                  # documento novo: o título vem de novo
+                if any(self.video.values()):     # a página com o vídeo saiu
+                    self.f.event("VIDEO 0")
+                self.video.clear()
                 if self.full:                    # a página nova não está em tela cheia
                     self.full = False
                     self.f.event("FULL 0")
@@ -778,6 +868,12 @@ class Session:
                 if t.get("url") and t["url"] != "about:blank":
                     self.go(t["url"])
                 self.c.send("Target.closeTarget", {"targetId": t["targetId"]})
+        elif meth == "Runtime.bindingCalled" and p.get("name") == "bfVideo":
+            fid, _, on = p.get("payload", "").partition(" ")
+            was = any(self.video.values())
+            self.video[fid[:16]] = on == "1"
+            if any(self.video.values()) != was:
+                self.f.event("VIDEO 1" if not was else "VIDEO 0")
         elif meth == "Runtime.bindingCalled" and p.get("name") == "bfFull":
             self.full = p.get("payload") == "1"
             self.f.event("FULL 1" if self.full else "FULL 0")
@@ -862,7 +958,10 @@ class Session:
                     elif t == b"U":                  # código da conexão de som
                         self.audio_connect(payload)
                     elif t == b"Q":                  # o FOSTON aplicou o quadro
-                        self.waiting_ack = False
+                        self.inflight = max(0, self.inflight - 1)
+                    elif t == b"C":                  # capacidades (FOSTON novo)
+                        self.caps = set(payload.decode(errors="replace").split())
+                        log("imagem: " + ("LZ4" if LZ4 and "lz4" in self.caps else "zlib"))
                     elif t == b"q" and len(payload) == 4:   # bloco de download gravado
                         pid = struct.unpack("<I", payload)[0]
                         for guid, d in list(self.dls.items()):
@@ -944,7 +1043,7 @@ def serve(a, exe, key, name):
             continue
         try:
             # o FOSTON responde "A ok L A" (autorizado, largura e altura) ou "A no"
-            ans, atoken = None, None
+            ans, atoken, caps = None, None, []
             end = time.time() + 120               # tempo para tocar em Permitir na tela
             while ans is None and time.time() < end:
                 r, _, _ = select.select([f.s], [], [], 1)
@@ -954,6 +1053,8 @@ def serve(a, exe, key, name):
                             ans = p.decode().split()
                         elif t == b"U":           # vem logo depois do A, às vezes no mesmo recv
                             atoken = p
+                        elif t == b"C":
+                            caps = p.decode(errors="replace").split()
             if not ans or ans[0] != "ok":
                 log("o FOSTON recusou este PC" if ans else "sem resposta do FOSTON")
                 f.s.close()
@@ -972,7 +1073,9 @@ def serve(a, exe, key, name):
                 serve.chrome = chrome = Chrome(exe, w, h, audio=serve.sink.ok)
             sess = None
             try:
-                sess = Session(chrome, f, w, h, start)
+                sess = Session(chrome, f, w, h, start, caps)
+                log("imagem: " + ("LZ4" if LZ4 and "lz4" in caps else "zlib") +
+                    (", vídeo em tela cheia em meia resolução" if LZ4 and "half" in caps else ""))
                 if atoken:
                     sess.audio_connect(atoken)
                 sess.run()

@@ -1,6 +1,10 @@
 # Limitações conhecidas
 
-- **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; até ~12 quadros/s; o som
+- **Modo performance**: enquanto ligado, o FOSTON não recebe chamadas nem usa GPS ou
+  Bluetooth (volta 10 s depois de o vídeo parar); desligável no menu do Internet.
+- **Tela cheia**: sem sincronismo vertical, uma troca rápida de cena pode mostrar uma emenda
+  horizontal por um quadro.
+- **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; vídeo a ~15–20 quadros/s; o som
   chega ~0,3 s atrás da imagem do Chrome e precisa de PulseAudio/PipeWire no PC (`pactl` e
   `parec`); downloads completos só depois de baixados no PC (não dá para pausar).
 - **Modo leve — JavaScript**: Duktape (ES5 com partes do ES2015), sem JIT, lento no ARMv6; desligado

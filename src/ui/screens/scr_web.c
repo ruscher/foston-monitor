@@ -24,6 +24,8 @@
 #include "../core/webproc.h"
 #include "../core/webdl.h"
 #include "../core/webremote.h"
+#include "../core/perfmode.h"
+#include "../core/fx.h"
 #include "../widgets/dialog.h"
 #include "../widgets/kbd.h"
 #include "../widgets/page.h"
@@ -432,6 +434,114 @@ static void ctx_open(int x, int y, const char *link, const char *obj)
 }
 
 /* uma linha de evento do motor */
+/* ---------------- modo performance (vídeo tocando) ----------------
+ * O PC avisa VIDEO 1/0 (eventos playing/pause/ended dos <video> da página). Vídeo tocando:
+ * sem sons de toque, animações nem tela escurecendo (na hora) e, com o ajuste ligado e o
+ * vídeo seguindo 2 s, os serviços param (perfmode.c). Vídeo parado por 10 s (ou o app
+ * fechado): tudo volta. Entrar/sair leva segundos: janela com barra de progresso. */
+static bool video_on;
+static lv_timer_t *pv_t, *pm_t;
+static lv_obj_t *pm_box, *pm_bar, *pm_title, *pm_sub;
+static pm_state_t pm_shown = PM_OFF;
+static uint32_t pm_since;
+
+static void pm_close(void)
+{
+    if(pm_t) { lv_timer_delete(pm_t); pm_t = NULL; }
+    if(pm_box) { lv_obj_delete(pm_box); pm_box = NULL; }
+    pm_bar = pm_title = pm_sub = NULL;
+    pm_shown = PM_OFF;
+}
+
+static void pm_tick(lv_timer_t *t)
+{
+    (void)t;
+    pm_state_t st = perfmode_state();
+    int d, n;
+    perfmode_progress(&d, &n);
+    if(st == PM_ENTERING || st == PM_LEAVING) {
+        if(st != pm_shown) {                          /* entrar virou sair (app fechado no meio) */
+            pm_shown = st;
+            lv_label_set_text(pm_title, tr(st == PM_ENTERING ? S_PERF_ENTER : S_PERF_LEAVE));
+            lv_label_set_text(pm_sub, tr(st == PM_ENTERING ? S_PERF_ENTER_SUB : S_PERF_LEAVE_SUB));
+            pm_since = lv_tick_get();
+        }
+        lv_bar_set_value(pm_bar, n ? d * 100 / n : 0, LV_ANIM_ON);
+        return;
+    }
+    lv_bar_set_value(pm_bar, 100, LV_ANIM_ON);
+    if(lv_tick_elaps(pm_since) > 700) pm_close();   /* dá tempo de ler */
+}
+
+static void pm_open(void)
+{
+    if(pm_box) return;
+    const bf_palette_t *p = pal();
+    pm_box = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(pm_box);
+    lv_obj_set_size(pm_box, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(pm_box, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(pm_box, LV_OPA_50, 0);
+    lv_obj_add_flag(pm_box, LV_OBJ_FLAG_CLICKABLE);       /* segura os toques enquanto troca */
+    lv_obj_t *card = lv_obj_create(pm_box);
+    lv_obj_remove_style_all(card);
+    lv_obj_set_size(card, 520, LV_SIZE_CONTENT);
+    lv_obj_center(card);
+    lv_obj_set_style_bg_color(card, p->surface, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(card, BF_RADIUS_L, 0);
+    lv_obj_set_style_pad_all(card, BF_SP_XL, 0);
+    lv_obj_set_style_pad_row(card, BF_SP_M, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    pm_title = bf_label(card, "", BF_FONT_L, p->text);
+    pm_sub = bf_label(card, "", BF_FONT_M, p->text_dim);
+    lv_obj_set_width(pm_sub, LV_PCT(100));
+    lv_label_set_long_mode(pm_sub, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(pm_sub, LV_TEXT_ALIGN_CENTER, 0);
+    pm_bar = lv_bar_create(card);
+    lv_obj_set_size(pm_bar, LV_PCT(100), 12);
+    lv_obj_set_style_bg_color(pm_bar, p->text_dim, 0);      /* trilho visível sobre o cartão */
+    lv_obj_set_style_bg_opa(pm_bar, LV_OPA_30, 0);
+    lv_obj_set_style_bg_color(pm_bar, lv_color_hex(C_WEB), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(pm_bar, 6, 0);
+    lv_obj_set_style_radius(pm_bar, 6, LV_PART_INDICATOR);
+    lv_bar_set_range(pm_bar, 0, 100);
+    pm_shown = PM_OFF;
+    pm_since = lv_tick_get();
+    pm_t = lv_timer_create(pm_tick, 100, NULL);
+    pm_tick(NULL);
+}
+
+static void perf_apply(lv_timer_t *t)
+{
+    (void)t;
+    pv_t = NULL;
+    if(video_on) {
+        if(!settings()->web_perf || perfmode_state() != PM_OFF) return;
+        perfmode_enter();
+        pm_open();
+    }
+    else {
+        fx_quiet(false);
+        if(perfmode_state() == PM_OFF) return;
+        perfmode_leave();
+        pm_open();
+    }
+}
+
+/* playing: um vídeo começou (true) ou parou (false); now: sem esperar (app fechando) */
+static void perf_video(bool playing, bool now)
+{
+    video_on = playing;
+    if(playing) fx_quiet(true);
+    if(pv_t) { lv_timer_delete(pv_t); pv_t = NULL; }
+    if(now) { perf_apply(NULL); return; }
+    pv_t = lv_timer_create(perf_apply, playing ? 2000 : 10000, NULL);
+    lv_timer_set_repeat_count(pv_t, 1);
+}
+
 /* ---------------- tela cheia (modo completo) ----------------
  * O vídeo (ou o que a página pôs em tela cheia) ocupa os 800x480: a imagem da página vai
  * para a camada de cima, por cima das barras, e o PC passa a renderizar nesse tamanho. O
@@ -440,16 +550,65 @@ static void ctx_open(int x, int y, const char *link, const char *obj)
 static lv_obj_t *fs_img, *fs_btn;
 static lv_timer_t *fs_t;
 
+static lv_timer_t *fs_watch;
+static bool fs_direct;
+
+/* modo direto: o LVGL para de desenhar e os quadros vão direto para a tela (só com nada
+ * por cima da imagem: o botão escondido e nenhum aviso, diálogo ou chamada) */
+static void fs_direct_set(bool on)
+{
+    lv_display_t *d = lv_display_get_default();
+    if(on == fs_direct) return;
+    if(on) {
+        lv_refr_now(d);                               /* a tela inteira já como a imagem está */
+        lv_display_enable_invalidation(d, false);
+        if(!webremote_set_direct(true)) { lv_display_enable_invalidation(d, true); return; }
+        fs_direct = true;
+    }
+    else {
+        webremote_set_direct(false);
+        lv_display_enable_invalidation(d, true);
+        fs_direct = false;
+        lv_obj_invalidate(lv_screen_active());
+        lv_obj_invalidate(lv_layer_top());
+    }
+}
+
+static bool layer_clear(lv_obj_t *layer)            /* nenhum objeto visível além da imagem */
+{
+    uint32_t n = lv_obj_get_child_count(layer);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(layer, (int32_t)i);
+        if(c != fs_img && c != fs_btn && !lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) return false;
+    }
+    return true;
+}
+
+static bool fs_alone(void)
+{
+    return fs_img && fs_btn && lv_obj_has_flag(fs_btn, LV_OBJ_FLAG_HIDDEN)
+        && layer_clear(lv_layer_top()) && layer_clear(lv_layer_sys());
+}
+
+static void fs_watch_tick(lv_timer_t *t)
+{
+    (void)t;
+    if(fs_direct && !fs_alone()) fs_direct_set(false);
+    else if(!fs_direct && fs_alone()) fs_direct_set(true);
+}
+
 static void fs_btn_hide(lv_timer_t *t)
 {
     (void)t;
     fs_t = NULL;
     if(fs_btn) lv_obj_add_flag(fs_btn, LV_OBJ_FLAG_HIDDEN);
+    if(fs_alone()) fs_direct_set(true);
 }
 
 static void fs_btn_show(void)
 {
     if(!fs_btn) return;
+    fs_direct_set(false);
     lv_obj_remove_flag(fs_btn, LV_OBJ_FLAG_HIDDEN);
     if(fs_t) lv_timer_reset(fs_t);
     else {
@@ -500,11 +659,16 @@ static void fs_enter(void)
     lv_obj_center(x);
     lv_obj_add_event_cb(fs_btn, fs_exit_click, LV_EVENT_CLICKED, NULL);
     fs_btn_show();
+    fs_watch = lv_timer_create(fs_watch_tick, 250, NULL);
+    /* vídeo em meia resolução (ampliado aqui): 4x menos dados para o cabo e para o ARM */
+    if(!settings()->web_fs_sharp) eng_send("SCALE 2");
 }
 
 static void fs_leave(bool tell_page)
 {
     if(!fs_img) return;
+    fs_direct_set(false);
+    if(fs_watch) { lv_timer_delete(fs_watch); fs_watch = NULL; }
     if(fs_t) { lv_timer_delete(fs_t); fs_t = NULL; }
     lv_obj_delete(fs_btn);
     lv_obj_delete(fs_img);
@@ -528,6 +692,7 @@ static void on_event(const char *l, void *ud)
         lv_area_t r = { ar.x1 + a, ar.y1 + b, ar.x1 + c - 1, ar.y1 + d - 1 };
         lv_obj_invalidate_area(v, &r);
     }
+    else if(!strncmp(l, "VIDEO ", 6)) perf_video(l[6] == '1', false);
     else if(!strncmp(l, "FULL ", 5)) {
         if(l[5] == '1') fs_enter();
         else fs_leave(false);
@@ -656,6 +821,7 @@ static void on_remote(const char *l, void *ud)
     }
     if(!strncmp(l, "REMOTE 0", 8)) {
         fs_leave(false);                              /* sem o PC não há tela cheia */
+        if(video_on) perf_video(false, false);
         remote_on = false;
         loading = false;
         page_kb_hide();
@@ -1364,6 +1530,15 @@ static void opt_toggle(lv_event_t *e)
         }
         return;
     }
+    if(w == 3 || w == 4) {                            /* tela cheia nítida / modo performance */
+        if(w == 3) settings()->web_fs_sharp = on;
+        else settings()->web_perf = on;
+        settings_save();
+        if(w == 3 && fs_img) eng_send("SCALE %d", on ? 1 : 2);
+        if(w == 4 && !on && perfmode_state() != PM_OFF) { perfmode_leave(); pm_open(); }
+        if(w == 4 && on && video_on) perf_video(true, false);
+        return;
+    }
     if(w == 0) settings()->web_no_images = on;
     else settings()->web_js = on;
     settings_save();
@@ -1404,6 +1579,8 @@ static void open_menu(void)
     page_switch_row(panel, tr(S_WEB_SAVE_DATA), settings()->web_no_images, opt_toggle, (void *)0);
     page_switch_row(panel, tr(S_WEB_JS), settings()->web_js, opt_toggle, (void *)1);
     page_switch_row(panel, tr(S_WEB_PC_MODE), settings()->web_pc, opt_toggle, (void *)2);
+    page_switch_row(panel, tr(S_WEB_FS_SHARP), settings()->web_fs_sharp, opt_toggle, (void *)3);
+    page_switch_row(panel, tr(S_WEB_PERF), settings()->web_perf, opt_toggle, (void *)4);
     panel_row(LV_SYMBOL_USB, tr(S_WEB_PC_STATUS), remote_on ? tr(S_WEB_PC_LINKED) : settings()->web_pc ? tr(S_WEB_PC_WAITING) : "-", NULL, NULL);
     panel_row(BF_SYMBOL_SEARCH, tr(S_WEB_ENGINE), web_search_name(settings()->web_search), menu_pick, (void *)5);
     char mem[32];
@@ -1540,6 +1717,7 @@ static void destroy(void)
     if(kb) { lv_obj_delete(kb); kb = NULL; }
     webdl_set_listener(NULL, NULL);
     fs_leave(false);
+    perf_video(false, true);                          /* fora do Internet: tudo volta já */
     webremote_stop();
     remote_on = false;
     engine_stop();                                    /* a RAM volta para o resto do sistema */

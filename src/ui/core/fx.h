@@ -18,6 +18,8 @@ bool fx_audio_present(void);
 lv_anim_enable_t fx_anim(void);      /* LV_ANIM_ON se as animações estão ligadas */
 /* Desliza um objeto (translate) de (dx,dy) até a posição normal. */
 void fx_slide_in(lv_obj_t *obj, int dx, int dy, uint32_t delay_ms, uint32_t ms);
+/* Vídeo tocando (app Internet): sem sons de toque, sem animações e sem escurecer a tela. */
+void fx_quiet(bool on);
 /* Chamado a cada segundo: escurece a tela após o tempo sem toque. */
 void fx_tick(void);
 #endif
