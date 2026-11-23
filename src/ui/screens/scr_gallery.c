@@ -4,7 +4,8 @@
  * As miniaturas são feitas numa thread (decodificar uma foto leva de dezenas
  * a centenas de ms no ARM) e só para a parte visível da grade; ficam num cache
  * em <dados>/thumbs (quando a pasta aceita gravação), então a segunda vez é
- * imediata. Toque abre o visualizador (zoom; ◀ ▶ ou deslizar troca de foto). */
+ * imediata. Toque abre o visualizador (widgets/imgview: um toque mostra zoom,
+ * giro e ◀ barra ▶ para trocar de foto; deslizar também troca). */
 #define _DEFAULT_SOURCE
 #include "screens.h"
 #include "../core/theme.h"
@@ -231,21 +232,23 @@ static void drop_thumb(int i)
 
 static void open_index(int i);
 
-static void open_async(void *ud) { open_index((int)(intptr_t)ud); }
+static void open_async(void *ud)
+{
+    if(imgview_is_open()) open_index((int)(intptr_t)ud);   /* fechada no meio tempo: não reabre */
+}
 
-static void nav(int dir, void *ud)
+static void nav(int index, void *ud)
 {
     (void)ud;
-    int i = view_idx + dir;
-    if(i < 0 || i >= n_imgs) return;
-    lv_async_call(open_async, (void *)(intptr_t)i);   /* fora do evento do próprio visualizador */
+    if(index < 0 || index >= n_imgs || index == view_idx) return;
+    lv_async_call(open_async, (void *)(intptr_t)index);   /* fora do evento do próprio visualizador */
 }
 
 static void open_index(int i)
 {
-    if(i < 0 || i >= n_imgs) return;
+    if(i < 0 || i >= n_imgs || !root) return;             /* a tela pode ter fechado antes do async */
     view_idx = i;
-    imgview_set_nav(nav, NULL);
+    imgview_set_nav(nav, NULL, i, n_imgs);
     if(!imgview_open(imgs[i].path)) imgview_close();
     if(grid && cells[i]) lv_obj_scroll_to_view(cells[i], LV_ANIM_OFF);
 }
@@ -425,6 +428,7 @@ static void destroy(void)
     memset(cells, 0, sizeof cells);
     n_loaded = 0;
     root = grid = NULL;
+    view_idx = -1;
     free_list();
 }
 
@@ -442,7 +446,20 @@ void scr_gallery_demo(int step)
         }
         tick_cb(NULL);
     }
-    else if(step == 1) open_index(0);
+    else if(step == 1) {                           /* a maior foto estática (GIF animado não gira) */
+        int best = 0, w, h;
+        long big = -1;
+        for(int i = 0; i < n_imgs; i++) {
+            img_kind_t k = img_kind_of(imgs[i].path);
+            if(k != IMG_GIF && k != IMG_SVG && img_probe(imgs[i].path, &w, &h) && (long)w * h > big)
+                big = (long)w * h, best = i;
+        }
+        open_index(best);
+    }
+    else if(step == 3) imgview_show_controls(true);
+    else if(step == 4) imgview_rotate(1);
+    else if(step == 5) { imgview_rotate(-1); imgview_zoom(1); imgview_zoom(1); }
+    else if(step == 6) nav_back();                 /* Voltar do sistema: fecha só a imagem */
     else imgview_close();
 }
 

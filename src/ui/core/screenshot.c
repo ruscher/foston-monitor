@@ -185,6 +185,9 @@ int screenshot_run(const char *dir)
     app_rebuild_now(); nav_home(); pump(1500); shot("44-glass-inicio");
     go(SCR_HOME, HOME_ARG_APPS); pump(600); shot("44b-glass-apps");
     go(SCR_APPEARANCE, 0); pump(200); shot("44c-glass-aparencia");
+    go(SCR_GALLERY, 0); scr_gallery_demo(0); scr_gallery_demo(1); scr_gallery_demo(3);
+    pump(300); shot("44i-glass-galeria-foto");                      /* área de 432 px */
+    scr_gallery_demo(2);
     {   /* Rádio FM: transmissor ligado (estado de demonstração; o simulador não tem o bffm) */
         char fp[300], fc[300];
         data_path(fp, sizeof fp, "fm-demo-status");
@@ -409,6 +412,10 @@ int screenshot_run(const char *dir)
     }
     go(SCR_GALLERY, 0);             scr_gallery_demo(0); pump(200); shot("37-galeria");
     scr_gallery_demo(1); pump(300); shot("37b-galeria-foto");
+    scr_gallery_demo(3); pump(50);  shot("37c-galeria-foto-controles");
+    scr_gallery_demo(4); pump(50);  shot("37d-galeria-foto-girada");
+    scr_gallery_demo(5); pump(50);  shot("37e-galeria-foto-zoom");
+    scr_gallery_demo(6); pump(100); shot("37f-galeria-voltar");     /* Voltar fecha a foto, fica na Galeria */
     scr_gallery_demo(2); pump(50);
     go(SCR_BOOK, 0);                shot("24-livro");
     {
@@ -421,7 +428,7 @@ int screenshot_run(const char *dir)
         scr_book_demo("+close");
         snprintf(f, sizeof f, "%s/books/documento.pdf", data_dir());
         scr_book_demo(f); scr_book_demo("+paginate"); pump(50); shot("24i-livro-pdf");
-        snprintf(f, sizeof f, "%s/books/desenho.svg", data_dir());
+        snprintf(f, sizeof f, "%s/pictures/estrela.svg", data_dir());
         scr_book_demo(f); pump(50);              shot("24j-livro-svg");
         imgview_close();
         scr_book_demo(NULL);
@@ -432,7 +439,7 @@ int screenshot_run(const char *dir)
         char f[600];
         snprintf(f, sizeof f, "%s/notas.txt", data_dir());
         scr_files_demo(f);           shot("24d-arquivos-texto");
-        snprintf(f, sizeof f, "%s/cover.jpg", data_dir());
+        snprintf(f, sizeof f, "%s/pictures/campo.jpg", data_dir());
         scr_files_demo(f);           shot("24e-arquivos-imagem");
         scr_files_demo(data_dir());
         scr_files_demo("+nova-pasta"); pump(50); shot("24g-arquivos-nova-pasta");

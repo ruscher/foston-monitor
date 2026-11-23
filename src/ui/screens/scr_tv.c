@@ -174,7 +174,7 @@ static void load_recs(void)
     struct dirent *e;
     while((e = readdir(dir)) && nrec < MAXREC) {
         size_t l = strlen(e->d_name);
-        if(l > 3 && !strcmp(e->d_name + l - 3, ".ts") && l < sizeof recs[0]) snprintf(recs[nrec++], sizeof recs[0], "%s", e->d_name);
+        if(l > 3 && !strcmp(e->d_name + l - 3, ".ts") && l < sizeof recs[0]) memcpy(recs[nrec++], e->d_name, l + 1);
     }
     closedir(dir);
     qsort(recs, (size_t)nrec, sizeof recs[0], rec_cmp);          /* mais novas primeiro */

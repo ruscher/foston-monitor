@@ -2,6 +2,7 @@
 #include "../screens/screens.h"
 #include "../widgets/topbar.h"
 #include "../widgets/bottombar.h"
+#include "../widgets/imgview.h"
 #include "fx.h"
 #include <string.h>
 
@@ -128,6 +129,8 @@ void nav_go(bf_screen_t scr, int arg)
 
 void nav_back(void)
 {
+    /* imagem aberta (Galeria, Arquivos, Livros): Voltar fecha só a imagem */
+    if(imgview_is_open()) { imgview_close(); return; }
     if(depth <= 1) return;
     depth--;
     returning = true;

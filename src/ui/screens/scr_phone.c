@@ -817,7 +817,8 @@ static void addr_key(const char *addr, char *out, size_t n)
     size_t k = 0;
     for(const char *c = addr; *c && k + 1 < sizeof d; c++) if(*c >= '0' && *c <= '9') d[k++] = *c;
     d[k] = 0;
-    snprintf(out, n, "%s", k > 8 ? d + k - 8 : d[0] ? d : addr);
+    /* sem algarismos: o próprio endereço, cortado no tamanho da chave (intencional) */
+    snprintf(out, n, "%.*s", (int)(n - 1), k > 8 ? d + k - 8 : d[0] ? d : addr);
 }
 
 static void conv_add(const char *row, bool in)

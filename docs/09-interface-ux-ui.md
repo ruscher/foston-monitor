@@ -190,7 +190,10 @@ A barra é atualizada por um único timer de 1 s, e só redesenha o que mudou.
 | ![](images/ui/23-terminal.png) | **Terminal** — `/bin/sh` num PTY com emulação VT100 e teclado na tela. |
 | ![](images/ui/24-livro.png) | **Livro** sem livros — diz onde procura. |
 | ![](images/ui/37-galeria.png) | **Galeria** — miniaturas de JPEG, PNG, GIF, BMP e SVG do cartão SD e da pasta de dados; recentes ou por nome; rola com barra. |
-| ![](images/ui/37b-galeria-foto.png) | **Visualizador** — zoom, ◀ ▶ e deslizar para trocar de foto; GIF animado. |
+| ![](images/ui/37b-galeria-foto.png) | **Visualizador** — no layout do leitor de livros: a barra superior do sistema continua e a foto ocupa a área de conteúdo; deslizar troca de foto; GIF animado. |
+| ![](images/ui/37c-galeria-foto-controles.png) | Um toque mostra os controles: voltar, nome, zoom − / % / +, Ajustar, girar ⟲ ⟳; embaixo ◀ barra entre as fotos ▶ e resolução, tamanho e tipo. Outro toque esconde. |
+| ![](images/ui/37d-galeria-foto-girada.png) | Girar 90° (os pixels são girados uma vez, sem custo por quadro). |
+| ![](images/ui/37e-galeria-foto-zoom.png) | Zoom ×1,5 por toque, mantendo o ponto do meio da tela; arrastar move a foto. O Voltar do sistema fecha a foto antes de sair da Galeria. |
 | ![](images/ui/25-dialogo-desligar.png) | **Desligar** — diálogo de confirmação. |
 | ![](images/ui/26-recentes.png) | **Recentes**. |
 | ![](images/ui/30-tema-claro-inicio.png) | **Tema claro** — início. |
