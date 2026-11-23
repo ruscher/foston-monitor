@@ -24,18 +24,17 @@
 | Teste de som (`bffm tom`, mono, OSS) | ouvido no rádio |
 | TV ao vivo (`bftvd`, 32 kHz mono) | ouvida no rádio |
 | Som de toque (`fx.c`, 22 050 Hz mono) | ouvido no rádio |
-| Voz do Big GPS | não falava em nenhuma saída: o `espeak-ng` do sistema dependia de uma `libespeak-ng.so.1` não instalada; agora é estático e a frase de teste tocou |
+| Voz do Big GPS | não falava em nenhuma saída (o `espeak-ng` do sistema dependia de uma `libespeak-ng.so.1` não instalada); compilado estático: **ouvida no rádio** dentro do app |
+| Ligação pelo Telefone (voz pelo DSP, `bfvoice`) | **ouvida no rádio** |
 
-Conclusão: o KT0801A transmite **tudo o que sai pelo DAC**, em qualquer formato, como deduzido do CE.
-A voz das ligações não passa pelo DAC da ALSA (vai pelo DSP): falta testar.
+Conclusão: o KT0801A transmite **tudo o que sai pelo DAC**, em qualquer formato, como deduzido do CE,
+inclusive a voz das ligações (que chega ao DAC pelo DSP, sem passar pela ALSA).
 
 ## Falta
 
-- [ ] Voz do Big GPS dentro do app, com o FM ligado.
-- [ ] Voz de uma ligação (Telefone) no rádio.
 - [ ] Modo *Só no rádio FM*: alto-falante mudo, som no rádio.
 - [ ] Troca de frequência com o FM ligado (o rádio acompanha).
-- [ ] Transmissão continuando com o app fechado (Multimídia, TV, GPS).
+- [x] Transmissão continuando com o app fechado (Multimídia, TV, GPS, Telefone).
 - [ ] Teste prolongado (30 min) e temporizador.
 
 

@@ -21,7 +21,7 @@ o app não mostra controles de ouvir rádio.
 | Clock de referência (32 kHz pela PWM3) | **FUNCIONANDO** | registradores iguais aos do CE (1785/892) |
 | Ligar / desligar | **FUNCIONANDO** | `bffm on`: PW_OK = 1 (reg 0x0F bit 4); `bffm off` devolve GPIO4, PWM3 e o clock do I²C ao estado do boot |
 | Frequência | **FUNCIONANDO** no chip | 88,1 MHz escrita e **lida de volta** (reg0 = 0x71, reg1 = 0xC3) |
-| Áudio no rádio externo | **FUNCIONANDO** | ouvido num rádio a 88,1 MHz: Multimídia, TV, sons do sistema, teste de som ([14](14-testes.md)) |
+| Áudio no rádio externo | **FUNCIONANDO** | ouvido num rádio a 88,1 MHz: Multimídia, TV, sons do sistema, voz do GPS, ligações, teste de som ([14](14-testes.md)) |
 | "Só no rádio" (alto-falante mudo) | implementado | controle ALSA "Speaker Playback Switch" (GPIO5), como o `waveOutMessage(0x41C)` do CE |
 | App FM Transmitir, indicador na barra, temporizador, favoritos, aviso de bateria | implementado e testado na tela | ligar/desligar pelo app no aparelho |
 | Receptor AM/FM | **não existe** no hardware | [08](08-investigacao-receptor-am-fm.md) |
