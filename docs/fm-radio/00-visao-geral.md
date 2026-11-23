@@ -1,8 +1,8 @@
-# Rádio FM: transmissor do FOSTON
+# FM Transmitir: transmissor do FOSTON
 
 O FOSTON FS-707DC tem um **transmissor FM KT Micro KT0801A** que leva o som do aparelho a um
 rádio externo (carro, casa) sintonizado na mesma frequência. O BigFoston recuperou o
-transmissor com o mesmo controle do Windows CE (`FMC.dll`) e ganhou o app **Rádio FM**.
+transmissor com o mesmo controle do Windows CE (`FMC.dll`) e ganhou o app **FM Transmitir**.
 
 **O FOSTON não tem receptor AM/FM** ([08-investigacao-receptor-am-fm.md](08-investigacao-receptor-am-fm.md)):
 o app não mostra controles de ouvir rádio.
@@ -21,14 +21,14 @@ o app não mostra controles de ouvir rádio.
 | Clock de referência (32 kHz pela PWM3) | **FUNCIONANDO** | registradores iguais aos do CE (1785/892) |
 | Ligar / desligar | **FUNCIONANDO** | `bffm on`: PW_OK = 1 (reg 0x0F bit 4); `bffm off` devolve GPIO4, PWM3 e o clock do I²C ao estado do boot |
 | Frequência | **FUNCIONANDO** no chip | 88,1 MHz escrita e **lida de volta** (reg0 = 0x71, reg1 = 0xC3) |
-| Áudio no rádio externo | **falta o teste com um rádio** | caminho deduzido do CE: o KT0801A ouve o DAC do alto-falante ([03](03-engenharia-reversa-fmc.md#áudio)) |
+| Áudio no rádio externo | **FUNCIONANDO** | ouvido num rádio a 88,1 MHz: Multimídia, TV, sons do sistema, teste de som ([14](14-testes.md)) |
 | "Só no rádio" (alto-falante mudo) | implementado | controle ALSA "Speaker Playback Switch" (GPIO5), como o `waveOutMessage(0x41C)` do CE |
-| App Rádio FM, indicador na barra, temporizador, favoritos, aviso de bateria | implementado e testado na tela | ligar/desligar pelo app no aparelho |
+| App FM Transmitir, indicador na barra, temporizador, favoritos, aviso de bateria | implementado e testado na tela | ligar/desligar pelo app no aparelho |
 | Receptor AM/FM | **não existe** no hardware | [08](08-investigacao-receptor-am-fm.md) |
 
 ## Como usar
 
-1. Abra **Rádio** no dock do Foston Glass (ou Ajustes > FM Transmitir).
+1. Abra **FM Transmitir** no dock do Foston Glass (ou Ajustes > FM Transmitir).
 2. Escolha a frequência: botões ‹ 0,1 / 0,1 ›, a régua, ou toque no número grande e digite.
    Use uma frequência **sem emissora** na sua região (o FOSTON não consegue procurar canais livres,
    porque não recebe rádio).

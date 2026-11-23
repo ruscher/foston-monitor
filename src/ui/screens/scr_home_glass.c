@@ -515,7 +515,7 @@ static void dock(lv_obj_t *p)
     static const int cx[5] = { 85, 231, 376, 521, 667 };
     for(int i = 0; i < 5; i++) {
         if(i == 2) continue;                  /* Apps: peça própria, por cima do dock */
-        lv_obj_t *item = dock_item(d, cx[i], 120, 122, i);
+        lv_obj_t *item = dock_item(d, cx[i], 142, 122, i);   /* 142: cabe "FM Transmitir" */
         lv_obj_t *t = glass_tile(item, 72, 20, it[i].top, it[i].bot, it[i].icon, NULL, NULL);
         lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 12);
         lv_obj_t *l = glass_label(item, tr(it[i].name), BF_FONT_M, GL_WHITE);

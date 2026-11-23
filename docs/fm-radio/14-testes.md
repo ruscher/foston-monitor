@@ -15,18 +15,30 @@
 | app: Transmitir de novo | desligado, estado do boot |
 | boot: `S44bffm start` | transmissor desligado |
 
-## Falta (depende de um rádio externo)
+## Com um rádio externo (22/11/2026, 88,1 MHz)
 
-- [ ] **Ouvir o FOSTON num rádio FM** sintonizado na mesma frequência (música do Multimídia).
+| Teste | Resultado |
+|---|---|
+| Música do Multimídia (estéreo, OSS) | ouvida no rádio |
+| WAV mono, estéreo, só esquerdo e só direito (`aplay`, 32 kHz) | os 4 ouvidos no rádio e no alto-falante (modo *FOSTON + rádio FM*) |
+| Teste de som (`bffm tom`, mono, OSS) | ouvido no rádio |
+| TV ao vivo (`bftvd`, 32 kHz mono) | ouvida no rádio |
+| Som de toque (`fx.c`, 22 050 Hz mono) | ouvido no rádio |
+| Voz do Big GPS | não falava em nenhuma saída: o `espeak-ng` do sistema dependia de uma `libespeak-ng.so.1` não instalada; agora é estático e a frase de teste tocou |
+
+Conclusão: o KT0801A transmite **tudo o que sai pelo DAC**, em qualquer formato, como deduzido do CE.
+A voz das ligações não passa pelo DAC da ALSA (vai pelo DSP): falta testar.
+
+## Falta
+
+- [ ] Voz do Big GPS dentro do app, com o FM ligado.
+- [ ] Voz de uma ligação (Telefone) no rádio.
 - [ ] Modo *Só no rádio FM*: alto-falante mudo, som no rádio.
-- [ ] Modo *FOSTON + rádio FM*: som nos dois.
-- [ ] Teste de som (bipes) no rádio.
 - [ ] Troca de frequência com o FM ligado (o rádio acompanha).
 - [ ] Transmissão continuando com o app fechado (Multimídia, TV, GPS).
 - [ ] Teste prolongado (30 min) e temporizador.
 
-Sem esses testes, "o áudio chega ao rádio" **não está comprovado**: o chip aceitar os comandos
-não basta.
+
 
 ## Simulador
 
