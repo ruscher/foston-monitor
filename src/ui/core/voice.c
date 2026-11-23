@@ -3,6 +3,7 @@
  * shell); o WAV sai do pipe e vai para o /dev/dsp enquanto é sintetizado (o eSpeak NG gera
  * ~10x mais rápido que o tempo real no aparelho, docs/big-gps/09-voz.md). */
 #define _DEFAULT_SOURCE
+#include "btaudio.h"
 #include "voice.h"
 #include "player.h"
 #include <fcntl.h>
@@ -95,6 +96,8 @@ static void speak(const char *text)
     if(pipe(pfd)) return;
     bool music = player_state() == PL_PLAYING;
     if(music) player_suspend(true);
+    bool bt = btaudio_live();                   /* música do celular: o bluealsa-aplay solta a saída */
+    if(bt) btaudio_hold(true);
     pid_t pid = fork();
     if(pid == 0) {
         dup2(pfd[1], 1);
@@ -106,7 +109,7 @@ static void speak(const char *text)
         _exit(127);
     }
     close(pfd[1]);
-    if(pid < 0) { close(pfd[0]); if(music) player_suspend(false); return; }
+    if(pid < 0) { close(pfd[0]); if(music) player_suspend(false); if(bt) btaudio_hold(false); return; }
     pthread_mutex_lock(&mu);
     child = pid;
     pthread_mutex_unlock(&mu);
@@ -141,6 +144,7 @@ static void speak(const char *text)
     child = -1;
     pthread_mutex_unlock(&mu);
     if(music) player_suspend(false);
+    if(bt) btaudio_hold(false);
 }
 
 static void *worker(void *arg)

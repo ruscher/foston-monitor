@@ -18,6 +18,7 @@ int screenshot_run(const char *dir)
 #include "powerkey.h"
 #include "nav.h"
 #include "settings.h"
+#include "fmstat.h"
 #include "../widgets/imgview.h"
 #include "status.h"
 #include "../widgets/volpop.h"
@@ -31,6 +32,7 @@ int screenshot_run(const char *dir)
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/stat.h>
 
 static lv_display_t *disp;
@@ -178,7 +180,29 @@ int screenshot_run(const char *dir)
     scr_music_demo(0); pump(2500);  shot("21b-multimidia-tocando");
     s->home_mode = BF_HOME_PANEL;
     nav_home(); pump(1200);         shot("01h-inicio-painel-tocando");
+    /* Foston Glass: tela inicial com a música tocando, a grade Apps e uma tela comum */
+    s->home_mode = BF_HOME_GLASS;
+    app_rebuild_now(); nav_home(); pump(1500); shot("44-glass-inicio");
+    go(SCR_HOME, HOME_ARG_APPS); pump(600); shot("44b-glass-apps");
+    go(SCR_APPEARANCE, 0); pump(200); shot("44c-glass-aparencia");
+    {   /* Rádio FM: transmissor ligado (estado de demonstração; o simulador não tem o bffm) */
+        char fp[300], fc[300];
+        data_path(fp, sizeof fp, "fm-demo-status");
+        data_path(fc, sizeof fc, "fm.conf");
+        FILE *o = fopen(fc, "w");
+        if(o) { fputs("freq=995\nmode=0\ntimer=30\nhelp=1\nfav=995|Carro\nfav=1013|Rádio de casa\nfav=881|Reserva\n", o); fclose(o); }
+        o = fopen(fp, "w");
+        if(o) { fprintf(o, "state=desligado\nfreq=0.0\n"); fclose(o); }
+        setenv("BIGFOSTON_FM_STATUS", fp, 1);
+        go(SCR_FM, 0); pump(500); shot("44d-glass-radio-desligado");
+        fm_on(995, 0); pump(900); shot("44f-glass-radio-transmitindo");
+        scr_fm_demo(1); pump(300); shot("44g-glass-radio-digitar");
+        dialog_close_all(); pump(100);
+        scr_fm_demo(2); pump(300); shot("44h-glass-radio-diagnostico");
+        dialog_close_all(); pump(100);
+    }
     s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
     go(SCR_MUSIC, 0); pump(200);
     scr_music_demo(1); pump(100);   shot("21c-multimidia-lista");
     scr_music_demo(2); pump(800);   shot("21d-multimidia-tela-cheia");
@@ -190,7 +214,9 @@ int screenshot_run(const char *dir)
     volpop_close();
     scr_music_demo(8); pump(100);
     scr_music_demo(3); pump(100);
-    go(SCR_FEATURE, FEAT_FM);       shot("22-fm-transmitir");
+    go(SCR_FM, 0); pump(500);       shot("22-fm-transmitir");
+    fm_off(); pump(100);
+    unsetenv("BIGFOSTON_FM_STATUS");
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
@@ -243,10 +269,16 @@ int screenshot_run(const char *dir)
                         "name=BigFoston\ndev=02:00:00:00:00:01|1|1|1|0|phone|Celular da Ana\n"
                         "dev=02:00:00:00:00:02|1|0|1|0|audio-headphones|Fone JBL\n"
                         "dev=02:00:00:00:00:03|0|0|0|-62|audio-card|Caixa de som\n"
-                        "player=playing|Aquarela|Toquinho|Celular da Ana\nresult=connect|ok|\n");
+                        "player=playing|Aquarela|Toquinho|Celular da Ana|Casa de Brinquedos|258000|61000|0\n"
+                        "stream=active\nresult=connect|ok|\n");
             fclose(bf);
             setenv("BIGFOSTON_BT_STATUS", bp, 1);
             go(SCR_BLUETOOTH, 0); pump(300); shot("43-bluetooth");
+            go(SCR_MUSIC, 0); pump(200); scr_music_demo(9); pump(400); shot("43c-multimidia-bluetooth");
+            s->home_mode = BF_HOME_GLASS;                          /* Glass com a música do celular */
+            app_rebuild_now(); nav_home(); pump(1200); shot("44e-glass-musica-bluetooth");
+            s->home_mode = BF_HOME_GRID;
+            app_rebuild_now(); pump(50);
             bf = fopen(bp, "w");
             if(bf) {
                 fprintf(bf, "updated=0\nenabled=1\nagent=1\nadapter=1\npowered=1\ndiscoverable=1\ndiscovering=0\n"
@@ -259,6 +291,121 @@ int screenshot_run(const char *dir)
             unsetenv("BIGFOSTON_BT_STATUS");
             go(SCR_HOME, 0); pump(100);
         }
+    }
+    {   /* Telefone com dados inventados (nomes e números fictícios) */
+        char pp[300], dd[300], f[400];
+        data_path(pp, sizeof pp, "phone-demo-status");
+        data_path(dd, sizeof dd, "phone-demo");
+        mkdir(dd, 0700);
+        static const char *const files[][2] = {
+            { "contatos.tsv", "Ana Souza\tcel:+55 11 90000-0001;casa:+55 11 3000-0001\tana@exemplo.org\t\n"
+                              "Bruno Lima\tcel:+55 21 90000-0002\t\tOficina\n"
+                              "Carla Mendes\tcel:+55 31 90000-0003\t\t\n"
+                              "Diego Rocha\ttrabalho:+55 41 3000-0004\t\tTransportes\n"
+                              "Elisa Martins\tcel:+55 51 90000-0005\t\t\n" },
+            { "historico.tsv", "R\tAna Souza\t+55 11 90000-0001\t20261122T141200\n"
+                               "P\t\t+55 61 90000-0009\t20261122T120500\n"
+                               "F\tBruno Lima\t+55 21 90000-0002\t20261121T183000\n" },
+            { "mensagens.tsv", "0\t20261122T143000\tAna Souza\t+55 11 90000-0001\tChego em 20 minutos, pode deixar o portão aberto?\t1\n"
+                               "1\t20261122T090000\tCarla Mendes\t+55 31 90000-0003\tBom dia! A reunião foi para as 15h.\t2\n" },
+            { "enviadas.tsv", "1\t20261122T143500\tAna Souza\t+55 11 90000-0001\tCombinado!\t3\n" },
+            { "sincronizado", "1795350000\n" },
+        };
+        for(size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
+            snprintf(f, sizeof f, "%s/%s", dd, files[i][0]);
+            FILE *o = fopen(f, "w");
+            if(o) { fputs(files[i][1], o); fclose(o); }
+        }
+        FILE *pf = fopen(pp, "w");
+        if(pf) {
+            fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\noperator=Operadora\nsignal=4\nbattery=3\n"
+                        "service=1\nvoice=phone\nsco=0\nsync=ok\n", dd);
+            fclose(pf);
+            setenv("BIGFOSTON_PHONE_STATUS", pp, 1);
+            go(SCR_PHONE, 0); pump(300); shot("45-telefone-discador");
+            scr_phone_demo(1); pump(300); shot("45b-telefone-contatos");
+            scr_phone_demo(2); pump(300); shot("45c-telefone-recentes");
+            scr_phone_demo(3); pump(300); shot("45d-telefone-mensagens");
+            pf = fopen(pp, "a");
+            if(pf) { fputs("msg_auto=1\nnotify=1\n", pf); fclose(pf); }
+            pump(600); shot("45k-telefone-mensagens-auto");
+            scr_phone_demo(15); pump(300); shot("45l-telefone-importacao-automatica");
+            dialog_close_all(); pump(100);
+            scr_phone_demo(14); pump(300); shot("45m-telefone-conversa");
+            scr_phone_demo(16); pump(300); shot("45n-telefone-responder");
+            scr_phone_demo(3); pump(100);
+            pf = fopen(pp, "a");
+            if(pf) { fprintf(pf, "call=1|0|0|+55 11 90000-0001|Ana Souza\nsince=%ld\nvoice=foston\nvoice_foston=1\n"
+                                 "voice_on=1\nsco=1\nmute=0\nvol=5\nrec=1\n", (long)time(NULL) - 83); fclose(pf); }
+            pump(800); shot("45e-telefone-ligacao");
+            scr_phone_demo(11); pump(300); shot("45h-telefone-volume");
+            scr_phone_demo(12); pump(300); shot("45i-telefone-teclado");
+            scr_phone_demo(13); pump(100);
+            pf = fopen(pp, "w");
+            if(pf) {
+                fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\nsignal=4\nbattery=3\nservice=1\n"
+                            "call=1|0|1|+55 11 90000-0001|Ana Souza\ncall=2|0|0|+55 21 90000-0002|Bruno Lima\n"
+                            "since=%ld\nvoice=foston\nvoice_foston=1\nvoice_on=1\nsco=1\nmute=0\nvol=5\nrec=0\nsync=ok\n",
+                        dd, (long)time(NULL) - 12);
+                fclose(pf);
+            }
+            pump(800); shot("45j-telefone-duas-chamadas");
+            scr_phone_demo(10); pump(300); shot("45g-telefone-falar-pelo-foston");
+            dialog_close_all();
+            go(SCR_HOME, 0); pump(100);
+            pf = fopen(pp, "w");
+            if(pf) {
+                fprintf(pf, "updated=0\nlink=1\ndev=Celular da Ana\ndata=%s\nsignal=4\nbattery=3\nservice=1\n"
+                            "call=1|1|4|+55 21 90000-0002|Bruno Lima\nsync=ok\n", dd);
+                fclose(pf);
+            }
+            pump(1300); shot("45f-telefone-chamada-recebida");
+            dialog_close_all();
+            unlink(pp);
+            unsetenv("BIGFOSTON_PHONE_STATUS");
+            go(SCR_HOME, 0); pump(100);
+        }
+    }
+    {   /* TV com canais e uma gravação inventados (o simulador não roda o bftvd) */
+        char td[300], f[400], sp[300];
+        data_path(td, sizeof td, "tv-demo");
+        mkdir(td, 0755);
+        snprintf(f, sizeof f, "%s/gravacoes", td);
+        mkdir(f, 0755);
+        static const char *const tf[][2] = {
+            { "bftvd", "#!/bin/sh\n" }, { "isdbt_nova_12mhz_b0.inp", "x" },
+            { "canais.tsv", "15\t479.143\tTV Brasil 1seg\t19\t-62\n18\t497.143\tRede Vida\t15\t-70\n"
+                            "20\t509.143\tCultura\t21\t-58\n27\t551.143\t\t9\t-80\n" },
+            { "gravacoes/tv-20261122-203015-c15.ts", "" },
+        };
+        for(size_t i = 0; i < sizeof tf / sizeof tf[0]; i++) {
+            snprintf(f, sizeof f, "%s/%s", td, tf[i][0]);
+            FILE *o = fopen(f, "w");
+            if(o) { fputs(tf[i][1], o); fclose(o); }
+            if(i == 0) chmod(f, 0755);
+        }
+        data_path(sp, sizeof sp, "tv-demo-status");
+        FILE *o = fopen(sp, "w");
+        if(o) { fputs("state=tocando\nfreq=479.143\nlocked=1\nsnr=19\nrssi=-62\nfps=13.9\n", o); fclose(o); }
+        setenv("BIGFOSTON_TV_DIR", td, 1);
+        setenv("BIGFOSTON_TV_STATUS", sp, 1);
+        bf_settings_t *ts = settings();              /* o FOSTON usa o Foston Glass */
+        int was = ts->home_mode;
+        ts->home_mode = BF_HOME_GLASS;
+        app_rebuild_now(); pump(50);
+        go(SCR_TV, 0); pump(300); shot("46-tv");
+        scr_tv_demo(5); pump(300); shot("46f-tv-volume");
+        scr_tv_demo(1); pump(300); shot("46b-tv-canais");
+        scr_tv_demo(2); pump(300); shot("46c-tv-gravacoes");
+        scr_tv_demo(3); pump(300); shot("46d-tv-busca");
+        scr_tv_demo(4); pump(300); shot("46e-tv-entrada-av");
+        go(SCR_HOME, 0); pump(600); shot("46h-inicio-depois-da-tv");     /* papel de parede e barra voltam */
+        ts->home_mode = was;
+        app_rebuild_now(); pump(50);
+        go(SCR_TV, 0); pump(300); shot("46g-tv-classico");
+        go(SCR_HOME, 0); pump(100);
+        unsetenv("BIGFOSTON_TV_DIR");
+        unsetenv("BIGFOSTON_TV_STATUS");
     }
     go(SCR_GALLERY, 0);             scr_gallery_demo(0); pump(200); shot("37-galeria");
     scr_gallery_demo(1); pump(300); shot("37b-galeria-foto");

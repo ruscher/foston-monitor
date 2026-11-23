@@ -1,7 +1,9 @@
 /* scr_home.c — tela Início, em um de três modos (Ajustes > Aparência):
  *   Grade     ícones grandes, paginada (deslizar ou setas)
  *   Painel    relógio grande, bateria, "Tocando agora" e atalhos
- *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c) */
+ *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c)
+ *   Foston Glass  cartões de vidro e dock (scr_home_glass.c)
+ * Com o argumento HOME_ARG_APPS, a grade com todos os apps (botão Apps do Foston Glass). */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../widgets/battery.h"
@@ -28,7 +30,7 @@ typedef struct {
 /* A ordem é a dos bits de settings()->home_apps: só acrescentar no fim. */
 static const app_t apps[] = {
     { &bf_icon_multimedia, S_APP_MULTIMEDIA, 0xe5534b, SCR_MUSIC, 0 },
-    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_FEATURE, FEAT_TV },
+    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_TV,      0 },
     { &bf_icon_bluetooth,  S_APP_BLUETOOTH,  0x3584e4, SCR_BLUETOOTH, 0 },
     { &bf_icon_book,       S_APP_BOOK,       0xc98b2c, SCR_BOOK, 0 },
     { &bf_icon_gps,        S_APP_GPS,        0x2ec27e, SCR_MAP, 0 },
@@ -39,6 +41,8 @@ static const app_t apps[] = {
     { &bf_icon_monitor,    S_APP_MONITOR,    0x26a269, SCR_MONITOR, 0 },
     { &bf_icon_settings,   S_APP_SETTINGS,   0x6c7383, SCR_SETTINGS, 0 },
     { &bf_icon_gallery,    S_APP_GALLERY,    0xd6409f, SCR_GALLERY, 0 },
+    { &bf_icon_phone,      S_APP_PHONE,      0x2ec27e, SCR_PHONE, 0 },
+    { &bf_icon_fm,         S_GL_RADIO,       0x7a6ff0, SCR_FM, 0 },
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8
@@ -461,15 +465,17 @@ static void create_panel(lv_obj_t *parent)
 
 static void create(lv_obj_t *parent, int arg)
 {
-    (void)arg;
     tv = NULL;
     int m = settings()->home_mode;
-    if(m == BF_HOME_PANEL) create_panel(parent);
+    if(arg == HOME_ARG_APPS) create_grid(parent, false);     /* Apps: todos os aplicativos */
+    else if(m == BF_HOME_GLASS) home_glass_create(parent);
+    else if(m == BF_HOME_PANEL) create_panel(parent);
     else create_grid(parent, m == BF_HOME_KIOSK);
 }
 
 static void destroy(void)
 {
+    home_glass_destroy();
     if(panel_timer) { lv_timer_delete(panel_timer); panel_timer = NULL; }
     tv = NULL;
     clk_lbl = ampm_lbl = date_lbl = bat_icon = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;
@@ -478,4 +484,6 @@ static void destroy(void)
     thumb_for = -2;
 }
 
-const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, NULL };
+static const char *title_fn(int arg) { return tr(arg == HOME_ARG_APPS ? S_GL_APPS : S_HOME); }
+
+const bf_screen_def_t scr_home_def = { create, destroy, S_HOME, title_fn };

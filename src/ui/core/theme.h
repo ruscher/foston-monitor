@@ -10,8 +10,11 @@
 #define BF_SCREEN_W   800
 #define BF_SCREEN_H   480
 #define BF_TOPBAR_H    48
-#define BF_BOTBAR_H    72
-#define BF_CONTENT_H  (BF_SCREEN_H - BF_TOPBAR_H - BF_BOTBAR_H)   /* 360 */
+/* Foston Glass (Ajustes > Aparência > Tela inicial): a navegação fica na barra superior e não
+ * há barra inferior; o conteúdo vai até a base da tela (432 px em vez de 360). */
+bool theme_glass(void);
+#define BF_BOTBAR_H   (theme_glass() ? 0 : 72)
+#define BF_CONTENT_H  (BF_SCREEN_H - BF_TOPBAR_H - BF_BOTBAR_H)   /* 360; 432 no Glass */
 #define BF_TOUCH_MIN   64
 #define BF_SP_XS        4
 #define BF_SP_S         8

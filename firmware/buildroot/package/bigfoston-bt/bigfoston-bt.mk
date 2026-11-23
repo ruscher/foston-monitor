@@ -14,6 +14,7 @@ BIGFOSTON_BT_AGENT = AGENT=1 \
 	DBUS_LIBS="`$(PKG_CONFIG_HOST_BINARY) --libs dbus-1`"
 define BIGFOSTON_BT_INSTALL_AGENT
 	$(INSTALL) -D -m 0755 $(@D)/build/bfbt-agent.stripped $(TARGET_DIR)/usr/sbin/bfbt-agent
+	$(INSTALL) -D -m 0755 $(@D)/build/bfphone.stripped $(TARGET_DIR)/usr/sbin/bfphone
 endef
 endif
 
@@ -26,6 +27,9 @@ define BIGFOSTON_BT_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/build/bfbt-attach.stripped $(TARGET_DIR)/usr/sbin/bfbt-attach
 	$(INSTALL) -D -m 0755 $(@D)/build/btprobe.stripped $(TARGET_DIR)/usr/sbin/btprobe
 	$(INSTALL) -D -m 0755 $(@D)/build/bfhci.stripped $(TARGET_DIR)/usr/sbin/bfhci
+	$(INSTALL) -D -m 0755 $(@D)/build/bfsnoop.stripped $(TARGET_DIR)/usr/sbin/bfsnoop
+	$(INSTALL) -D -m 0755 $(@D)/build/bfpbap.stripped $(TARGET_DIR)/usr/sbin/bfpbap
+	$(INSTALL) -D -m 0755 $(@D)/build/bfvoice.stripped $(TARGET_DIR)/usr/sbin/bfvoice
 	$(BIGFOSTON_BT_INSTALL_AGENT)
 endef
 

@@ -98,8 +98,17 @@ static struct {
     bool have_cal, down;
     bf_calib_t cal;
     int32_t rx, ry;         /* bruto, último valor do evdev */
-    lv_point_t pt;          /* calibrado */
+    lv_point_t pt;          /* calibrado e filtrado */
+    int32_t hx[3], hy[3];   /* últimas amostras calibradas (mediana) */
+    unsigned filt_n;        /* amostras desde que o dedo encostou */
 } ts = { .fd = -1 };
+
+static int32_t med3(int32_t a, int32_t b, int32_t c)
+{
+    if(a > b) { int32_t t = a; a = b; b = t; }
+    if(b > c) b = c;
+    return a > b ? a : b;
+}
 
 static void ts_map(void)
 {
@@ -112,8 +121,18 @@ static void ts_map(void)
         x = ts.rx * 800 / 1024;
         y = ts.ry * 480 / 1024;
     }
-    ts.pt.x = LV_CLAMP(0, x, 799);
-    ts.pt.y = LV_CLAMP(0, y, 479);
+    x = LV_CLAMP(0, x, 799);
+    y = LV_CLAMP(0, y, 479);
+    /* Painel resistivo: picos isolados (sobretudo ao encostar e ao soltar) e tremor de
+     * alguns pixels deixavam a rolagem instável. Mediana das 3 últimas amostras (tira os
+     * picos), média com a posição anterior (suaviza) e zona morta de 2 px parado. */
+    if(!ts.filt_n) { for(int i = 0; i < 3; i++) { ts.hx[i] = x; ts.hy[i] = y; } ts.pt.x = x; ts.pt.y = y; }
+    ts.hx[ts.filt_n % 3] = x;
+    ts.hy[ts.filt_n % 3] = y;
+    ts.filt_n++;
+    int32_t mx = med3(ts.hx[0], ts.hx[1], ts.hx[2]), my = med3(ts.hy[0], ts.hy[1], ts.hy[2]);
+    int32_t nx = (ts.pt.x + mx + 1) / 2, ny = (ts.pt.y + my + 1) / 2;
+    if(LV_ABS(nx - ts.pt.x) >= 2 || LV_ABS(ny - ts.pt.y) >= 2) { ts.pt.x = nx; ts.pt.y = ny; }
 }
 
 static void ts_read(lv_indev_t *indev, lv_indev_data_t *data)
@@ -123,7 +142,10 @@ static void ts_read(lv_indev_t *indev, lv_indev_data_t *data)
     while(read(ts.fd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
         if(ev.type == EV_ABS && ev.code == ABS_X) ts.rx = ev.value;
         else if(ev.type == EV_ABS && ev.code == ABS_Y) ts.ry = ev.value;
-        else if(ev.type == EV_KEY && ev.code == BTN_TOUCH) ts.down = ev.value != 0;
+        else if(ev.type == EV_KEY && ev.code == BTN_TOUCH) {
+            ts.down = ev.value != 0;
+            if(ts.down) ts.filt_n = 0;             /* novo toque: o filtro recomeça */
+        }
         else if(ev.type == EV_SYN) ts_map();
     }
     data->point = ts.pt;
@@ -140,6 +162,10 @@ lv_indev_t *touch_create(const char *dev)
     /* por evento: o laço principal espera no fd (poll) e lê na hora em que o kernel
      * entrega o toque; enquanto o dedo está na tela o LVGL lê pelo próprio timer */
     lv_indev_set_mode(in, LV_INDEV_MODE_EVENT);
+    /* rolagem: só começa depois de 16 px (toques não viram rolagem) e o arremesso
+     * desacelera mais rápido (menos "escorregões" com o tremor do resistivo) */
+    lv_indev_set_scroll_limit(in, 16);
+    lv_indev_set_scroll_throw(in, 20);
     return in;
 }
 

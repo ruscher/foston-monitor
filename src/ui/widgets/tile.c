@@ -1,6 +1,7 @@
 /* tile.c — ícone da grade inicial (alvo de toque 152x146). */
 #include "tile.h"
 #include "../core/theme.h"
+#include <string.h>
 
 lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *label,
                       uint32_t color, lv_event_cb_t cb, void *ud)
@@ -46,7 +47,9 @@ lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *
 
     lv_obj_t *l = lv_label_create(t);
     lv_label_set_text(l, label);
-    lv_obj_set_style_text_font(l, BF_FONT_M, 0);
+    /* nome comprido ("FM Transmitir"): a fonte menor, em vez de cortar com "…" */
+    bool fits = lv_text_get_width(label, (uint32_t)strlen(label), BF_FONT_M, 0) <= 140;
+    lv_obj_set_style_text_font(l, fits ? BF_FONT_M : BF_FONT_S, 0);
     lv_obj_set_style_text_color(l, p->text, 0);
     bf_label_ellipsis(l, 140);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);

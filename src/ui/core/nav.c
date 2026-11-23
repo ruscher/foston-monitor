@@ -24,6 +24,9 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_MAP] = &scr_map_def,
     [SCR_PERF] = &scr_perf_def,
     [SCR_BLUETOOTH] = &scr_bluetooth_def,
+    [SCR_PHONE] = &scr_phone_def,
+    [SCR_TV] = &scr_tv_def,
+    [SCR_FM] = &scr_fm_def,
 };
 
 static lv_obj_t *content;
@@ -86,7 +89,8 @@ void nav_show_now(void)
     lv_anim_delete(content, NULL);
     lv_obj_set_style_translate_x(content, 0, 0);
     if(e.scr != SCR_HOME) fx_slide_in(content, returning ? -32 : 32, 0, 0, 170);
-    topbar_set_title(e.scr == SCR_HOME ? NULL : nav_title(e.scr, e.arg));
+    /* Início sem título na barra; a grade Apps (HOME_ARG_APPS = 1, screens.h) tem título */
+    topbar_set_title(e.scr == SCR_HOME && e.arg != 1 ? NULL : nav_title(e.scr, e.arg));
     topbar_update();
     bottombar_set_active(e.scr);
     recents_push(e);
@@ -104,7 +108,7 @@ void nav_go(bf_screen_t scr, int arg)
 {
     bf_nav_entry_t top = stack[depth - 1];
     if(top.scr == scr && top.arg == arg) return;
-    if(scr == SCR_HOME) { nav_home(); return; }
+    if(scr == SCR_HOME && arg == 0) { nav_home(); return; }   /* a grade Apps (arg 1) entra na pilha */
     returning = false;
     /* se a tela já está na pilha, volta até ela (evita pilhas enormes) */
     for(int i = 0; i < depth; i++) {

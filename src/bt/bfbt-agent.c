@@ -10,6 +10,7 @@
  *      pair|connect|disconnect|forget AA:BB:CC:DD:EE:FF
  *      accept | reject                responde o pedido de pareamento pendente
  *      play | pause | next | prev     controla a música do celular (AVRCP)
+ *      repeat off|singletrack|alltracks | shuffle off|alltracks
  *  - ao ligar, conecta uma vez os aparelhos pareados e confiáveis (como um rádio de carro).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
@@ -20,9 +21,11 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <syslog.h>
@@ -39,7 +42,7 @@
 
 typedef struct {
     char path[96], addr[18], name[64], icon[32];
-    int paired, connected, trusted, rssi, has_rssi;
+    int paired, connected, trusted, rssi, has_rssi, resolved;
 } dev_t_;
 
 static DBusConnection *bus;
@@ -110,6 +113,12 @@ static void call_done(DBusPendingCall *pc, void *ud)
 {
     const char *what = ud;
     DBusMessage *r = dbus_pending_call_steal_reply(pc);
+    if(!strcmp(what, "reconnect")) {             /* automática: não apaga o resultado do usuário */
+        if(r) dbus_message_unref(r);
+        dbus_pending_call_unref(pc);
+        dirty = 1;
+        return;
+    }
     if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
         const char *msg = NULL;
         dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
@@ -138,7 +147,7 @@ static void call_async(const char *path, const char *iface, const char *method, 
     if(dbus_connection_send_with_reply(bus, m, &pc, timeout_ms) && pc)
         dbus_pending_call_set_notify(pc, call_done, (void *)what, NULL);
     dbus_message_unref(m);
-    snprintf(last_result, sizeof last_result, "%s|andamento|", what);
+    if(strcmp(what, "reconnect")) snprintf(last_result, sizeof last_result, "%s|andamento|", what);
 }
 
 static void set_bool(const char *path, const char *iface, const char *prop, int v)
@@ -155,6 +164,25 @@ static void set_bool(const char *path, const char *iface, const char *prop, int 
     dbus_message_iter_close_container(&it, &var);
     dbus_connection_send(bus, m, NULL);
     dbus_message_unref(m);
+}
+
+/* Properties.Set de uma string, sem esperar; o resultado vai para "result=" (what) */
+static void set_string_async(const char *path, const char *iface, const char *prop, const char *v, const char *what)
+{
+    DBusMessage *m = dbus_message_new_method_call(BLUEZ, path, "org.freedesktop.DBus.Properties", "Set");
+    if(!m) return;
+    DBusMessageIter it, var;
+    dbus_message_iter_init_append(m, &it);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &iface);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &prop);
+    dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "s", &var);
+    dbus_message_iter_append_basic(&var, DBUS_TYPE_STRING, &v);
+    dbus_message_iter_close_container(&it, &var);
+    DBusPendingCall *pc = NULL;
+    if(dbus_connection_send_with_reply(bus, m, &pc, 5000) && pc)
+        dbus_pending_call_set_notify(pc, call_done, (void *)what, NULL);
+    dbus_message_unref(m);
+    snprintf(last_result, sizeof last_result, "%s|andamento|", what);
 }
 
 /* ------------------------------------------------------ agente do BlueZ */
@@ -278,7 +306,13 @@ typedef struct {
     char name[64];
     dev_t_ dev[MAXDEV];
     int ndev;
-    char pl_status[16], pl_title[96], pl_artist[96], pl_dev[96], pl_path[128];
+    char pl_status[16], pl_title[96], pl_artist[96], pl_album[96], pl_dev[96], pl_path[128];
+    unsigned pl_dur, pl_pos;              /* ms (AVRCP Track.Duration, Position) */
+    long pl_pos_at;                       /* CLOCK_MONOTONIC (ms) da leitura da posição */
+    char stream[12];                      /* MediaTransport1.State: idle, pending, active */
+    char pl_repeat[16], pl_shuffle[16];   /* AVRCP: off/singletrack/alltracks/group; "" sem suporte */
+    char pl_genre[48];
+    unsigned pl_trackno, pl_ntracks;
 } state_t;
 
 static void var_get(DBusMessageIter *var, int type, void *out)
@@ -306,15 +340,15 @@ static void var_bool(DBusMessageIter *var, int *out)
 static void read_iface(state_t *s, const char *path, const char *iface, DBusMessageIter *props)
 {
     int is_ad = !strcmp(iface, "org.bluez.Adapter1"), is_dev = !strcmp(iface, "org.bluez.Device1"),
-        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1");
-    if(!is_ad && !is_dev && !is_pl) return;
+        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1");
+    if(!is_ad && !is_dev && !is_pl && !is_tr) return;
     dev_t_ *d = NULL;
     if(is_ad) {
         if(adapter[0] && strcmp(adapter, path)) return;
         s->present = 1;
         snprintf(adapter, sizeof adapter, "%s", path);
     }
-    if(is_pl) snprintf(s->pl_path, sizeof s->pl_path, "%s", path);
+    if(is_pl) { snprintf(s->pl_path, sizeof s->pl_path, "%s", path); s->pl_pos_at = mono_ms(); }
     if(is_dev) {
         if(s->ndev >= MAXDEV) return;
         d = &s->dev[s->ndev++];
@@ -342,9 +376,18 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
             else if(!strcmp(k, "Paired")) var_bool(&var, &d->paired);
             else if(!strcmp(k, "Connected")) var_bool(&var, &d->connected);
             else if(!strcmp(k, "Trusted")) var_bool(&var, &d->trusted);
+            else if(!strcmp(k, "ServicesResolved")) var_bool(&var, &d->resolved);
             else if(!strcmp(k, "RSSI")) { dbus_int16_t r = 0; var_get(&var, DBUS_TYPE_INT16, &r); d->rssi = r; d->has_rssi = 1; }
+        } else if(is_tr) {
+            char st[12] = "";
+            if(!strcmp(k, "State")) var_str(&var, st, sizeof st);
+            /* um transporte ativo vale mais que outro parado (dois aparelhos) */
+            if(st[0] && (strcmp(s->stream, "active") || !strcmp(st, "active"))) snprintf(s->stream, sizeof s->stream, "%s", st);
         } else {
             if(!strcmp(k, "Status")) var_str(&var, s->pl_status, sizeof s->pl_status);
+            else if(!strcmp(k, "Position")) var_get(&var, DBUS_TYPE_UINT32, &s->pl_pos);
+            else if(!strcmp(k, "Repeat")) var_str(&var, s->pl_repeat, sizeof s->pl_repeat);
+            else if(!strcmp(k, "Shuffle")) var_str(&var, s->pl_shuffle, sizeof s->pl_shuffle);
             else if(!strcmp(k, "Device")) var_str(&var, s->pl_dev, sizeof s->pl_dev);
             else if(!strcmp(k, "Track") && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
                 DBusMessageIter te;
@@ -358,6 +401,11 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
                     dbus_message_iter_recurse(&tkv, &tv);
                     if(!strcmp(tk, "Title")) var_str(&tv, s->pl_title, sizeof s->pl_title);
                     else if(!strcmp(tk, "Artist")) var_str(&tv, s->pl_artist, sizeof s->pl_artist);
+                    else if(!strcmp(tk, "Album")) var_str(&tv, s->pl_album, sizeof s->pl_album);
+                    else if(!strcmp(tk, "Duration")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_dur);
+                    else if(!strcmp(tk, "Genre")) var_str(&tv, s->pl_genre, sizeof s->pl_genre);
+                    else if(!strcmp(tk, "TrackNumber")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_trackno);
+                    else if(!strcmp(tk, "NumberOfTracks")) var_get(&tv, DBUS_TYPE_UINT32, &s->pl_ntracks);
                 }
             }
         }
@@ -439,8 +487,11 @@ static void write_state(const state_t *s)
         const char *who = "";
         for(int i = 0; i < s->ndev; i++)
             if(!strncmp(s->pl_dev, s->dev[i].path, strlen(s->dev[i].path))) who = s->dev[i].name;
-        fprintf(f, "player=%s|%s|%s|%s\n", s->pl_status, s->pl_title, s->pl_artist, who);
+        fprintf(f, "player=%s|%s|%s|%s|%s|%u|%u|%ld|%s|%s|%s|%u|%u\n", s->pl_status, s->pl_title, s->pl_artist, who,
+                s->pl_album, s->pl_dur, s->pl_pos, s->pl_pos_at, s->pl_repeat, s->pl_shuffle, s->pl_genre,
+                s->pl_trackno, s->pl_ntracks);
     }
+    if(s->stream[0]) fprintf(f, "stream=%s\n", s->stream);
     if(last_result[0]) fprintf(f, "result=%s\n", last_result);
     fclose(f);
     rename(tmp, STATE);
@@ -481,6 +532,13 @@ static void command(char *line)
             call_async(player_path, "org.bluez.MediaPlayer1",
                        !strcmp(line, "play") ? "Play" : !strcmp(line, "pause") ? "Pause" :
                        !strcmp(line, "next") ? "Next" : "Previous", "player", 5000, DBUS_TYPE_INVALID);
+    } else if((!strcmp(line, "repeat") || !strcmp(line, "shuffle")) && player_path[0]) {
+        /* AVRCP: repeat off|singletrack|alltracks, shuffle off|alltracks */
+        static const char *ok[] = { "off", "singletrack", "alltracks", "group", NULL };
+        for(int i = 0; ok[i]; i++)
+            if(!strcmp(arg, ok[i]))
+                set_string_async(player_path, "org.bluez.MediaPlayer1", !strcmp(line, "repeat") ? "Repeat" : "Shuffle", arg,
+                                 !strcmp(line, "repeat") ? "repeat" : "shuffle");
     } else if(valid_addr(arg)) {
         reconnect_done = 3;                       /* o usuário decide: sem reconexão automática */
         dev_path(path, sizeof path, arg);
@@ -530,20 +588,98 @@ static DBusHandlerResult on_signal(DBusConnection *c, DBusMessage *msg, void *ud
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-/* O MT6611 sai do reset com a varredura de visibilidade em 2,40 s a cada 2,56 s (94 % do
- * tempo): visível, o áudio A2DP caía de ~41 para ~5 KB/s, com buracos de 2,4 s. Grava o
- * padrão do Bluetooth (janela 11,25 ms, intervalo 2,56 s) ao ligar e a cada vez que fica visível.
- * HCI Write Inquiry Scan Activity (0x0C1E) num soquete HCI cru (docs/bluetooth-audio-
- * performance/08-uart-hci.md). */
-static void fix_inquiry_scan(void)
+/* Ajustes do MT6611 gravados a cada vez que o adaptador liga (a inicialização do BlueZ não os
+ * faz), por comandos HCI num soquete cru (docs/bluetooth-integration/03-bluez-stack.md):
+ *  - Write Inquiry Scan Activity (0x0C1E): o chip sai do reset varrendo a visibilidade 2,40 s a
+ *    cada 2,56 s; visível, o A2DP caía de ~41 para ~5 KB/s. Padrão do Bluetooth: 11,25 ms;
+ *  - Write Default Link Policy Settings (0x080F) = só sniff, sem troca de papel: quando o
+ *    celular pedia para virar mestre no meio da abertura do áudio, o chip perdia a resposta do
+ *    AVDTP Discover e a conexão falhava (POCO X4: 0/5 conexões; sem a troca: 5/5). */
+static void hci_raw(const unsigned char *cmd, size_t n, const char *what)
 {
     struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };   /* AF_BLUETOOTH, hci0, RAW */
-    static const unsigned char cmd[] = { 0x01, 0x1e, 0x0c, 0x04, 0x00, 0x10, 0x12, 0x00 };
     int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);                     /* BTPROTO_HCI */
     if(s < 0) return;
-    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && write(s, cmd, sizeof cmd) == (ssize_t)sizeof cmd)
-        syslog(LOG_INFO, "varredura de visibilidade: 11,25 ms a cada 2,56 s");
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && write(s, cmd, n) == (ssize_t)n)
+        syslog(LOG_INFO, "%s", what);
     close(s);
+}
+
+static void fix_inquiry_scan(void)
+{
+    static const unsigned char scan[] = { 0x01, 0x1e, 0x0c, 0x04, 0x00, 0x10, 0x12, 0x00 };
+    static const unsigned char policy[] = { 0x01, 0x0f, 0x08, 0x02, 0x04, 0x00 };
+    hci_raw(scan, sizeof scan, "varredura de visibilidade: 11,25 ms a cada 2,56 s");
+    hci_raw(policy, sizeof policy, "politica de enlace: sem troca de papel");
+}
+
+/* Com a conexão pronta, o celular passa a ser o mestre do enlace: o mestre controla o AFH (fugir
+ * dos canais com interferência) e o MT6611 faz isso mal. Com o FOSTON mestre, a qualidade do enlace
+ * caía de 255 para 8 com Wi-Fi por perto, o celular usava pacotes DH5 sem EDR e o áudio chegava a
+ * 18,7 KB/s (59 % do tempo real: cortes e trechos pulados); com o celular mestre: 41,9 KB/s,
+ * qualidade 255 (22/11/2026). A troca é pedida só depois dos perfis conectados, porque durante a
+ * abertura do áudio o chip perdia a resposta do AVDTP (política padrão sem troca de papel). */
+#define HCIGETCONNINFO _IOR('H', 213, int)
+struct conn_info { uint16_t handle; uint8_t bdaddr[6], type, out; uint16_t state; uint32_t link_mode; };
+struct conn_info_req { uint8_t bdaddr[6], type; struct conn_info info; };
+
+static void become_peripheral(const char *addr)
+{
+    unsigned v[6];
+    if(sscanf(addr, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;
+    struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };
+    int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);
+    if(s < 0) return;
+    struct conn_info_req r;
+    memset(&r, 0, sizeof r);
+    for(int i = 0; i < 6; i++) r.bdaddr[i] = (uint8_t)v[5 - i];
+    r.type = 1;                                          /* ACL */
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && ioctl(s, HCIGETCONNINFO, &r) == 0) {
+        if(!(r.info.link_mode & 0x0001)) {               /* HCI_LM_MASTER: já é escravo */
+            close(s);
+            return;
+        }
+        uint16_t h = r.info.handle;
+        unsigned char pol[] = { 0x01, 0x0d, 0x08, 0x04, (uint8_t)h, (uint8_t)(h >> 8), 0x05, 0x00 };
+        unsigned char sw[] = { 0x01, 0x0b, 0x08, 0x07, r.bdaddr[0], r.bdaddr[1], r.bdaddr[2], r.bdaddr[3],
+                               r.bdaddr[4], r.bdaddr[5], 0x01 };
+        if(write(s, pol, sizeof pol) == (ssize_t)sizeof pol && write(s, sw, sizeof sw) == (ssize_t)sizeof sw)
+            syslog(LOG_INFO, "troca de papel pedida: o celular passa a mestre do enlace");
+    }
+    close(s);
+}
+
+/* um pedido por conexão, 2 s depois de os perfis estarem conectados */
+#define MAXRS 8
+static struct { char addr[18]; long since; int done; } rs[MAXRS];
+
+static void role_switch_tick(const state_t *st, long now)
+{
+    for(int k = 0; k < MAXRS; k++) {                     /* esquece quem desconectou */
+        if(!rs[k].addr[0]) continue;
+        int still = 0;
+        for(int i = 0; i < st->ndev; i++)
+            if(!strcmp(st->dev[i].addr, rs[k].addr) && st->dev[i].connected && st->dev[i].resolved) still = 1;
+        if(!still) rs[k].addr[0] = 0;
+    }
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->connected || !d->resolved) continue;
+        int k, freek = -1;
+        for(k = 0; k < MAXRS && strcmp(rs[k].addr, d->addr); k++)
+            if(!rs[k].addr[0] && freek < 0) freek = k;
+        if(k == MAXRS) {
+            if(freek < 0) continue;
+            k = freek;
+            snprintf(rs[k].addr, sizeof rs[k].addr, "%s", d->addr);
+            rs[k].since = now;
+            rs[k].done = 0;
+        }
+        if(!rs[k].done && now - rs[k].since >= 2000) {
+            rs[k].done = 1;
+            become_peripheral(d->addr);
+        }
+    }
 }
 
 static void on_sig(int s) { (void)s; quit = 1; }
@@ -591,6 +727,7 @@ int main(int argc, char **argv)
             read_state(&st);
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
+            role_switch_tick(&st, now);
             if(!st.powered) powered_at = 0;
             else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
             /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,
@@ -606,7 +743,7 @@ int main(int argc, char **argv)
             reconnect_done++;
             for(int i = 0; i < st.ndev; i++)
                 if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected)
-                    call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "connect", 30000, DBUS_TYPE_INVALID);
+                    call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
         if(scan_until && now >= scan_until) {
@@ -618,6 +755,8 @@ int main(int argc, char **argv)
         int timeout = dirty ? 250 : (int)(next_full - now);
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
         if(scan_until && timeout > 1000) timeout = 1000;
+        for(int k = 0; k < MAXRS; k++)
+            if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;
         if(dbus_connection_get_dispatch_status(bus) == DBUS_DISPATCH_DATA_REMAINS) timeout = 0;
         if(dbus_connection_has_messages_to_send(bus)) p[0].events |= POLLOUT;

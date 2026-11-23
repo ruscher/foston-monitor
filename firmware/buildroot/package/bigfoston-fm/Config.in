@@ -1,0 +1,6 @@
+config BR2_PACKAGE_BIGFOSTON_FM
+	bool "bigfoston-fm"
+	help
+	  FM transmitter of the FOSTON FS-707DC (KT Micro KT0801A on the
+	  MT3351 I2C, 32 kHz reference from PWM3): bffm turns it on and off,
+	  sets the frequency and the audio output (docs/fm-radio).

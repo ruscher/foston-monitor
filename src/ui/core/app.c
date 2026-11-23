@@ -2,6 +2,8 @@
  * barra inferior (72 px). Um único lv_timer de 1 s atualiza relógio/status. */
 #define _DEFAULT_SOURCE
 #include "btstat.h"
+#include "phonestat.h"
+#include "../screens/screens.h"
 #include "app.h"
 #include "nav.h"
 #include "theme.h"
@@ -12,6 +14,7 @@
 #include "devwatch.h"
 #include "powerkey.h"
 #include "../widgets/topbar.h"
+#include "fmstat.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
 #include "../assets/logo/bf_logo.h"
@@ -32,10 +35,44 @@ static void tick_cb(lv_timer_t *t)
     (void)t;
     topbar_update();
     bt_poll_global();
+    ph_poll_global();
+    fm_poll_global();
     fx_tick();
     clock_tick();
     /* modo Automático: troca claro/escuro quando passa das 7h/19h */
     if(theme_dark_now() != pal()->dark) app_rebuild();
+}
+
+static lv_obj_t *wall, *topb;
+
+void app_wallpaper_visible(bool on)
+{
+    lv_obj_t *scr = lv_screen_active();
+    if(on) lv_obj_remove_local_style_prop(scr, LV_STYLE_BG_COLOR, 0);   /* volta a cor do tema */
+    else lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+    static bool saved;
+    static lv_color_t top_c;
+    static lv_grad_dir_t top_g;
+    static lv_opa_t top_o;
+    if(topb) {                                     /* a barra de cima também fica preta (e volta como era) */
+        if(!on && !saved) {
+            top_c = lv_obj_get_style_bg_color(topb, 0);
+            top_g = lv_obj_get_style_bg_grad_dir(topb, 0);
+            top_o = lv_obj_get_style_bg_opa(topb, 0);
+            saved = true;
+            lv_obj_set_style_bg_color(topb, lv_color_black(), 0);
+            lv_obj_set_style_bg_grad_dir(topb, LV_GRAD_DIR_NONE, 0);
+            lv_obj_set_style_bg_opa(topb, LV_OPA_COVER, 0);
+        } else if(on && saved) {
+            saved = false;
+            lv_obj_set_style_bg_color(topb, top_c, 0);
+            lv_obj_set_style_bg_grad_dir(topb, top_g, 0);
+            lv_obj_set_style_bg_opa(topb, top_o, 0);
+        }
+    }
+    if(!wall) return;
+    if(on) lv_obj_remove_flag(wall, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(wall, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build(void)
@@ -48,22 +85,26 @@ static void build(void)
 
     /* papel de parede fixo atrás do conteúdo (as transições deslizam só o conteúdo) */
     const lv_image_dsc_t *wp = theme_wallpaper();
+    wall = NULL;
     if(wp) {
-        lv_obj_t *wall = lv_image_create(scr);
+        wall = lv_image_create(scr);
         lv_image_set_src(wall, wp);
-        lv_obj_set_pos(wall, 0, BF_TOPBAR_H);
+        lv_obj_set_pos(wall, 0, theme_glass() ? 0 : BF_TOPBAR_H);   /* Glass: atrás da barra translúcida */
         lv_obj_remove_flag(wall, LV_OBJ_FLAG_CLICKABLE);
     }
 
     lv_obj_t *top = topbar_create(scr);
     lv_obj_set_pos(top, 0, 0);
+    topb = top;
 
     content = bf_plain(scr);
     lv_obj_set_pos(content, 0, BF_TOPBAR_H);
     lv_obj_set_size(content, BF_SCREEN_W, BF_CONTENT_H);
 
-    lv_obj_t *bot = bottombar_create(scr);
-    lv_obj_set_pos(bot, 0, BF_SCREEN_H - BF_BOTBAR_H);
+    if(!theme_glass()) {                 /* Glass: a navegação fica na barra superior */
+        lv_obj_t *bot = bottombar_create(scr);
+        lv_obj_set_pos(bot, 0, BF_SCREEN_H - BF_BOTBAR_H);
+    }
 }
 
 void app_apply_hw_settings(void)
@@ -86,6 +127,7 @@ void app_init(lv_display_t *d)
     nav_init(content);
     nav_show_now();
     tick = lv_timer_create(tick_cb, 1000, NULL);
+    music_service_init();               /* música do celular reconhecida sem abrir a Multimídia */
     fx_init();
     devwatch_init();
     powerkey_init();

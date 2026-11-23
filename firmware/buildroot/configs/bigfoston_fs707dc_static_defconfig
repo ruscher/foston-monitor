@@ -1,4 +1,4 @@
-# BigFoston OS com Bluetooth (BlueZ + BlueALSA): bibliotecas compartilhadas (teste, docs/hardware-enablement/08)
+# BigFoston OS - FOSTON FS-707DC, variante estática sem Bluetooth (até a 0.2.0 era a oficial; initrd ~1,7 MB)
 BR2_arm=y
 BR2_arm1176jz_s=y
 BR2_ARM_EABI=y
@@ -7,8 +7,8 @@ BR2_ARM_INSTRUCTIONS_ARM=y
 BR2_TARGET_OPTIMIZATION="-mno-unaligned-access"
 BR2_DL_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/../build/dl"
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
-# shared libraries: BlueZ and BlueALSA need them (dlopen)
-BR2_SHARED_LIBS=y
+# static userland while bringing up (removes the dynamic loader from the picture)
+BR2_STATIC_LIBS=y
 BR2_TARGET_GENERIC_HOSTNAME="bigfoston"
 BR2_TARGET_GENERIC_ISSUE="BigFoston OS"
 BR2_INIT_BUSYBOX=y
@@ -46,6 +46,7 @@ BR2_PACKAGE_DOSFSTOOLS_FSCK_FAT=y
 BR2_PACKAGE_BIGFOSTON_SHELL=y
 BR2_PACKAGE_BIGFOSTON_GPS=y
 BR2_PACKAGE_BIGFOSTON_BT=y
+BR2_PACKAGE_BIGFOSTON_FM=y
 BR2_PACKAGE_BIGFOSTON_ESPEAK_NG=y
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/users.table"
 # audio without alsa-lib (static build: every user would carry its own ~600 KB copy;
@@ -56,13 +57,3 @@ BR2_PACKAGE_MPG123=y
 BR2_LINUX_KERNEL_XZ=y
 # Reiniciar com kexec (bigfoston-reboot)
 BR2_PACKAGE_KEXEC=y
-# Bluetooth: BlueZ (bluetoothd + D-Bus), áudio A2DP com BlueALSA
-BR2_PACKAGE_BLUEZ5_UTILS=y
-BR2_PACKAGE_BLUEZ5_UTILS_CLIENT=y
-BR2_PACKAGE_BLUEZ5_UTILS_TOOLS=y
-BR2_PACKAGE_BLUEZ5_UTILS_DEPRECATED=y
-BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_AUDIO=y
-BR2_PACKAGE_BLUEZ5_UTILS_PLUGINS_HID=y
-BR2_PACKAGE_BLUEZ_ALSA=y
-BR2_PACKAGE_ALSA_UTILS=y
-BR2_PACKAGE_ALSA_UTILS_APLAY=y

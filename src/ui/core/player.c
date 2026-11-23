@@ -9,6 +9,7 @@
 #define _DEFAULT_SOURCE
 #include "player.h"
 #include <string.h>
+#include <strings.h>
 
 #ifndef BIGFOSTON_HAVE_MPG123
 bool       player_available(void) { return false; }
@@ -30,6 +31,7 @@ bool       player_cover(const uint8_t **d, size_t *l, const char **m) { (void)d;
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include "btaudio.h"
 #include <mpg123.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -77,13 +79,19 @@ bool player_available(void) { return true; }
 static bool dsp_open(int rate, int channels)
 {
     if(dsp >= 0) close(dsp);
-    dsp = open("/dev/dsp", O_WRONLY | O_CLOEXEC);
-    if(dsp < 0) return false;
+    /* o clique da tela (fx.c) segura o /dev/dsp por alguns ms: tenta de novo por ~300 ms */
+    for(int i = 0; i < 10; i++) {
+        dsp = open("/dev/dsp", O_WRONLY | O_CLOEXEC);
+        if(dsp >= 0 || errno != EBUSY) break;
+        usleep(30000);
+    }
+    if(dsp < 0) { fprintf(stderr, "player: /dev/dsp: %s\n", strerror(errno)); return false; }
     int frag = (4 << 16) | 12;     /* 4 fragmentos de 4 KB: ~90 ms a 44,1 kHz estéreo */
     ioctl(dsp, SNDCTL_DSP_SETFRAGMENT, &frag);
     int fmt = AFMT_S16_LE, ch = channels, sp = rate;
     if(ioctl(dsp, SNDCTL_DSP_SETFMT, &fmt) || ioctl(dsp, SNDCTL_DSP_CHANNELS, &ch) ||
        ioctl(dsp, SNDCTL_DSP_SPEED, &sp)) {
+        fprintf(stderr, "player: /dev/dsp %d Hz %d canais recusado: %s\n", rate, channels, strerror(errno));
         close(dsp);
         dsp = -1;
         return false;
@@ -149,22 +157,72 @@ bool player_cover(const uint8_t **d, size_t *l, const char **m)
     return true;
 }
 
+/* ---------------- WAV (PCM 16 bits; gravações de ligação) ---------------- */
+
+typedef struct { mpg123_handle *mh; FILE *wf; long data_off, data_len, pos; long rate; int ch; } src_t;
+
+static bool wav_parse(FILE *f, src_t *s)
+{
+    uint8_t h[12];
+    if(fread(h, 1, 12, f) != 12 || memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) return false;
+    bool fmt_ok = false;
+    for(;;) {
+        uint8_t c[8];
+        if(fread(c, 1, 8, f) != 8) return false;
+        uint32_t len = (uint32_t)c[4] | (uint32_t)c[5] << 8 | (uint32_t)c[6] << 16 | (uint32_t)c[7] << 24;
+        if(!memcmp(c, "fmt ", 4)) {
+            uint8_t fm[16];
+            if(len < 16 || fread(fm, 1, 16, f) != 16) return false;
+            int tag = fm[0] | fm[1] << 8, ch = fm[2] | fm[3] << 8, bits = fm[14] | fm[15] << 8;
+            s->rate = (long)(fm[4] | fm[5] << 8 | fm[6] << 16 | (uint32_t)fm[7] << 24);
+            s->ch = ch;
+            if(tag != 1 || bits != 16 || (ch != 1 && ch != 2) || s->rate < 8000 || s->rate > 48000) return false;
+            fmt_ok = true;
+            if(len > 16) fseek(f, (long)(len - 16 + (len & 1)), SEEK_CUR);
+        } else if(!memcmp(c, "data", 4)) {
+            if(!fmt_ok) return false;
+            s->data_off = ftell(f);
+            fseek(f, 0, SEEK_END);
+            long avail = ftell(f) - s->data_off;
+            s->data_len = len && (long)len <= avail ? (long)len : avail;   /* gravação interrompida: o que houver */
+            fseek(f, s->data_off, SEEK_SET);
+            return true;
+        } else fseek(f, (long)(len + (len & 1)), SEEK_CUR);
+    }
+}
+
+static bool is_wav(const char *p)
+{
+    size_t l = strlen(p);
+    return l > 4 && !strcasecmp(p + l - 4, ".wav");
+}
+
 /* ---------------- thread de decodificação ---------------- */
 
 static void *decode_thread(void *arg)
 {
-    mpg123_handle *mh = arg;
+    src_t *src = arg;
+    mpg123_handle *mh = src->mh;
     static unsigned char buf[4608 * 2];
     long rate = 0;
     bool suspended = false;
     int ch = 0, enc = 0;
 
-    mpg123_getformat(mh, &rate, &ch, &enc);
+    if(mh) mpg123_getformat(mh, &rate, &ch, &enc);
+    else { rate = src->rate; ch = src->ch; }
     while(!quit_req) {
         if(seek_req_ms >= 0) {
             int ms = seek_req_ms;
             seek_req_ms = -1;
-            off_t s = mpg123_seek(mh, (off_t)((long long)ms * rate / 1000), SEEK_SET);
+            off_t s;
+            if(mh) s = mpg123_seek(mh, (off_t)((long long)ms * rate / 1000), SEEK_SET);
+            else {
+                long fr = (long)((long long)ms * rate / 1000), bytes = fr * 2 * ch;
+                if(bytes > src->data_len) bytes = src->data_len;
+                src->pos = bytes;
+                fseek(src->wf, src->data_off + bytes, SEEK_SET);
+                s = bytes / (2 * ch);
+            }
             if(dsp >= 0) ioctl(dsp, SNDCTL_DSP_RESET, 0);
             if(s >= 0) pos_ms = (int)((long long)s * 1000 / rate);
         }
@@ -184,7 +242,16 @@ static void *decode_thread(void *arg)
             continue;
         }
         size_t done = 0;
-        int r = mpg123_read(mh, buf, sizeof buf, &done);
+        int r;
+        if(mh) r = mpg123_read(mh, buf, sizeof buf, &done);
+        else {
+            long left = src->data_len - src->pos;
+            size_t want = sizeof buf - sizeof buf % (size_t)(2 * ch);
+            if((long)want > left) want = (size_t)left;
+            done = want ? fread(buf, 1, want, src->wf) : 0;
+            src->pos += (long)done;
+            r = done ? MPG123_OK : MPG123_DONE;
+        }
         if(r == MPG123_NEW_FORMAT) {
             mpg123_getformat(mh, &rate, &ch, &enc);
             pthread_mutex_lock(&lock);
@@ -225,12 +292,12 @@ static void *decode_thread(void *arg)
                     pthread_mutex_unlock(&lock);
                 }
             }
-            off_t t = mpg123_tell(mh);
+            off_t t = mh ? mpg123_tell(mh) : (off_t)(src->pos / (2 * ch));
             int d = dsp_delay_ms((int)rate, ch);
             int ms = t >= 0 ? (int)((long long)t * 1000 / rate) - d : pos_ms;
             pos_ms = ms < 0 ? 0 : ms;
             struct mpg123_frameinfo fi;
-            if(mpg123_info(mh, &fi) == MPG123_OK) info.bitrate_kbps = fi.bitrate;
+            if(mh && mpg123_info(mh, &fi) == MPG123_OK) info.bitrate_kbps = fi.bitrate;
         }
         if(r == MPG123_DONE) {
             if(dsp >= 0) ioctl(dsp, SNDCTL_DSP_SYNC, 0);  /* deixa o fim tocar */
@@ -242,12 +309,41 @@ static void *decode_thread(void *arg)
             break;
         }
     }
-    mpg123_close(mh);
-    mpg123_delete(mh);
+    if(mh) { mpg123_close(mh); mpg123_delete(mh); }
+    if(src->wf) fclose(src->wf);
+    free(src);
     pthread_mutex_lock(&lock);
     if(dsp >= 0) { close(dsp); dsp = -1; }
     pthread_mutex_unlock(&lock);
     return NULL;
+}
+
+/* WAV: sem tags nem capa; mesma thread */
+static bool wav_open(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if(!f) return false;
+    src_t *s = calloc(1, sizeof *s);
+    if(!s || !wav_parse(f, s)) { fclose(f); free(s); return false; }
+    s->wf = f;
+    free(cover);
+    cover = NULL;
+    cover_len = 0;
+    cover_mime[0] = 0;
+    memset(&info, 0, sizeof info);
+    memset(&tags, 0, sizeof tags);
+    info.file_bytes = s->data_len + s->data_off;
+    info.rate = (int)s->rate;
+    info.channels = s->ch;
+    info.bitrate_kbps = (int)(s->rate * s->ch * 16 / 1000);
+    len_ms = (int)((long long)s->data_len / (2 * s->ch) * 1000 / s->rate);
+    info.audio_out = dsp_open((int)s->rate, s->ch);
+    quit_req = finished = paused = false;
+    pos_ms = 0;
+    seek_req_ms = -1;
+    if(pthread_create(&thr, NULL, decode_thread, s)) { fclose(f); free(s); return false; }
+    thr_running = true;
+    return true;
 }
 
 void player_stop(void)
@@ -269,6 +365,7 @@ bool player_open(const char *path)
 {
     player_stop();
     init_once();
+    if(is_wav(path)) return wav_open(path);
     int err = 0;
     mpg123_handle *mh = mpg123_new(NULL, &err);
     if(!mh) return false;
@@ -306,9 +403,13 @@ bool player_open(const char *path)
     quit_req = finished = paused = false;
     pos_ms = 0;
     seek_req_ms = -1;
-    if(pthread_create(&thr, NULL, decode_thread, mh)) {
+    src_t *src = calloc(1, sizeof *src);
+    if(!src) { mpg123_close(mh); mpg123_delete(mh); return false; }
+    src->mh = mh;
+    if(pthread_create(&thr, NULL, decode_thread, src)) {
         mpg123_close(mh);
         mpg123_delete(mh);
+        free(src);
         return false;
     }
     thr_running = true;
@@ -416,15 +517,19 @@ void player_spectrum(uint8_t out[PL_BANDS])
     if(!tw_ready) tw_init();
 
     bool live = player_state() == PL_PLAYING;
-    if(live) {
+    static int16_t bt[FFT_N];
+    /* música do celular: as amostras que o bluealsa-aplay já decodificou (core/btaudio) */
+    bool bt_live = !live && btaudio_live() && btaudio_samples(bt, FFT_N);
+    if(live || bt_live) {
         unsigned w = ring_w;
         for(int i = 0; i < FFT_N; i++) {
-            int32_t s = ring[(w - FFT_N + (unsigned)i) & (RING - 1)];
+            int32_t s = bt_live ? bt[i] : ring[(w - FFT_N + (unsigned)i) & (RING - 1)];
             re[i] = (s * win[i]) >> 15;
             im[i] = 0;
         }
         fft(re, im);
     }
+    live = live || bt_live;
     for(int b = 0; b < PL_BANDS; b++) {
         int target = 0;
         if(live) {

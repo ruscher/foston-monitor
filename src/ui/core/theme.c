@@ -29,6 +29,7 @@ int theme_preset_count(void) { return N_PRESETS; }
 const bf_preset_t *theme_preset(int i) { return &presets[i >= 0 && i < N_PRESETS ? i : 0]; }
 const bf_palette_t *pal(void) { return &P; }
 const lv_image_dsc_t *theme_wallpaper(void) { return wall_ok ? &wall : NULL; }
+bool theme_glass(void) { return settings()->home_mode == BF_HOME_GLASS; }
 
 bool theme_dark_now(void)
 {

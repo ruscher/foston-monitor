@@ -7,7 +7,8 @@
 #include "theme.h"
 
 #define BF_WALL_W BF_SCREEN_W
-#define BF_WALL_H BF_CONTENT_H
+/* área do conteúdo; no Foston Glass a tela inteira (atrás da barra superior translúcida) */
+#define BF_WALL_H (theme_glass() ? BF_SCREEN_H : BF_CONTENT_H)
 
 bool wallpaper_build(lv_image_dsc_t *dsc, const bf_palette_t *p, lv_color_t glow, bool logo);
 /* imagem do usuário recortada para preencher 800x360 (centro), escurecida um pouco no

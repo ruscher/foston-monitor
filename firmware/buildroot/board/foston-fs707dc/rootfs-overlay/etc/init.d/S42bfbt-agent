@@ -5,12 +5,30 @@
 case "$1" in
 start)
     [ -x /usr/sbin/bfbt-agent ] || exit 0
+    # Bluetooth marcado como ligado: o adaptador volta a ligar (um stop anterior o desligou)
+    if [ -f /data/bigfoston/bluetooth-ligado ] && pidof bluetoothd >/dev/null; then
+        dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0 \
+            org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Powered \
+            variant:boolean:true >/dev/null 2>&1
+    fi
     pidof bfbt-agent >/dev/null || /usr/sbin/bfbt-agent
     ;;
 stop)
+    # Ao desligar ou reiniciar: o BlueZ desliga o adaptador desconectando cada aparelho
+    # ("desligado"), e o celular fica sabendo na hora. Sem isso o chip era cortado depois
+    # (S35) e o Android só notava pelo tempo-limite do enlace, recusando a reconexão logo
+    # depois. O S41 e o S40 param em seguida.
+    if pidof bluetoothd >/dev/null; then
+        dbus-send --system --print-reply --reply-timeout=4000 --dest=org.bluez /org/bluez/hci0 \
+            org.freedesktop.DBus.Properties.Set string:org.bluez.Adapter1 string:Powered \
+            variant:boolean:false >/dev/null 2>&1
+    fi
     killall bfbt-agent 2>/dev/null
     ;;
 restart)
-    "$0" stop; sleep 1; "$0" start
+    # só o agente: o adaptador e as conexões continuam
+    killall bfbt-agent 2>/dev/null
+    sleep 1
+    "$0" start
     ;;
 esac

@@ -1,0 +1,20 @@
+#!/bin/sh
+# bfphone: telefone pelo celular conectado (HFP do BlueALSA; docs/phone). Estado em
+# /run/bigfoston-phone, comandos em /run/bigfoston-phone.cmd.
+PIDFILE=/run/bfphone.pid
+case "$1" in
+start)
+    [ -x /usr/sbin/bfphone ] || exit 0
+    start-stop-daemon -S -b -m -p "$PIDFILE" -x /usr/sbin/bfphone
+    ;;
+stop)
+    start-stop-daemon -K -p "$PIDFILE" 2>/dev/null
+    rm -f "$PIDFILE"
+    ;;
+restart)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+esac
+exit 0

@@ -7,6 +7,7 @@
 void app_init(lv_display_t *disp);
 void app_rebuild(void);            /* após trocar tema/língua (assíncrono) */
 void app_rebuild_now(void);
+void app_wallpaper_visible(bool on);   /* a TV esconde o papel de parede (fundo preto) */
 void app_apply_hw_settings(void);  /* brilho/volume salvos -> hardware */
 void app_power(bool reboot);
 lv_display_t *app_display(void);

@@ -24,5 +24,6 @@ extern const lv_image_dsc_t bf_icon_headphones;
 extern const lv_image_dsc_t bf_icon_plug;
 extern const lv_image_dsc_t bf_icon_sdcard;
 extern const lv_image_dsc_t bf_icon_gallery;
+extern const lv_image_dsc_t bf_icon_phone;
 
 #endif

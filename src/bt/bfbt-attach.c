@@ -197,6 +197,91 @@ static int set_bdaddr(int fd)
     return 1;
 }
 
+/* Como o mtk_bthuart.dll (Radio_CmdMTKDisableEsco): máscara de recursos LMP 0xFC1E sem eSCO.
+ * Sem ela o kernel e o celular negociam eSCO, que este chip aceita mas nunca completa (o canal
+ * de voz da ligação não abre); com SCO simples a voz vai pelos pinos PCM ao DSP. */
+static int disable_esco(int fd)
+{
+    static const unsigned char cmd[] = { 0x01, 0x1e, 0xfc, 0x08, 0xff, 0xff, 0x8d, 0x7e, 0x98, 0x1f, 0x79, 0x83 };
+    static const unsigned char done[] = { 0x04, 0x0e, 0x04, 0x01, 0x1e, 0xfc, 0x00 };
+    return write(fd, cmd, sizeof cmd) == sizeof cmd && expect(fd, done, sizeof done, 1000);
+}
+
+/* Patch da ROM do MT6611, como o mtk_bthuart.dll (Radio_WritePatch): o CE lê a versão do chip
+ * (0xFC D1 {04 00 00 80}) e manda o patch certo em pedaços de até 240 bytes pelo 0xFCC4
+ * {estágio 0 primeiro / 1 meio / 2 último, tamanho, 0, 0, 0, dados}. O patch é da MediaTek:
+ * vem do backup do próprio aparelho (tools/bigfoston/voice-extract.py --patch) para o cartão.
+ * MEDIDO (22/11/2026): só com a sequência completa do CE (SetE2BaseAddr antes, HCI Reset
+ * depois) a música continua normal; com ela a voz da ligação chega ao DSP pelo DAI (Y+0x7400). */
+#define PATCH_FILE "/mnt/sd/BigFoston/bt/mt6611-patch.bin"
+
+static int vendor_cmd(int fd, unsigned ocf, const unsigned char *p, int n, unsigned char *ret, int retn)
+{
+    unsigned char cmd[260] = { 0x01, (unsigned char)ocf, 0xfc, (unsigned char)n };
+    memcpy(cmd + 4, p, (size_t)n);
+    if(write(fd, cmd, (size_t)n + 4) != n + 4) return 0;
+    unsigned char b[128];
+    int k = 0;
+    struct pollfd pf = { fd, POLLIN, 0 };
+    while(k < (int)sizeof b && poll(&pf, 1, 2000) > 0) {
+        ssize_t r = read(fd, b + k, sizeof b - (size_t)k);
+        if(r <= 0) break;
+        k += (int)r;
+        for(int i = 0; i + 6 < k; i++)
+            if(b[i] == 0x04 && b[i + 1] == 0x0e && b[i + 4] == (unsigned char)ocf && b[i + 5] == 0xfc) {
+                int plen = b[i + 2], need = i + 3 + plen;
+                if(k < need) break;                          /* resto ainda chegando */
+                for(int j = 0; j < retn && 6 + j < 3 + plen; j++) ret[j] = b[i + 6 + j];
+                return 1;
+            }
+    }
+    return 0;
+}
+
+static int write_patch(int fd)
+{
+    static const unsigned char rd[] = { 0x04, 0x00, 0x00, 0x80 };
+    unsigned char ver[3] = { 0xff, 0, 0 };
+    if(!vendor_cmd(fd, 0xd1, rd, sizeof rd, ver, 3) || ver[0] != 0) return -1;
+    if(ver[1] != 3 || ver[2] != 0x8b) {
+        syslog(LOG_WARNING, "MT6611 versão %d/0x%02x: patch não conhecido, segue sem", ver[1], ver[2]);
+        return 0;
+    }
+    /* Radio_CmdMTKSetE2BaseAddr (CE, antes do patch, para as versões 1/0x8B e 3/0x8B):
+     * escrita de registrador 0xFCD0 {endereço 0x01000124, valor 0x01005900} — a área de
+     * configuração do chip ("E2") dentro do patch */
+    FILE *f = fopen(PATCH_FILE, "rb");
+    if(!f) { syslog(LOG_INFO, "sem %s: segue sem o patch (sem voz nas ligações)", PATCH_FILE); return 0; }
+    static unsigned char data[0x4000];
+    size_t n = fread(data, 1, sizeof data, f);
+    fclose(f);
+    if(n != 0x1cdc) { syslog(LOG_WARNING, "%s com tamanho errado (%zu)", PATCH_FILE, n); return 0; }
+    static const unsigned char e2[] = { 0x24, 0x01, 0x00, 0x01, 0x00, 0x59, 0x00, 0x01 };
+    unsigned char est = 0xff;
+    if(!vendor_cmd(fd, 0xd0, e2, sizeof e2, &est, 1) || est != 0) {
+        syslog(LOG_ERR, "SetE2BaseAddr recusado (0x%02x)", est);
+        return -1;
+    }
+    for(size_t off = 0; off < n;) {
+        size_t len = n - off > 240 ? 240 : n - off;
+        unsigned char p[245];
+        p[0] = n - off > 240 ? (off ? 1 : 0) : 2;
+        p[1] = (unsigned char)len;
+        p[2] = p[3] = p[4] = 0;
+        memcpy(p + 5, data + off, len);
+        unsigned char st = 0xff;
+        if(!vendor_cmd(fd, 0xc4, p, (int)len + 5, &st, 1) || st != 0) {
+            syslog(LOG_ERR, "patch do MT6611 recusado em %zu (0x%02x)", off, st);
+            return -1;
+        }
+        off += len;
+    }
+    /* como o Radio_Init do CE: HCI Reset depois do patch (o chip passa a usá-lo) */
+    if(!hci_reset(fd)) { syslog(LOG_ERR, "sem resposta ao HCI Reset depois do patch"); return -1; }
+    syslog(LOG_INFO, "patch do MT6611 carregado (%zu bytes, E2 em 0x01005900)", n);
+    return 1;
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
@@ -228,6 +313,14 @@ int main(int argc, char **argv)
             if(!set_baud(fd, baud)) { fprintf(stderr, "bfbt-attach: troca para %d baud falhou (tentativa %d)\n", baud, tr + 1); continue; }
             if(!hci_reset(fd)) { fprintf(stderr, "bfbt-attach: sem resposta ao HCI Reset a %d baud (tentativa %d)\n", baud, tr + 1); continue; }
         }
+        int pr = write_patch(fd);
+        if(pr < 0) {                        /* na última tentativa segue sem o patch */
+            fprintf(stderr, "bfbt-attach: patch falhou (tentativa %d)\n", tr + 1);
+            if(tr < 2) continue;
+            if(!hci_reset(fd)) continue;
+        }
+        if(pr != 0 && !set_bdaddr(fd)) syslog(LOG_WARNING, "endereço Bluetooth não regravado depois do reset");
+        if(!disable_esco(fd)) syslog(LOG_WARNING, "máscara sem eSCO (0xFC1E) não aceita");
         ok = 1;
     }
     if(!ok) {

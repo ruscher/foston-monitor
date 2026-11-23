@@ -24,6 +24,7 @@ static const feature_t feats[FEAT_COUNT] = {
     [FEAT_FM]         = { &bf_icon_fm,         0xe0a40c, S_SET_FM,         S_DESC_FM,         S_MISS_FM,         true },
     [FEAT_USB]        = { &bf_icon_usb,        0x6c7383, S_SET_USB,        S_DESC_USB,        S_MISS_USB,        true },
     [FEAT_GPSINFO]    = { &bf_icon_gps,        0x2ec27e, S_SET_GPSINFO,    S_DESC_GPSINFO,    S_MISS_GPSINFO,    true },
+    [FEAT_RADIO]      = { &bf_icon_fm,         0x9b6ad6, S_GL_RADIO,       S_DESC_RADIO,      S_MISS_RADIO,      true },
 };
 
 static void open_terminal(lv_event_t *e) { (void)e; nav_go(SCR_TERM, 0); }
