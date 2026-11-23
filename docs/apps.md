@@ -60,6 +60,11 @@ como a pasta de dados montada do cartão, conta uma vez).
 
 As miniaturas (120×120) são feitas numa thread, só para a parte visível da grade, e ficam em
 `<dados>/thumbs` quando o cartão aceita gravação: a segunda vez é imediata (as 8 imagens de
-exemplo ficaram prontas em menos de 20 s no aparelho, na primeira vez). Toque abre o visualizador; ◀ ▶ ou deslizar
-troca de foto. Correções no LVGL 9.2 vendorizado (`gifdec.c`): o último código LZW que
+exemplo ficaram prontas em menos de 20 s no aparelho, na primeira vez). Toque abre o visualizador
+(`src/ui/widgets/imgview.c`, também usado por Arquivos e Livros), no mesmo layout do leitor de
+livros: a barra superior do sistema continua visível e um toque na foto mostra/esconde os
+controles — em cima voltar, nome, zoom −, %, zoom +, Ajustar, girar ⟲ e ⟳; embaixo ◀, barra
+entre as fotos com "N / M", ▶ e resolução · tamanho · tipo. Deslizar (sem zoom) troca de foto e
+o Voltar do sistema fecha a foto antes de sair da tela. O giro é de 90° nos pixels já reduzidos;
+GIF animado não tem zoom nem giro. Correções no LVGL 9.2 vendorizado (`gifdec.c`): o último código LZW que
 completa o quadro era recusado (`>=` → `>`) e GIF87a era rejeitado.

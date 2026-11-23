@@ -35,7 +35,7 @@ void scr_home_show_page(int page);
 void scr_run_demo_keyboard(void);
 void scr_run_demo_command(const char *cmd);
 void scr_calibrate_demo_step(int step);
-void scr_gallery_demo(int step); /* 0 espera as miniaturas, 1 abre a 1ª, 2 fecha */
+void scr_gallery_demo(int step); /* 0 miniaturas, 1 abre a 1ª foto, 2 fecha, 3 controles, 4 gira, 5 zoom, 6 Voltar */
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar, 4 opções, 9 fonte Bluetooth */
 void scr_tv_demo(int step);
 void scr_fm_demo(int step);      /* Rádio FM: 0 normal, 1 digitar a frequência, 2 diagnóstico */

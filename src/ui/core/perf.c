@@ -2,6 +2,9 @@
  *
  * Histogramas de 1 ms (0..PERF_MAXMS) por métrica, zerados a cada janela. O
  * custo é um clock_gettime e um incremento por evento. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE             /* REG_RIP (ucontext) no x86-64: make target-hostcheck */
+#endif
 #include "perf.h"
 #include <stdio.h>
 #include <string.h>
