@@ -42,7 +42,15 @@ typedef struct {
     int  web_zoom;      /* Internet: zoom em % (50..200) */
     bool web_pc;        /* Internet: navegação completa pelo Chromium do PC (bfweb-pc.py) */
     bool web_fs_sharp;  /* Internet: vídeo em tela cheia na resolução inteira (padrão: meia, mais fluido) */
-    bool web_perf;      /* Internet: modo performance enquanto um vídeo toca (para serviços) */
+    /* Modo performance (Ajustes > Modo performance; core/perfui.c) */
+    bool perf_auto;     /* liga sozinho quando um vídeo toca no Internet */
+    int  perf_enter_s;  /* segundos de vídeo tocando antes de ligar (0, 2, 5, 10) */
+    int  perf_exit_s;   /* segundos com o vídeo parado antes de desligar (5, 10, 30, 60) */
+    unsigned perf_svc;  /* o que pausar: PM_SVC_* (perfmode.h) */
+    bool perf_quiet;    /* sem sons de toque e animações enquanto ligado */
+    bool perf_prio;     /* a interface com prioridade maior enquanto ligado */
+    bool perf_tag;      /* etiqueta flutuante "Performance" no canto */
+    bool perf_modal;    /* janela com barra de progresso ao ligar e desligar */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */

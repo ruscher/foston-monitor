@@ -14,6 +14,7 @@
 #include "devwatch.h"
 #include "powerkey.h"
 #include "ctl.h"
+#include "perfui.h"
 #include "../widgets/topbar.h"
 #include "fmstat.h"
 #include "../widgets/bottombar.h"
@@ -133,6 +134,7 @@ void app_init(lv_display_t *d)
     devwatch_init();
     powerkey_init();
     ctl_init();
+    perfui_init();                      /* etiqueta e janela do modo performance */
     fx_sound(FX_STARTUP);
 }
 

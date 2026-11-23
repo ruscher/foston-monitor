@@ -17,15 +17,16 @@
 #include <unistd.h>
 
 /* na ordem de parar; volta na inversa (o Bluetooth sobe antes do bluetoothd e do resto) */
-static const struct { const char *script; const char *proc; } svc[] = {
-    { "/etc/init.d/S60gps",        "bfgps" },
-    { "/etc/init.d/S50crond",      "crond" },
-    { "/etc/init.d/S43bfphone",    "bfphone" },
-    { "/etc/init.d/S42bfbt-agent", "bfbt-agent" },
-    { "/etc/init.d/S41bluealsa",   "bluealsa" },
-    { "/etc/init.d/S40bluetoothd", "bluetoothd" },
-    { "/etc/init.d/S35bluetooth",  "bfbt-attach" },
+static const struct { const char *script; const char *proc; unsigned group; } svc[] = {
+    { "/etc/init.d/S60gps",        "bfgps",       PM_SVC_GPS },
+    { "/etc/init.d/S50crond",      "crond",       PM_SVC_CRON },
+    { "/etc/init.d/S43bfphone",    "bfphone",     PM_SVC_PHONE },
+    { "/etc/init.d/S42bfbt-agent", "bfbt-agent",  PM_SVC_BT },
+    { "/etc/init.d/S41bluealsa",   "bluealsa",    PM_SVC_BT },
+    { "/etc/init.d/S40bluetoothd", "bluetoothd",  PM_SVC_BT },
+    { "/etc/init.d/S35bluetooth",  "bfbt-attach", PM_SVC_BT },
 };
+static unsigned want;                   /* grupos pedidos nesta entrada */
 #define N_SVC (int)(sizeof svc / sizeof svc[0])
 
 static _Atomic int state = PM_OFF, done, total;
@@ -69,12 +70,24 @@ static void run(const char *script, const char *arg)
 
 static void *leave_worker(void *arg);
 
+/* o que está parado fica anotado na RAM (/run some ao desligar): se o shell reiniciar no
+ * meio do modo (travou, foi atualizado), o próximo religa tudo (perfmode_recover) */
+#define NOTE "/run/bigfoston-perfmode"
+
+static void note_write(void)
+{
+    FILE *f = fopen(NOTE ".new", "w");
+    if(!f) return;
+    for(int i = 0; i < N_SVC; i++) if(stopped[i]) fprintf(f, "%s\n", svc[i].script);
+    if(fclose(f) == 0) rename(NOTE ".new", NOTE);
+}
+
 static void *enter_worker(void *arg)
 {
     (void)arg;
     int n = 0;
     for(int i = 0; i < N_SVC; i++) {
-        stopped[i] = access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
+        stopped[i] = (want & svc[i].group) && access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
         if(stopped[i]) n++;
     }
     total = n;
@@ -82,6 +95,7 @@ static void *enter_worker(void *arg)
     for(int i = 0; i < N_SVC; i++) {
         if(!stopped[i]) continue;
         run(svc[i].script, "stop");
+        note_write();
         done++;
     }
     state = PM_ON;
@@ -102,6 +116,7 @@ static void *leave_worker(void *arg)
         stopped[i] = false;
         done++;
     }
+    unlink(NOTE);
     state = PM_OFF;
     return NULL;
 }
@@ -116,12 +131,13 @@ static void spawn(void *(*fn)(void *))
     pthread_attr_destroy(&a);
 }
 
-void perfmode_enter(void)
+void perfmode_enter(unsigned groups, bool prio)
 {
     if(state != PM_OFF) { leave_after = false; return; }
     state = PM_ENTERING;
     total = done = 0;
-    setpriority(PRIO_PROCESS, 0, -5);   /* a thread da interface (a principal) primeiro */
+    want = groups;
+    if(prio) setpriority(PRIO_PROCESS, 0, -5);   /* a thread da interface (a principal) primeiro */
     spawn(enter_worker);
 }
 
@@ -134,6 +150,26 @@ void perfmode_leave(void)
     state = PM_LEAVING;
     total = done = 0;
     spawn(leave_worker);
+}
+
+bool perfmode_recover(void)
+{
+    FILE *f = fopen(NOTE, "r");
+    if(!f) return false;
+    char line[128];
+    int n = 0;
+    while(fgets(line, sizeof line, f)) {
+        line[strcspn(line, "\n")] = 0;
+        for(int i = 0; i < N_SVC; i++)
+            if(!strcmp(line, svc[i].script)) { stopped[i] = true; n++; }
+    }
+    fclose(f);
+    if(!n || state != PM_OFF) { if(!n) unlink(NOTE); return false; }
+    state = PM_LEAVING;
+    total = n;
+    done = 0;
+    spawn(leave_worker);
+    return true;
 }
 
 pm_state_t perfmode_state(void) { return (pm_state_t)state; }

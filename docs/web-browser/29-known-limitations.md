@@ -1,7 +1,9 @@
 # Limitações conhecidas
 
-- **Modo performance**: enquanto ligado, o FOSTON não recebe chamadas nem usa GPS ou
-  Bluetooth (volta 10 s depois de o vídeo parar); desligável no menu do Internet.
+- **Modo performance**: enquanto ligado (com as opções padrão), o FOSTON não recebe
+  chamadas nem usa GPS ou Bluetooth; cada um pode ficar de fora em Ajustes > Modo
+  performance, e o modo automático pode ser desligado. Mudanças no que pausar valem na
+  próxima vez que o modo ligar.
 - **Tela cheia**: sem sincronismo vertical, uma troca rápida de cena pode mostrar uma emenda
   horizontal por um quadro.
 - **Modo completo**: precisa do `bfweb-pc.py` rodando no PC; vídeo a ~15–20 quadros/s; o som

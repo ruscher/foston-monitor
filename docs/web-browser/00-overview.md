@@ -44,8 +44,11 @@ motor rodando no aparelho, interface testada no simulador.
   site no Internet (título da barra = nome do WebApp), segurar o dedo oferece remover.
   Também ficam na página inicial do Internet. São atalhos: precisam de internet.
 - **Tela cheia** (modo completo): o botão de tela cheia do site (vídeo do YouTube) ocupa os
-  800x480, sem as barras; o toque segue para a página; o botão × no canto (aparece por 3 s
-  e a cada toque) ou o botão do próprio site saem.
+  800x480, sem as barras; o toque segue para a página e mostra, no topo e ao centro, o
+  aviso "Clique novamente para sair" (tocado, sai); o botão do próprio site também sai.
+- **Modo performance** (Ajustes > Modo performance): com vídeo tocando, pausa GPS,
+  Bluetooth, telefone e tarefas e dá prioridade à interface; tudo configurável, com
+  etiqueta flutuante e janela de progresso ([10](10-remote-browser.md)).
 
 ## Internet no aparelho
 

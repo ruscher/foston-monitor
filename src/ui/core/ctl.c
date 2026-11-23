@@ -1,6 +1,7 @@
 /* ctl.c — ver ctl.h. */
 #include "ctl.h"
 #include "nav.h"
+#include "perfui.h"
 #include "../screens/screens.h"
 #include "lvgl.h"
 #include <errno.h>
@@ -18,12 +19,30 @@ static int fd = -1, keep = -1;
 static char buf[1200];
 static size_t len;
 
+static lv_obj_t *scrollable(lv_obj_t *o)
+{
+    if(lv_obj_get_scroll_bottom(o) > 0 || lv_obj_get_scroll_top(o) > 0) return o;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *r = scrollable(lv_obj_get_child(o, (int32_t)i));
+        if(r) return r;
+    }
+    return NULL;
+}
+
 static void command(char *l)
 {
     if(!strcmp(l, "app web")) nav_go(SCR_WEB, 0);
     else if(!strcmp(l, "app apps")) nav_go(SCR_HOME, HOME_ARG_APPS);   /* grade com todos os apps */
     else if(!strncmp(l, "app webapp ", 11)) nav_go(SCR_WEB, WEB_ARG_APP0 + atoi(l + 11));
     else if(!strncmp(l, "page ", 5)) scr_home_show_page(atoi(l + 5));
+    else if(!strcmp(l, "app perfmode")) nav_go(SCR_PERFMODE, 0);
+    else if(!strcmp(l, "perf on")) perfui_manual(true);
+    else if(!strcmp(l, "perf off")) perfui_disable();
+    else if(!strcmp(l, "perf dialog")) perfui_dialog();
+    else if(!strncmp(l, "scroll ", 7)) {           /* rola a primeira área rolável da tela */
+        lv_obj_t *o = scrollable(lv_screen_active());
+        if(o) lv_obj_scroll_by(o, 0, -atoi(l + 7), LV_ANIM_OFF);
+    }
     else if(!strcmp(l, "app home") || !strcmp(l, "home")) nav_home();
     else if(!strncmp(l, "web ", 4)) {
         if(nav_current().scr == SCR_WEB) scr_web_demo(l + 4);

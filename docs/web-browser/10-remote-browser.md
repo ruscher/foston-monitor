@@ -35,8 +35,8 @@ liga/desliga.
 | Navegador | Chrome com perfil próprio (`~/.local/share/bigfoston-web/chrome`, separado do seu Chrome), user-agent normal do Chrome. Com o Xvfb instalado (pacote `xorg-server-xvfb`), roda **com janela numa tela X virtual só dele** (invisível, número livre escolhido pelo Xvfb) e sem a marca de "controlado por automação": o YouTube recusa tocar em Chrome headless ou marcado como automatizado ("Algo deu errado" ~40 s depois de começar). Sem Xvfb, headless como antes |
 | Som | o Chrome toca numa saída virtual do PulseAudio/PipeWire só dele ("BigFoston-Web", não sai nos alto-falantes do PC; criada ao ligar, removida ao sair); o `parec` captura PCM 32 kHz estéreo e manda por uma **segunda conexão** (`192.168.7.2:7072`), só enquanto há som. No FOSTON, uma thread de prioridade maior recebe e outra toca no `/dev/dsp`: o som não espera a interface desenhar nem os quadros de vídeo. A conexão de som só entra com um código de uso único enviado pela conexão principal já autorizada. A música do Multimídia pausa quando o som começa; a voz do Big GPS tem prioridade. Sem `pactl`/`parec` no PC, o Chrome fica mudo como antes |
 | Imagem | screencast PNG do Chrome (só quando a página muda) → RGB565 → blocos de 32×32 que mudaram, juntados em retângulos → **LZ4** (`liblz4` do PC por ctypes; o FOSTON descomprime ~4x mais rápido que o inflate) ou zlib com um FOSTON antigo → o FOSTON aplica e confirma (`Q`); até 2 quadros em trânsito e ~25 por segundo |
-| Vídeo em tela cheia | meia resolução (400x240, o Chrome já reduz), ampliada 2x no FOSTON e escrita direto na memória da tela, sem o LVGL (só enquanto nada está por cima: botão ×, aviso, chamada). Menu → "Tela cheia nítida" usa a resolução inteira (menos fluido) |
-| Modo performance | o PC avisa quando um `<video>` toca (`VIDEO 1/0`). Na hora: sem sons de toque, animações nem tela escurecendo. Vídeo seguindo 2 s (e o ajuste ligado, menu → "Modo performance com vídeo"): GPS, Bluetooth, telefone e tarefas agendadas param (só os que estavam rodando) e a interface ganha prioridade; parado 10 s ou fora do app, tudo volta. Janela com barra de progresso nas duas trocas (`core/perfmode.c`) |
+| Vídeo em tela cheia | meia resolução (400x240, o Chrome já reduz), ampliada 2x no FOSTON e escrita direto na memória da tela, sem o LVGL (só enquanto nada está por cima). Um toque mostra, no topo e ao centro, o aviso pequeno "Clique novamente para sair" (desce como uma notificação e some em 3 s); tocado, sai da tela cheia. "Tela cheia nítida" (Ajustes > Modo performance ou menu do Internet) usa a resolução inteira |
+| Modo performance | o PC avisa quando um `<video>` toca (`VIDEO 1/0`); a tela não escurece enquanto o vídeo toca. O resto é configurável em **Ajustes > Modo performance** (`core/perfui.c`, `screens/scr_perfmode.c`): ligar sozinho com vídeo ou não, esperas para ligar (0/2/5/10 s) e desligar (5/10/30/60 s), o que pausar (GPS, Bluetooth, telefone, tarefas agendadas — só o que estava rodando), sons e animações, prioridade da interface, etiqueta flutuante e janela de progresso; também "Ativar agora"/"Desativar agora". Ligado, uma etiqueta "⚡ Performance" bem transparente fica no canto superior esquerdo (some na tela cheia); um toque abre Desativar / Configurar / Fechar. Se o shell reiniciar no meio do modo, o próximo religa o que estava parado (anotado em `/run/bigfoston-perfmode`) |
 | Comandos | os mesmos do motor local (`GO`, `CLICK`, `SCROLL`, `KEY`, `TEXT`, `LONG`...), viram eventos do Chrome (DevTools Protocol por pipe) |
 | Teclado | um script na página avisa quando um campo de texto ganha o foco: o teclado do FOSTON abre sozinho |
 | Título | o mesmo script avisa as trocas de `document.title` (o Chrome não as informa pelo `Target.targetInfoChanged`); páginas que trocam de endereço sem recarregar (vídeos do YouTube) entram no histórico com o título certo |
@@ -48,6 +48,15 @@ liga/desliga.
 
 Protocolo: tipo (1 byte) + tamanho (u32) + conteúdo; ver `src/ui/core/webremote.c` e
 `src/ui/core/webaudio.c` (som).
+
+## Conferência da imagem (23/11/2026)
+
+Página de teste no PC (canvas animando 40 retângulos aleatórios por quadro e terminando
+numa grade de 192 blocos de cor conhecida): a tela do FOSTON bateu bloco a bloco com a
+grade nos dois caminhos — tela cheia (meia resolução, direto na memória da tela) 3/3 e
+página normal (LZ4) 2/2, 0 blocos errados. Com o YouTube, as capturas do FOSTON
+coincidem com os quadros que o Chrome entregou (`bfweb-pc.py --dump PASTA`, diferença
+média 2,2 = arredondamento para RGB565).
 
 ## Testado no FOSTON (23/11/2026)
 

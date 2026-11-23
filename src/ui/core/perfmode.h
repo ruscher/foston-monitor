@@ -14,9 +14,19 @@
 
 typedef enum { PM_OFF, PM_ENTERING, PM_ON, PM_LEAVING } pm_state_t;
 
-void       perfmode_enter(void);
+/* o que pausar (settings()->perf_svc) */
+#define PM_SVC_GPS   (1u << 0)        /* bfgps */
+#define PM_SVC_BT    (1u << 1)        /* Bluetooth inteiro: chip, bluetoothd, áudio, agente */
+#define PM_SVC_PHONE (1u << 2)        /* bfphone (chamadas pelo celular) */
+#define PM_SVC_CRON  (1u << 3)        /* crond (tarefas agendadas) */
+
+/* svc: grupos PM_SVC_*; prio: a thread que chama (a da interface) ganha nice -5 */
+void       perfmode_enter(unsigned svc, bool prio);
 void       perfmode_leave(void);       /* também no meio da entrada: volta assim que ela terminar */
 pm_state_t perfmode_state(void);
+/* na inicialização: um shell anterior parou serviços e não religou (travou, foi atualizado)?
+ * religa agora (estado PM_LEAVING); true se havia algo a religar */
+bool       perfmode_recover(void);
 /* passo atual de 0 a total (para a barra) */
 void       perfmode_progress(int *done, int *total);
 #endif

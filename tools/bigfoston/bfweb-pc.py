@@ -58,6 +58,7 @@ AUDIO_RATE, AUDIO_CH = 32000, 2
 AUDIO_CHUNK = AUDIO_RATE * AUDIO_CH * 2 * 40 // 1000
 AUDIO_HANG_S = 1.0          # depois do último som, ainda manda 1 s (pausas curtas não cortam)
 VERBOSE = False
+DUMP = None
 CONF = os.path.expanduser("~/.config/bigfoston-web")
 DATA = os.path.expanduser("~/.local/share/bigfoston-web")
 BROWSERS = ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave", "brave-browser"]
@@ -649,6 +650,9 @@ class Session:
 
     def on_frame(self, p):
         self.c.send("Page.screencastFrameAck", {"sessionId": p["sessionId"]}, session=self.sid)
+        if DUMP:                                 # depuração: o quadro como o Chrome entregou
+            with open(os.path.join(DUMP, f"{time.time():.3f}.png"), "wb") as fd:
+                fd.write(base64.b64decode(p["data"]))
         self.pending_img = p["data"]      # só o mais novo importa
         self.pump()
 
@@ -998,9 +1002,13 @@ def main():
     ap.add_argument("--browser")
     ap.add_argument("--once", action="store_true", help="sai quando a ligação cair (testes)")
     ap.add_argument("--verbose", action="store_true", help="mostra os comandos do FOSTON")
+    ap.add_argument("--dump", help="depuração: grava cada quadro do Chrome (PNG) nesta pasta")
     a = ap.parse_args()
-    global VERBOSE
+    global VERBOSE, DUMP
     VERBOSE = a.verbose
+    DUMP = a.dump
+    if DUMP:
+        os.makedirs(DUMP, exist_ok=True)
     # uma instância por usuário (autostart do pacote e um iniciado à mão não brigam)
     os.makedirs(os.path.expanduser("~/.cache"), exist_ok=True)
     lock = open(os.path.expanduser("~/.cache/bigfoston-web-pc.lock"), "w")

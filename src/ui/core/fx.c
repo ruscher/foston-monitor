@@ -98,9 +98,11 @@ static void *play_thread(void *arg)
 
 bool fx_audio_present(void) { return access("/dev/dsp", W_OK) == 0; }
 
-static bool quiet;                   /* vídeo tocando: sem sons, animações nem tela escurecendo */
+static bool quiet;                   /* modo performance: sem sons de toque nem animações */
+static bool awake;                   /* vídeo tocando: a tela não escurece sem toque */
 
 void fx_quiet(bool on) { quiet = on; }
+void fx_keep_awake(bool on) { awake = on; }
 
 void fx_sound(fx_sound_t s)
 {
@@ -139,7 +141,7 @@ void fx_tick(void)
 {
     int min = settings()->dim_min;
     const bf_status_provider_t *p = status_provider();
-    if(quiet || dim_cover || min <= 0 || p->backlight_get() < 0) return;
+    if(awake || dim_cover || min <= 0 || p->backlight_get() < 0) return;
     if(lv_display_get_inactive_time(NULL) < (uint32_t)min * 60000u) return;
     p->backlight_set(5);
     dim_cover = lv_obj_create(lv_layer_sys());

@@ -45,7 +45,14 @@ void settings_defaults(bf_settings_t *s)
     s->web_zoom = 100;
     s->web_pc = true;
     s->web_fs_sharp = false;
-    s->web_perf = true;
+    s->perf_auto = true;
+    s->perf_enter_s = 2;
+    s->perf_exit_s = 10;
+    s->perf_svc = 0xf;                  /* GPS, Bluetooth, telefone e tarefas */
+    s->perf_quiet = true;
+    s->perf_prio = true;
+    s->perf_tag = true;
+    s->perf_modal = true;
     s->show_date = true;
     s->clock_24h = true;
     s->nav_voice = true;
@@ -131,7 +138,14 @@ void settings_load(void)
         else if(!strcmp(k, "web_zoom"))      cur.web_zoom = clampi(atoi(v), 50, 200);
         else if(!strcmp(k, "web_pc"))        cur.web_pc = atoi(v) != 0;
         else if(!strcmp(k, "web_fs_sharp"))  cur.web_fs_sharp = atoi(v) != 0;
-        else if(!strcmp(k, "web_perf"))      cur.web_perf = atoi(v) != 0;
+        else if(!strcmp(k, "web_perf") || !strcmp(k, "perf_auto")) cur.perf_auto = atoi(v) != 0;   /* web_perf: 0.4 */
+        else if(!strcmp(k, "perf_enter_s"))  cur.perf_enter_s = clampi(atoi(v), 0, 60);
+        else if(!strcmp(k, "perf_exit_s"))   cur.perf_exit_s = clampi(atoi(v), 1, 600);
+        else if(!strcmp(k, "perf_svc"))      cur.perf_svc = (unsigned)strtoul(v, NULL, 0) & 0xfu;
+        else if(!strcmp(k, "perf_quiet"))    cur.perf_quiet = atoi(v) != 0;
+        else if(!strcmp(k, "perf_prio"))     cur.perf_prio = atoi(v) != 0;
+        else if(!strcmp(k, "perf_tag"))      cur.perf_tag = atoi(v) != 0;
+        else if(!strcmp(k, "perf_modal"))    cur.perf_modal = atoi(v) != 0;
         else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
@@ -175,7 +189,11 @@ bool settings_save(void)
     fprintf(f, "gallery_sort = %d\n", cur.gallery_sort ? 1 : 0);
     fprintf(f, "web_js = %d\nweb_no_images = %d\nweb_search = %d\nweb_zoom = %d\nweb_pc = %d\n",
             cur.web_js ? 1 : 0, cur.web_no_images ? 1 : 0, cur.web_search, cur.web_zoom, cur.web_pc ? 1 : 0);
-    fprintf(f, "web_fs_sharp = %d\nweb_perf = %d\n", cur.web_fs_sharp ? 1 : 0, cur.web_perf ? 1 : 0);
+    fprintf(f, "web_fs_sharp = %d\n", cur.web_fs_sharp ? 1 : 0);
+    fprintf(f, "perf_auto = %d\nperf_enter_s = %d\nperf_exit_s = %d\nperf_svc = %u\nperf_quiet = %d\n"
+               "perf_prio = %d\nperf_tag = %d\nperf_modal = %d\n",
+            cur.perf_auto ? 1 : 0, cur.perf_enter_s, cur.perf_exit_s, cur.perf_svc, cur.perf_quiet ? 1 : 0,
+            cur.perf_prio ? 1 : 0, cur.perf_tag ? 1 : 0, cur.perf_modal ? 1 : 0);
     fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);
