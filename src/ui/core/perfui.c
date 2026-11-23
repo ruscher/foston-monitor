@@ -163,6 +163,7 @@ void perfui_disable(void)
 
 void perfui_settings_changed(void)
 {
+    if(on) fx_quiet(settings()->perf_quiet);     /* sons e animações valem na hora */
     /* automático desligado no meio do vídeo: sai já; religado com o vídeo tocando: entra
      * depois da espera de sempre */
     if(manual || wanted() == on) return;

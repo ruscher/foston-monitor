@@ -22,7 +22,10 @@ typedef enum { PM_OFF, PM_ENTERING, PM_ON, PM_LEAVING } pm_state_t;
 
 /* svc: grupos PM_SVC_*; prio: a thread que chama (a da interface) ganha nice -5 */
 void       perfmode_enter(unsigned svc, bool prio);
-void       perfmode_leave(void);       /* também no meio da entrada: volta assim que ela terminar */
+/* podem ser chamadas a qualquer momento, inclusive no meio de uma troca: a troca em curso
+ * termina e, se o pedido mudou, a contrária começa em seguida (o estado sempre chega ao último
+ * pedido) */
+void       perfmode_leave(void);
 pm_state_t perfmode_state(void);
 /* na inicialização: um shell anterior parou serviços e não religou (travou, foi atualizado)?
  * religa agora (estado PM_LEAVING); true se havia algo a religar */

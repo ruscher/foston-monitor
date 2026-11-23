@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/resource.h>
@@ -26,12 +27,17 @@ static const struct { const char *script; const char *proc; unsigned group; } sv
     { "/etc/init.d/S40bluetoothd", "bluetoothd",  PM_SVC_BT },
     { "/etc/init.d/S35bluetooth",  "bfbt-attach", PM_SVC_BT },
 };
-static unsigned want;                   /* grupos pedidos nesta entrada */
 #define N_SVC (int)(sizeof svc / sizeof svc[0])
 
-static _Atomic int state = PM_OFF, done, total;
-static atomic_bool leave_after;
-static bool stopped[N_SVC];             /* o que este modo parou (e vai religar) */
+/* A interface só diz o que quer (desired); uma thread por vez persegue esse alvo: se o
+ * usuário mudar de ideia no meio de uma troca, ela emenda a troca contrária ao terminar.
+ * mu protege state/desired/busy/groups; done/total são só para a barra. */
+static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+static pm_state_t state = PM_OFF;
+static bool desired, busy, prio_set;
+static unsigned groups;                 /* grupos pedidos na entrada */
+static _Atomic int done, total;
+static bool stopped[N_SVC];             /* o que este modo parou (e vai religar); só a thread */
 
 static bool running(const char *name)
 {
@@ -68,10 +74,9 @@ static void run(const char *script, const char *arg)
     if(p > 0) waitpid(p, NULL, 0);
 }
 
-static void *leave_worker(void *arg);
-
 /* o que está parado fica anotado na RAM (/run some ao desligar): se o shell reiniciar no
- * meio do modo (travou, foi atualizado), o próximo religa tudo (perfmode_recover) */
+ * meio do modo (travou, foi atualizado), o próximo religa tudo (perfmode_recover). Anota
+ * ANTES de parar: na volta só sobe o que não está rodando, então anotar a mais não faz mal */
 #define NOTE "/run/bigfoston-perfmode"
 
 static void note_write(void)
@@ -82,74 +87,95 @@ static void note_write(void)
     if(fclose(f) == 0) rename(NOTE ".new", NOTE);
 }
 
-static void *enter_worker(void *arg)
+static void do_enter(unsigned g)
 {
-    (void)arg;
+    bool pick[N_SVC];
     int n = 0;
     for(int i = 0; i < N_SVC; i++) {
-        stopped[i] = (want & svc[i].group) && access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
-        if(stopped[i]) n++;
+        pick[i] = !stopped[i] && (g & svc[i].group) && access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
+        if(pick[i]) n++;
     }
-    total = n;
     done = 0;
+    total = n;
     for(int i = 0; i < N_SVC; i++) {
-        if(!stopped[i]) continue;
-        run(svc[i].script, "stop");
+        if(!pick[i]) continue;
+        stopped[i] = true;
         note_write();
+        run(svc[i].script, "stop");
         done++;
     }
-    state = PM_ON;
-    if(leave_after) { leave_after = false; state = PM_LEAVING; leave_worker(NULL); }
-    return NULL;
 }
 
-static void *leave_worker(void *arg)
+static void do_leave(void)
 {
-    (void)arg;
     int n = 0;
     for(int i = 0; i < N_SVC; i++) if(stopped[i]) n++;
-    total = n;
     done = 0;
+    total = n;
     for(int i = N_SVC - 1; i >= 0; i--) {
         if(!stopped[i]) continue;
-        run(svc[i].script, "start");
+        if(!running(svc[i].proc)) run(svc[i].script, "start");
         stopped[i] = false;
         done++;
     }
     unlink(NOTE);
-    state = PM_OFF;
+}
+
+static void *worker(void *arg)
+{
+    (void)arg;
+    pthread_mutex_lock(&mu);
+    for(;;) {
+        pm_state_t s = state;                    /* PM_ENTERING ou PM_LEAVING */
+        unsigned g = groups;
+        pthread_mutex_unlock(&mu);
+        if(s == PM_ENTERING) do_enter(g);
+        else do_leave();
+        pthread_mutex_lock(&mu);
+        if(s == PM_ENTERING) state = desired ? PM_ON : PM_LEAVING;
+        else state = desired ? PM_ENTERING : PM_OFF;
+        if(state == PM_ON || state == PM_OFF) break;
+    }
+    busy = false;
+    pthread_mutex_unlock(&mu);
     return NULL;
 }
 
-static void spawn(void *(*fn)(void *))
+/* com mu: começa a troca se o estado parado não é o desejado */
+static void kick(void)
 {
+    if(busy) return;                             /* a thread em curso emenda sozinha */
+    pm_state_t from = state;
+    if(desired && from == PM_OFF) state = PM_ENTERING;
+    else if(!desired && from == PM_ON) state = PM_LEAVING;
+    else return;
+    busy = true;
     pthread_t t;
     pthread_attr_t a;
     pthread_attr_init(&a);
     pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
-    if(pthread_create(&t, &a, fn, NULL)) state = fn == enter_worker ? PM_OFF : PM_ON;
+    if(pthread_create(&t, &a, worker, NULL)) { state = from; busy = false; }
     pthread_attr_destroy(&a);
 }
 
-void perfmode_enter(unsigned groups, bool prio)
+void perfmode_enter(unsigned g, bool prio)
 {
-    if(state != PM_OFF) { leave_after = false; return; }
-    state = PM_ENTERING;
-    total = done = 0;
-    want = groups;
-    if(prio) setpriority(PRIO_PROCESS, 0, -5);   /* a thread da interface (a principal) primeiro */
-    spawn(enter_worker);
+    /* a thread que chama (a da interface): no Linux a prioridade é por thread */
+    if(prio && !prio_set && setpriority(PRIO_PROCESS, 0, -5) == 0) prio_set = true;
+    pthread_mutex_lock(&mu);
+    desired = true;
+    groups = g;
+    kick();
+    pthread_mutex_unlock(&mu);
 }
 
 void perfmode_leave(void)
 {
-    /* chamada pela thread da interface: no Linux a prioridade é por thread */
-    if(state != PM_OFF) setpriority(PRIO_PROCESS, 0, 0);
-    if(state == PM_ENTERING) { leave_after = true; return; }
-    if(state != PM_ON) return;
-    state = PM_LEAVING;
-    total = done = 0;
-    spawn(leave_worker);
+    if(prio_set) { setpriority(PRIO_PROCESS, 0, 0); prio_set = false; }
+    pthread_mutex_lock(&mu);
+    desired = false;
+    kick();
+    pthread_mutex_unlock(&mu);
 }
 
 bool perfmode_recover(void)
@@ -158,21 +184,27 @@ bool perfmode_recover(void)
     if(!f) return false;
     char line[128];
     int n = 0;
+    pthread_mutex_lock(&mu);
     while(fgets(line, sizeof line, f)) {
         line[strcspn(line, "\n")] = 0;
         for(int i = 0; i < N_SVC; i++)
-            if(!strcmp(line, svc[i].script)) { stopped[i] = true; n++; }
+            if(!strcmp(line, svc[i].script) && !stopped[i]) { stopped[i] = true; n++; }
     }
     fclose(f);
-    if(!n || state != PM_OFF) { if(!n) unlink(NOTE); return false; }
-    state = PM_LEAVING;
-    total = n;
-    done = 0;
-    spawn(leave_worker);
-    return true;
+    bool go = n && state == PM_OFF && !busy;
+    if(go) { state = PM_ON; desired = false; kick(); go = state == PM_LEAVING; }
+    pthread_mutex_unlock(&mu);
+    if(!n) unlink(NOTE);
+    return go;
 }
 
-pm_state_t perfmode_state(void) { return (pm_state_t)state; }
+pm_state_t perfmode_state(void)
+{
+    pthread_mutex_lock(&mu);
+    pm_state_t s = state;
+    pthread_mutex_unlock(&mu);
+    return s;
+}
 
 void perfmode_progress(int *d, int *t)
 {

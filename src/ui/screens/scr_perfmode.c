@@ -64,7 +64,7 @@ static void opt_toggle(lv_event_t *e)
     else if(w == O_MODAL) s->perf_modal = on;
     else if(w == O_SHARP) s->web_fs_sharp = on;
     settings_save();
-    if(w == O_AUTO) perfui_settings_changed();
+    perfui_settings_changed();
 }
 
 /* linha com título, explicação embaixo e switch */
