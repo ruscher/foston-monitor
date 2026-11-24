@@ -53,3 +53,16 @@ Do uso real com o DualShock 4 de verdade (registro do aparelho):
 - depois de desligar por inatividade, o controle **reconectou sozinho pelo botão PS** três
   vezes (05:29, 05:30, 05:43);
 - o desligamento depois de 10 min parado funcionou.
+
+## Correção do DualShock 4 real (24/11/2026)
+
+Os testes acima usaram um DS4 **virtual** (`uinput`), que entrega eventos prontos. O DualShock
+real mandava o relatório Bluetooth 0x11, que o descritor do SDP não descrevia, e **nenhum
+botão chegava**. A causa e a correção estão em
+[03-mapa-de-controles.md](03-mapa-de-controles.md#dualshock-4-pelo-bluetooth-o-relatório-0x11-24112026).
+
+Agora o teste no aparelho também confere a camada de baixo. Com o controle real conectado:
+```
+cat /dev/input/eventN | wc -c        # aperte botões: precisa crescer (16 bytes por evento)
+cmp /sys/class/input/eventN/device/device/report_descriptor <descritor esperado>
+```

@@ -395,8 +395,8 @@ botões viram teclas entregues como as do teclado físico:
 
 - **Quem é controle**: `EV_ABS` com X/Y e botões `BTN_GAMEPAD` ou `BTN_JOYSTICK`, sem
   `BTN_TOUCH` (o touchpad do DualShock com o driver da Sony fica de fora). O shell liga o
-  `fuzz` dos analógicos (1/64 da faixa) pelo `EVIOCSABS`: parado, o controle não manda
-  nenhum evento (medido: 0 em 5 s) e a interface não acorda.
+  `fuzz` dos analógicos (1/64 da faixa) pelo `EVIOCSABS`: o tremor do analógico parado
+  não vira evento nem acorda a interface.
 - **Mapa de cada controle**: formato do SDL GameControllerDB (`core/padmap.c`). Procura no
   banco do usuário (controles registrados), nos bancos dos apps instalados (o SC Controller
   traz 746 modelos para Linux), nas linhas embutidas (DualShock 4 e DualSense pelo Bluetooth

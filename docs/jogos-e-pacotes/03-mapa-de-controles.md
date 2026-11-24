@@ -71,3 +71,46 @@ O `gamepad.c` compara o estado novo com o anterior e age:
 - **analógico direito**: rolar.
 
 O mesmo código serve a qualquer controle do banco: não há mais regra fixa para a Sony.
+
+## DualShock 4 pelo Bluetooth: o relatório 0x11 (24/11/2026)
+
+O DualShock 4 de verdade conectava, mas **nenhum botão chegava** (0 eventos no
+`/dev/input/event*`). O controle virtual dos testes mandava eventos prontos e não mostrou isso.
+
+| Onde | O que a captura HCI (`bfsnoop` + `btmon`) mostrou |
+|---|---|
+| Bluetooth | pacotes de 79 bytes no canal de interrupção, ~4/s parado: `a1 11 c0 00 80 7f 80 7f 08 ...` |
+| Kernel | o descritor HID que o BlueZ passa ao `uhid` (o do SDP) só declara botões e eixos no relatório **0x01**; o **0x11** (o que o controle manda pelo Bluetooth, com giroscópio e bateria) é "dados do fabricante" |
+| Resultado | o `hid-generic` descarta o 0x11 inteiro |
+
+O 0x11 traz o conteúdo do 0x01 depois de 2 bytes de cabeçalho (é a `dualshock4_input_report_bt`
+do `hid-playstation`). Sem o driver da Sony no kernel, a correção é no **descritor**:
+
+- o 0x11 passa a declarar, depois dos 2 bytes, os mesmos analógicos (X Y Z Rz), o direcional,
+  os 14 botões, o contador e os gatilhos (Rx Ry) do 0x01; o resto continua do fabricante;
+- o 0x01 fica sem campos, porque o `hid-input` **ignora um uso repetido** (o segundo relatório
+  ficaria mudo, `HID_STAT_DUP_DETECTED`);
+- o descritor continua com **431 bytes**: um par Push/Pop (`a4 b4`) completa o tamanho, e
+  nenhum comprimento do registro SDP muda.
+
+Os botões e eixos que o kernel cria são idênticos aos de antes (`0x130`–`0x13d`, `3003f`):
+a linha do SDL GameControllerDB continua certa.
+
+**Onde a correção é aplicada** (`ds4_fix_all`, em `src/bt/bfbt-agent.c`): no registro SDP
+guardado em `/var/lib/bluetooth/<adaptador>/cache/<controle>`, que o `bluetoothd` só lê ao
+iniciar.
+
+- **No boot e ao ligar o Bluetooth:** `S35bluetooth start` roda `bfbt-agent --fix-hid`
+  depois de restaurar os pareamentos e antes do `S40bluetoothd`.
+- **Depois de parear:** o agente procura por 15 s o registro novo; quando corrige, reinicia o
+  `bluetoothd`, conecta o controle de novo e salva os pareamentos no cartão.
+
+O BlueZ pode regravar o cache ao refazer o SDP numa conexão; o próximo boot corrige de novo.
+
+**Verificado no aparelho:**
+1. um `uhid` de teste com o descritor novo e relatórios 0x11 reais gerou Xis (`0x131`),
+   `ABS_X`, R2 (`0x137` + `ABS_RY`) e PS (`0x13c`);
+2. com o cache corrigido e o `bluetoothd` reiniciado, o kernel passou a usar o descritor
+   novo (`cmp` com o sysfs) e o DualShock 4 real gerou 147 eventos em 10 s (L1, R2,
+   direcional, analógicos);
+3. o testador do SC Controller passou de 500 eventos.

@@ -431,8 +431,8 @@ static int classify(int fd, pm_bits_t *bits)
     return DEV_PAD;
 }
 
-/* faixas dos eixos; nos analógicos o kernel passa a filtrar o tremor (fuzz): o analógico
- * parado não acorda a interface (DS4 parado com o fuzz: 0 eventos em 5 s) */
+/* faixas dos eixos; nos analógicos o kernel passa a filtrar o tremor (fuzz de 1/64 da
+ * faixa), para o analógico parado não acordar a interface a cada relatório */
 static void pad_axes(int fd, const pm_bits_t *bits, gp_axis_t ax[GP_NABS])
 {
     for(unsigned c = 0; c < GP_NABS; c++) {

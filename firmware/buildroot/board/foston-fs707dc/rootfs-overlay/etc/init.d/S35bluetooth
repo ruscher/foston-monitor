@@ -18,6 +18,10 @@ start)
     if [ -f "$SAVE" ] && [ -z "$(ls -A /var/lib/bluetooth 2>/dev/null)" ]; then
         mkdir -p /var/lib && tar -xf "$SAVE" -C /var/lib 2>/dev/null
     fi
+    # DualShock 4 sem o driver da Sony: os botões vêm no relatório 0x11, que o descritor HID
+    # guardado pelo BlueZ declara como dados do fabricante. O bfbt-agent corrige o cache antes
+    # do bluetoothd (S40) ler (ver ds4_fix_all em src/bt/bfbt-agent.c)
+    [ -x /usr/sbin/bfbt-agent ] && /usr/sbin/bfbt-agent --fix-hid >/dev/null 2>&1
     [ -f "$FLAG" ] || [ "$2" = force ] || exit 0
     [ -x /usr/sbin/bfbt-attach ] || exit 0
     pidof bfbt-attach >/dev/null && exit 0

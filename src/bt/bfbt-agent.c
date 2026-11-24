@@ -19,6 +19,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <dbus/dbus.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -52,6 +53,8 @@ static DBusConnection *bus;
 static volatile sig_atomic_t quit;
 static int dirty = 1, agent_ok, reconnect_done;   /* reconnect_done: tentativas feitas */
 static long save_soon;                              /* salvar os pareamentos (mono_ms) */
+static long hid_fix_until, hid_fix_next, hid_conn_at;  /* DualShock 4 recém-pareado (ds4_fix_all) */
+static char hid_conn_path[128];
 static long powered_at;
 static long scan_until;                             /* busca: encerra sozinha (rouba o rádio do áudio) */
 #define SCAN_MS 20000                             /* quando o adaptador apareceu ligado */
@@ -83,6 +86,94 @@ static void run_service(const char *arg1, const char *arg2)
         execl(SERVICE, "S35bluetooth", arg1, arg2, (char *)NULL);
         _exit(127);
     }
+}
+
+/* ------------------------------------------- DualShock 4 sem o driver da Sony
+ * O kernel não tem o hid-playstation (falta espaço na flash) e o hid-generic usa o descritor
+ * HID que o BlueZ guardou do SDP do controle. Nele só o relatório 0x01 (o curto) tem botões e
+ * eixos; o 0x11, o que o DualShock 4 manda pelo Bluetooth (78 bytes, com giroscópio e
+ * bateria), está declarado como dados do fabricante: o controle conecta e nenhum botão vira
+ * evento. Aqui o registro SDP no cache do BlueZ ganha o mesmo descritor com os campos do 0x01
+ * declarados no 0x11 (depois dos 2 bytes de cabeçalho dele) e o 0x01 sem campos (o hid-input
+ * ignora um uso repetido). O tamanho não muda (431 bytes): nenhum comprimento do SDP mexe.
+ * Os botões e eixos saem iguais aos de antes (0x130..0x13d, X Y Z Rz Rx Ry, direcional), então
+ * a linha do SDL GameControllerDB continua valendo. O BlueZ lê o cache ao iniciar: corrigido
+ * pelo S35bluetooth antes do bluetoothd subir e, depois de parear, com o bluetoothd reiniciado. */
+#define BT_LIB "/var/lib/bluetooth"
+static const char ds4_old01[] = "85010930093109320935150026FF0075089504810209391500250775049501814205091901290E"
+                                "150025017501950E8102750695018101050109330934150026FF00750895028102";
+static const char ds4_new01[] = "150026FF007508";
+static const char ds4_old11[] = "85110920150026FF007508954D810209219102";
+static const char ds4_new11[] = "851109209502810205010930093109320935950481020939250775049501814205091901290E"
+                                "25017501950E810275069501810105010933093426FF007508950281020600FF092195428102"
+                                "954D09219102A4B4";
+
+/* uma ocorrência só de pat em s (NULL se nenhuma ou mais de uma) */
+static char *once(char *s, const char *pat)
+{
+    char *a = strstr(s, pat);
+    return a && !strstr(a + 1, pat) ? a : NULL;
+}
+
+/* corrige um arquivo de cache; 1 = corrigido, 0 = nada a fazer, -1 = erro */
+static int ds4_fix_file(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if(!f) return 0;
+    static char buf[65536];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    if(n == sizeof buf - 1) return 0;
+    char *a = once(buf, ds4_old01), *b = once(buf, ds4_old11);
+    if(!a || !b || b < a) return 0;
+    /* os dois trechos na mesma linha (o mesmo registro SDP) */
+    for(char *c = a; c < b; c++) if(*c == '\n') return 0;
+    static char out[65536 + 128];
+    size_t k = 0;
+    size_t la = strlen(ds4_old01), lb = strlen(ds4_old11);
+    memcpy(out + k, buf, (size_t)(a - buf)); k += (size_t)(a - buf);
+    memcpy(out + k, ds4_new01, strlen(ds4_new01)); k += strlen(ds4_new01);
+    memcpy(out + k, a + la, (size_t)(b - a - (long)la)); k += (size_t)(b - a - (long)la);
+    memcpy(out + k, ds4_new11, strlen(ds4_new11)); k += strlen(ds4_new11);
+    memcpy(out + k, b + lb, n - (size_t)(b + lb - buf)); k += n - (size_t)(b + lb - buf);
+    if(k != n) return -1;                                  /* o tamanho tem de ser o mesmo */
+    char tmp[760];
+    snprintf(tmp, sizeof tmp, "%s.novo", path);
+    FILE *w = fopen(tmp, "w");
+    if(!w) return -1;
+    int ok = fwrite(out, 1, k, w) == k;
+    if(fclose(w) || !ok || rename(tmp, path)) { unlink(tmp); return -1; }
+    chmod(path, 0600);
+    return 1;
+}
+
+/* todos os caches de todos os adaptadores; devolve quantos foram corrigidos */
+static int ds4_fix_all(const char *root)
+{
+    int fixed = 0;
+    DIR *ad = opendir(root);
+    if(!ad) return 0;
+    struct dirent *e;
+    while((e = readdir(ad))) {
+        if(e->d_name[0] == '.') continue;
+        char cdir[400];
+        snprintf(cdir, sizeof cdir, "%s/%s/cache", root, e->d_name);
+        DIR *cd = opendir(cdir);
+        if(!cd) continue;
+        struct dirent *c;
+        while((c = readdir(cd))) {
+            if(c->d_name[0] == '.' || strstr(c->d_name, ".novo")) continue;
+            char p[700];
+            snprintf(p, sizeof p, "%s/%s", cdir, c->d_name);
+            int r = ds4_fix_file(p);
+            if(r > 0) { fixed++; syslog(LOG_INFO, "DualShock 4: descritor HID corrigido (%s)", c->d_name); }
+            else if(r < 0) syslog(LOG_ERR, "DualShock 4: não foi possível corrigir %s", c->d_name);
+        }
+        closedir(cd);
+    }
+    closedir(ad);
+    return fixed;
 }
 
 static void dev_path(char *out, size_t n, const char *addr)
@@ -141,8 +232,13 @@ static void call_done(DBusPendingCall *pc, void *ud)
              * canal HID abre com o Connect. O controle do PlayStation espera o computador
              * conectar logo depois de parear e, se ninguém conecta, desliga ("Pareado",
              * nunca "Conectado"). Teclado que já conectou sozinho: AlreadyConnected, sem efeito */
-            if(((dev_class(pair_path) >> 8) & 0x1f) == 0x05)
+            if(((dev_class(pair_path) >> 8) & 0x1f) == 0x05) {
                 call_async(pair_path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
+                /* DualShock 4: o BlueZ grava o SDP no cache logo depois; corrigir o descritor */
+                hid_fix_until = mono_ms() + 15000;
+                hid_fix_next = mono_ms() + 1500;
+                snprintf(hid_conn_path, sizeof hid_conn_path, "%s", pair_path);
+            }
         }
         if(!failed) save_soon = mono_ms() + 1500;     /* pareamentos para o cartão */
         if(req_display) req_clear();                   /* o código já não vale */
@@ -826,6 +922,12 @@ int main(int argc, char **argv)
 {
     int fg = argc > 1 && !strcmp(argv[1], "-f");
     openlog("bfbt-agent", LOG_PID, LOG_DAEMON);
+    /* S35bluetooth, antes do bluetoothd: corrige os caches (e testes: outra pasta) */
+    if(argc > 1 && !strcmp(argv[1], "--fix-hid")) {
+        int n = ds4_fix_all(argc > 2 ? argv[2] : BT_LIB);
+        printf("%d\n", n);
+        return 0;
+    }
     DBusError e;
     dbus_error_init(&e);
     bus = dbus_bus_get(DBUS_BUS_SYSTEM, &e);
@@ -887,6 +989,26 @@ int main(int argc, char **argv)
                     call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
+        if(hid_fix_until && now >= hid_fix_next) {
+            if(ds4_fix_all(BT_LIB) > 0) {
+                /* o bluetoothd só lê o cache ao iniciar: reinicia e conecta de novo */
+                hid_fix_until = 0;
+                syslog(LOG_INFO, "DualShock 4 pareado: bluetoothd reiniciado com o descritor corrigido");
+                pid_t p = fork();
+                if(p == 0) {
+                    setsid();
+                    execl("/etc/init.d/S40bluetoothd", "S40bluetoothd", "restart", (char *)NULL);
+                    _exit(127);
+                }
+                save_soon = now + 8000;
+                hid_conn_at = now + 6000;
+            } else if(now >= hid_fix_until) hid_fix_until = 0;
+            else hid_fix_next = now + 1500;
+        }
+        if(hid_conn_at && now >= hid_conn_at && adapter[0]) {
+            hid_conn_at = 0;
+            call_async(hid_conn_path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
+        }
         if(save_soon && now >= save_soon) { save_soon = 0; run_service("save", NULL); }
         if(scan_until && now >= scan_until) {
             scan_until = 0;
@@ -898,6 +1020,7 @@ int main(int argc, char **argv)
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
         if(scan_until && timeout > 1000) timeout = 1000;
         if(save_soon && timeout > 500) timeout = 500;
+        if((hid_fix_until || hid_conn_at) && timeout > 500) timeout = 500;
         for(int k = 0; k < MAXRS; k++)
             if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;

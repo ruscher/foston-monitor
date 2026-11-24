@@ -99,6 +99,11 @@ O shell é estático e não fala D-Bus; o `bfbt-agent` (libdbus, 0,9 MB de RAM) 
   não faz nada. A troca de papel do enlace (o celular mestre, para o AFH do áudio) não é
   pedida para eles: o FOSTON segue mestre, sem virar escravo de várias piconets. Controles
   em [Interface: controle de jogo](../09-interface-ux-ui.md#controle-de-jogo).
+- **DualShock 4**: o descritor HID do SDP não descreve o relatório 0x11 que o controle manda
+  pelo Bluetooth; sem o `hid-playstation` nenhum botão chegava. O `bfbt-agent --fix-hid`
+  corrige o descritor no cache do BlueZ (S35bluetooth, antes do `bluetoothd`) e, depois de
+  parear um DS4, corrige e reinicia o `bluetoothd`
+  ([detalhes](../jogos-e-pacotes/03-mapa-de-controles.md#dualshock-4-pelo-bluetooth-o-relatório-0x11-24112026)).
 - **Estado** em `/run/bigfoston-bt` (`chave=valor`; `dev=endereço|pareado|conectado|confiável|rssi|ícone|nome`,
   `req=`, `player=estado|título|artista|aparelho`, `result=operação|ok/erro/andamento|erro`).
 - **Comandos** no FIFO `/run/bigfoston-bt.cmd`: `on`, `off`, `visible 0|1`, `scan 0|1`,
