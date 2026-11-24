@@ -10,10 +10,14 @@ Com "Tethering Bluetooth" ligado no celular, o FOSTON agora usa a internet dele.
    `org.bluez.Network1.Connect("nap")` (chamada assíncrona). Se falhar, tenta de novo a cada
    30 s.
 3. **Interface:** o BlueZ cria a `bnep0` e o agente inicia `udhcpc -i bnep0 -f -R -t 8 -T 3 -A 10`.
-4. **Rota e DNS:** o script do udhcpc põe a rota padrão com métrica 0 (ganha da `usb0`, de
-   métrica 200) e o DNS marcado `# bnep0` em `/run/resolv.conf`.
-5. **Saída:** ao desconectar ou desligar, o agente para o DHCP e desconecta o PAN. A rota e o DNS
-   saem junto.
+4. **Rota e DNS:** o udhcpc roda com o script `/usr/sbin/bigfoston-pan-dhcp`. Ele chama o padrão
+   (rota com métrica 0, que ganha da `usb0`, de métrica 200) e depois arruma o DNS:
+   - o do celular vai para o **topo** de `/run/resolv.conf`. O musl só usa os três primeiros
+     `nameserver`; antes, o do celular ficava em quarto e era ignorado;
+   - a linha fica **sem** o comentário `# bnep0`, que o `nslookup` do busybox não entende
+     ("bad address"). As linhas do celular ficam anotadas em `/run/resolv.bnep0`.
+5. **Saída:** ao desconectar ou desligar, o agente para o DHCP e desconecta o PAN. A rota e as
+   linhas anotadas saem junto.
 
 A escolha de cada aparelho fica em `/data/bigfoston/bt-internet-desligada` (lista de endereços).
 O padrão é ligado.
@@ -42,3 +46,44 @@ POCO X4 Pro 5G com tethering Bluetooth:
 - `ping 1.1.1.1` ok e HTTP ok.
 
 A conexão continuou de pé durante os testes de TV e do plano de energia.
+
+## "Conecta e pega IP, mas o app Internet não abre nada" (24/11/2026)
+
+Investigado no aparelho, em camadas:
+
+1. **Rede, DNS e HTTPS estavam certos.**
+   - `ping`, `nslookup` e HTTP respondiam.
+   - O `bfdl`, com a mesma libcurl e o mesmo OpenSSL do navegador, baixou
+     `https://pt.wikipedia.org` (262 KB) pela `bnep0`.
+2. **Modo PC.** Com "Navegação completa pelo PC" ligado (o padrão) e o cabo USB no PC com o
+   `bfweb-pc.py`, as páginas vêm do Chromium do PC, pela internet do PC. Sem o PC, quem navega é
+   o motor do FOSTON (NetSurf), pela internet do celular.
+3. **O motor do FOSTON não abria nenhuma página HTTPS.**
+   - HTTP abria.
+   - Com o log do NetSurf (`bfweb -v`), cada conexão HTTPS levava ~17 s no handshake e terminava
+     em erro 35 do curl: o servidor desiste de esperar.
+4. **A causa:** o `bfphone` (telefone) girando a **91 % da CPU** desde o boot.
+   - O motor roda com nice 10 e ficava só com as sobras. O handshake TLS precisa de ~2–4 s de
+     CPU no ARM11.
+   - A mesma disputa explica parte da CPU a 100 % na TV.
+
+| Situação | `https://example.com` pelo motor |
+|---|---|
+| `bfphone` girando, motor com nice 10 | 17 s e erro 35 |
+| `bfphone` girando, motor com nice 0 | 4,1 s |
+| **`bfphone` corrigido, motor com nice 10** | **~2,5 s** |
+
+Depois da correção, a Wikipédia abriu no app Internet pelo motor do FOSTON, pela internet do
+celular.
+
+### O que mudou no `bfphone`
+
+- **Socket HCI em erro:** o laço só tratava `POLLIN`. Agora, em `POLLERR`, `POLLHUP` ou
+  `POLLNVAL`, ele fecha o socket e reabre 2 s depois.
+- **Guarda contra laço ocupado:** depois de mil voltas seguidas com o `poll` acordando na hora em
+  menos de 2 s, ele registra no syslog os eventos de cada descritor (só números) e passa a dormir
+  50 ms por volta.
+- **Causa ainda não confirmada:** o processo travado já tinha sido substituído. Ele teve 3.593
+  trocas de contexto voluntárias contra 510 mil forçadas, ou seja, o `poll` voltava na hora. Se
+  acontecer de novo, o syslog mostra o descritor: procure `laço ocupado` com `grep` em
+  `/var/log/messages`.

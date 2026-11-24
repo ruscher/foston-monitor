@@ -30,7 +30,8 @@ X4 funcionassem.
 | TS perdido na TV, sinal bom (SBT, SNR 17–19) | 52 falhas em 17 s (uma por segundo) | **0** |
 | TV no SBT (H.264 Main, 30 qps com quadros B) | CPU 100 %, quadros atrasados descartados, TS transbordando | 4–5 qps limpos, 0 drops, CPU 58–84 % |
 | TV na Globo (Baseline, 30 qps) | 7–8 qps (o decodificador travava na fila) | **12–26 qps**, 0 drops |
-| Internet pelo POCO X4 | não havia | `bnep0` 10.124.78.88, ping e HTTP |
+| Internet pelo POCO X4 | não havia | `bnep0` 10.124.78.88, ping, HTTP e HTTPS no app Internet |
+| `bfphone` com o aparelho parado | 91 % da CPU (laço girando) | 0,4 % |
 
 ## Onde está cada coisa
 

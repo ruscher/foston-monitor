@@ -1136,7 +1136,7 @@ static void pan_tick(const state_t *st, long now)
                 int nul = open("/dev/null", O_RDWR);
                 if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
                 execl("/sbin/udhcpc", "udhcpc", "-i", pan[k].iface, "-f", "-R", "-t", "8", "-T", "3", "-A", "10",
-                      (char *)NULL);
+                      "-s", "/usr/sbin/bigfoston-pan-dhcp", (char *)NULL);   /* DNS do celular primeiro */
                 _exit(127);
             }
             if(p > 0) {
