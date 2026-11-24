@@ -125,3 +125,28 @@ fixos para o root).
 
 Imagens por último: o NetSurf já desenha a página quando o HTML e o CSS chegam e as imagens entram
 depois, uma a uma. O que impedia ver isso era o laço girando e o download parado.
+
+## Música do celular sem som e internet travando: o papel no enlace (24/11/2026)
+
+Com a música tocando no celular, o FOSTON mostrava título, progresso e controles (AVRCP), mas
+sem som.
+
+1. **O que se via:** o `bluealsa-aplay` abria a placa e a fechava a cada ~2 s, porque faltavam
+   amostras.
+2. **Fluxo:** chegavam 3–8 pacotes A2DP por segundo, em rajadas, contra ~73/s com a música
+   inteira.
+3. **O enlace não estava em sniff:** "Exit Sniff" deu "Command Disallowed".
+4. **Qualidade:** 3/255 com RSSI de −38 dBm, ou seja, sinal forte e quase todo pacote com erro.
+5. **Causa:** o FOSTON estava como **mestre** do enlace.
+   - O agente pedia a troca de papel uma vez por conexão, e o celular a desfez depois.
+   - Com o MT6611 mestre, o AFH funciona mal (docs/bluetooth-integration).
+6. **Correção:** `role_switch_tick` confere o papel a cada 30 s e pede a troca de novo se
+   precisar.
+
+Depois da troca, medido no aparelho:
+- qualidade 255/255;
+- `pcm0p` em RUNNING;
+- 73 pacotes/s;
+- o DHCP do PAN, que não respondia, voltou a responder.
+
+A internet "com muita dificuldade" tinha a mesma causa.

@@ -1025,8 +1025,12 @@ static void role_switch_tick(const state_t *st, long now)
             rs[k].since = now;
             rs[k].done = 0;
         }
-        if(!rs[k].done && now - rs[k].since >= 2000) {
+        /* 2 s depois de conectado e, depois, a cada 30 s: o celular às vezes desfaz a troca
+         * (24/11/2026: FOSTON mestre de novo, qualidade 3/255 e a música sem som). Se já é
+         * escravo, become_peripheral não faz nada */
+        if(now - rs[k].since >= 2000 && (!rs[k].done || now - rs[k].since >= 30000)) {
             rs[k].done = 1;
+            rs[k].since = now - 2000;
             become_peripheral(d->addr);
         }
     }
