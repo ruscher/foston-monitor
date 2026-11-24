@@ -48,7 +48,20 @@ enum { F_UP = 0x0001, F_DOWN = 0x0002, F_LEFT = 0x0004, F_RIGHT = 0x0008, F_STAR
        F_A = 0x1000, F_B = 0x2000, F_X = 0x4000, F_Y = 0x8000,
        F_LT = 0x10000, F_RT = 0x20000 };                   /* gatilhos: só aqui, viram 0/255 */
 
-enum { V_HOME, V_PIN, V_PLAY };
+enum { V_HOME, V_PIN, V_PLAY, V_VIDEO };
+
+/* qualidade da imagem: o que o FOSTON decodifica de verdade (medido em 24/11/2026 pelo USB, H.264
+ * do Sunshine, ampliado para 640x360): 320x180 ~28 qps (35 ms/quadro), 480x270 ~10 qps (100 ms),
+ * 640x360 ~6 qps (170 ms) */
+static const struct { int w, h, fps, kbps; bf_str_t name, sub; } qual[] = {
+    { 320, 180, 30, 1000, S_BRP_Q_FLUID, S_BRP_Q_FLUID_SUB },
+    { 480, 270, 20, 1500, S_BRP_Q_SHARP, S_BRP_Q_SHARP_SUB },
+    { 640, 360, 15, 2000, S_BRP_Q_MAX, S_BRP_Q_MAX_SUB },
+};
+#define NQUAL (int)(sizeof qual / sizeof qual[0])
+static int quality;
+static bool session_video;                     /* a sessão atual tem imagem */
+static lv_obj_t *video_box;
 
 static lv_obj_t *root, *body, *st_lbl, *pin_lbl;
 static int view;
@@ -174,6 +187,7 @@ static void pad_flush(bool force)
 }
 
 static void release_all(void);
+static void on_to_video(lv_event_t *e);
 
 /* ------------------------------------------------------------ vistas */
 
@@ -194,20 +208,60 @@ static void on_refresh(lv_event_t *e)
 
 static void on_pair(lv_event_t *e) { (void)e; eng_send("PAIR"); }
 
-static void start_app(int id)
+static void quality_load(void)
+{
+    char f[256];
+    data_path(f, sizeof f, "remoteplay/quality");
+    FILE *fp = fopen(f, "r");
+    quality = 0;
+    if(fp) { if(fscanf(fp, "%d", &quality) != 1) quality = 0; fclose(fp); }
+    if(quality < 0 || quality >= NQUAL) quality = 0;
+}
+
+static void quality_save(void)
+{
+    char f[256];
+    data_path(f, sizeof f, "remoteplay/quality");
+    FILE *fp = fopen(f, "w");
+    if(fp) { fprintf(fp, "%d\n", quality); fclose(fp); }
+}
+
+static void on_quality(lv_event_t *e)
+{
+    quality = (int)(intptr_t)lv_event_get_user_data(e);
+    quality_save();
+    lv_obj_t *pg = lv_obj_get_child(body, 0);
+    int32_t y = pg ? lv_obj_get_scroll_y(pg) : 0;
+    build();
+    pg = lv_obj_get_child(body, 0);
+    if(pg) { lv_obj_update_layout(pg); lv_obj_scroll_to_y(pg, y, LV_ANIM_OFF); }
+}
+
+static void start_app(int id, bool video)
 {
     cur_app = id;
+    session_video = video;
     starting = true;
     sent_b = -1;
     v_held = v_lock = 0;
     stick_x = stick_y = 0;
     stick_locked = false;
-    /* Somente Controle: o menor fluxo de vídeo (descartado sem decodificar) */
-    eng_send("START %d 640 360 30 500 0", id);
-    show(V_PLAY);
+    if(!video) {
+        /* Somente Controle: o menor fluxo de vídeo (descartado sem decodificar) */
+        eng_send("START %d 640 360 30 500 0", id);
+        show(V_PLAY);
+        return;
+    }
+    show(V_VIDEO);                                       /* a caixa preta onde o motor desenha */
+    lv_area_t a;
+    lv_obj_update_layout(video_box);
+    lv_obj_get_coords(video_box, &a);
+    eng_send("START %d %d %d %d %d 1 %d %d %d %d", id, qual[quality].w, qual[quality].h, qual[quality].fps,
+             qual[quality].kbps, a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
 }
 
-static void on_app(lv_event_t *e) { start_app((int)(intptr_t)lv_event_get_user_data(e)); }
+static void on_app(lv_event_t *e) { start_app((int)(intptr_t)lv_event_get_user_data(e), false); }
+static void on_app_video(lv_event_t *e) { start_app((int)(intptr_t)lv_event_get_user_data(e), true); }
 
 static void quit_answer(int b, void *ud)
 {
@@ -279,8 +333,21 @@ static void build_home(void)
         lv_obj_set_width(n, LV_PCT(100));
         lv_label_set_long_mode(n, LV_LABEL_LONG_WRAP);
         if(!apps_done) bf_label(pg, tr(S_BRP_CHECKING), BF_FONT_M, p->text_dim);
-        for(int i = 0; i < napps; i++)
-            page_choice(pg, LV_SYMBOL_PLAY, apps[i].name, tr(S_BRP_ONLY_CTRL), false, on_app, (void *)(intptr_t)apps[i].id);
+        for(int i = 0; i < napps; i++) {
+            lv_obj_t *ac = bf_card(pg);
+            lv_obj_set_size(ac, LV_PCT(100), LV_SIZE_CONTENT);
+            lv_obj_t *ar = row(ac);
+            lv_obj_t *an = bf_label(ar, apps[i].name, BF_FONT_M, p->text);
+            lv_obj_set_flex_grow(an, 1);
+            lv_obj_t *bv = bf_button(ar, BF_SYMBOL_IMAGE, tr(S_BRP_WITH_VIDEO), 1);
+            lv_obj_add_event_cb(bv, on_app_video, LV_EVENT_CLICKED, (void *)(intptr_t)apps[i].id);
+            lv_obj_t *bc = bf_button(ar, LV_SYMBOL_SHUFFLE, tr(S_BRP_ONLY_CTRL), 0);
+            lv_obj_add_event_cb(bc, on_app, LV_EVENT_CLICKED, (void *)(intptr_t)apps[i].id);
+        }
+        lv_obj_t *qt = bf_label(pg, tr(S_BRP_Q_TITLE), BF_FONT_S, p->text_dim);
+        lv_obj_set_style_pad_top(qt, BF_SP_M, 0);
+        for(int i = 0; i < NQUAL; i++)
+            page_choice(pg, NULL, tr(qual[i].name), tr(qual[i].sub), i == quality, on_quality, (void *)(intptr_t)i);
     }
 }
 
@@ -434,6 +501,11 @@ static void build_play(void)
     lv_obj_t *rb = bf_button(top, LV_SYMBOL_REFRESH, tr(S_BRP_RELEASE), 0);
     lv_obj_set_height(rb, 40);
     lv_obj_add_event_cb(rb, on_release, LV_EVENT_CLICKED, NULL);
+    if(session_video) {
+        lv_obj_t *ib = bf_button(top, BF_SYMBOL_IMAGE, tr(S_BRP_IMAGE), 1);
+        lv_obj_set_height(ib, 40);
+        lv_obj_add_event_cb(ib, on_to_video, LV_EVENT_CLICKED, NULL);
+    }
     lv_obj_t *eb = bf_button(top, LV_SYMBOL_STOP, tr(S_BRP_END), 2);
     lv_obj_set_height(eb, 40);
     lv_obj_add_event_cb(eb, on_end, LV_EVENT_CLICKED, NULL);
@@ -489,14 +561,143 @@ static void build_play(void)
     stick_paint();
 }
 
+/* ---- imagem do computador com o mouse ---- */
+
+static bool right_next, drag_mode, pressing;
+static lv_point_t press_pt;
+static uint32_t press_t;
+static int moved;
+static lv_obj_t *rclick_btn, *drag_btn;
+
+static void mouse_to(lv_point_t pt)
+{
+    lv_area_t a;
+    lv_obj_get_coords(video_box, &a);
+    eng_send("MABS %d %d %d %d", (int)(pt.x - a.x1), (int)(pt.y - a.y1), a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
+}
+
+static void side_paint(void)
+{
+    const bf_palette_t *p = pal();
+    if(rclick_btn) lv_obj_set_style_bg_color(rclick_btn, right_next ? p->warning : p->surface2, 0);
+    if(drag_btn) lv_obj_set_style_bg_color(drag_btn, drag_mode ? p->warning : p->surface2, 0);
+}
+
+/* tocar: o ponteiro vai até lá; toque curto clica (esquerdo, ou direito se armado), toque longo
+ * parado é clique direito; com Arrastar, o botão esquerdo fica apertado enquanto o dedo anda */
+static void on_video_touch(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_point_t pt;
+    lv_indev_get_point(lv_indev_active(), &pt);
+    if(code == LV_EVENT_PRESSED) {
+        pressing = true;
+        press_pt = pt;
+        press_t = lv_tick_get();
+        moved = 0;
+        mouse_to(pt);
+        if(drag_mode) eng_send("MBTN 1 1");
+    } else if(code == LV_EVENT_PRESSING && pressing) {
+        int d = abs(pt.x - press_pt.x) + abs(pt.y - press_pt.y);
+        if(d > moved) moved = d;
+        mouse_to(pt);
+    } else if((code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) && pressing) {
+        pressing = false;
+        if(drag_mode) { eng_send("MBTN 1 0"); return; }
+        if(code == LV_EVENT_PRESS_LOST || moved > 14) return;
+        int b = right_next || lv_tick_elaps(press_t) > 600 ? 3 : 1;   /* 3: direito (Moonlight) */
+        eng_send("MBTN %d 1", b);
+        eng_send("MBTN %d 0", b);
+        if(right_next) { right_next = false; side_paint(); }
+    }
+}
+
+static void on_rclick(lv_event_t *e) { (void)e; right_next = !right_next; side_paint(); }
+static void on_drag(lv_event_t *e) { (void)e; drag_mode = !drag_mode; if(!drag_mode) eng_send("MBTN 1 0"); side_paint(); }
+static void on_scroll(lv_event_t *e) { eng_send("SCROLL %d", (int)(intptr_t)lv_event_get_user_data(e)); }
+static void on_to_pad(lv_event_t *e) { (void)e; show(V_PLAY); }
+static void on_to_video(lv_event_t *e) { (void)e; show(V_VIDEO); }
+
+static lv_obj_t *side_btn(lv_obj_t *par, const char *sym, const char *txt, int kind, lv_event_cb_t cb, void *ud)
+{
+    lv_obj_t *b = bf_button(par, sym, NULL, kind);
+    lv_obj_set_size(b, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(b, 6, 0);
+    lv_obj_set_style_pad_hor(b, 2, 0);
+    lv_obj_t *l = bf_label(b, txt, BF_FONT_S, pal()->text);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);     /* "Botão direito" em duas linhas */
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    return b;
+}
+
+static lv_obj_t *side_col(lv_obj_t *par, int x, int w, int h)
+{
+    lv_obj_t *c = bf_plain(par);
+    lv_obj_set_pos(c, x, 0);
+    lv_obj_set_size(c, w, h);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(c, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(c, 4, 0);
+    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    return c;
+}
+
+static void build_video(void)
+{
+    int W = lv_obj_get_width(body), H = lv_obj_get_height(body);
+    int vw = 640, vh = 360;
+    if(vh > H) { vh = H & ~1; vw = vh * 16 / 9 & ~1; }
+    int side = (W - vw) / 2;
+    lv_obj_t *pane = bf_plain(body);
+    lv_obj_set_size(pane, W, H);
+    lv_obj_remove_flag(pane, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(pane, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(pane, LV_OPA_COVER, 0);
+
+    video_box = lv_obj_create(pane);
+    lv_obj_remove_style_all(video_box);
+    lv_obj_set_pos(video_box, side, (H - vh) / 2);
+    lv_obj_set_size(video_box, vw, vh);
+    lv_obj_set_style_bg_color(video_box, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(video_box, LV_OPA_COVER, 0);
+    lv_obj_add_flag(video_box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(video_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(video_box, on_video_touch, LV_EVENT_ALL, NULL);
+
+    lv_obj_t *l = side_col(pane, 0, side, H);
+    rclick_btn = side_btn(l, LV_SYMBOL_EDIT, tr(S_BRP_RCLICK), 0, on_rclick, NULL);
+    drag_btn = side_btn(l, LV_SYMBOL_SHUFFLE, tr(S_BRP_DRAG), 0, on_drag, NULL);
+    side_btn(l, LV_SYMBOL_UP, tr(S_BRP_SCROLL), 0, on_scroll, (void *)(intptr_t)2);
+    side_btn(l, LV_SYMBOL_DOWN, tr(S_BRP_SCROLL), 0, on_scroll, (void *)(intptr_t)-2);
+    /* Encerrar no alto: no canto de baixo à direita o toque resistivo erra mais (medido: o
+     * botão embaixo não respondia; o mesmo x mais acima, sim) */
+    lv_obj_t *r = side_col(pane, W - side, side, H);
+    side_btn(r, LV_SYMBOL_STOP, tr(S_BRP_END), 2, on_end, NULL);
+    side_btn(r, LV_SYMBOL_SHUFFLE, tr(S_BRP_PAD), 0, on_to_pad, NULL);
+    side_btn(r, LV_SYMBOL_REFRESH, tr(S_BRP_RELEASE), 0, on_release, NULL);
+    st_lbl = bf_label(r, starting ? tr(S_BRP_STARTING) : "", BF_FONT_S, pal()->text_dim);
+    lv_obj_set_width(st_lbl, LV_PCT(100));
+    lv_label_set_long_mode(st_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(st_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    side_paint();
+}
+
 static void build(void)
 {
     if(!body) return;
     lv_obj_clean(body);
-    st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = NULL;
+    st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = video_box = rclick_btn = drag_btn = NULL;
     nvb = 0;
-    gamepad_capture(view == V_PLAY, NULL);              /* na sessão o controle físico vai ao PC */
+    pressing = false;
+    /* na sessão o controle físico vai ao PC; o vídeo só é desenhado na vista dele */
+    gamepad_capture(view == V_PLAY || view == V_VIDEO, NULL);
+    eng_send("SHOW %d", view == V_VIDEO ? 1 : 0);
     if(view == V_PLAY) build_play();
+    else if(view == V_VIDEO) build_video();
     else if(view == V_HOME) build_home();
 }
 
@@ -556,12 +757,21 @@ static void on_line(char *l)
     }
     if(!strcmp(l, "APPS fim")) { apps_done = true; if(view == V_HOME) build(); return; }
     if(!strcmp(l, "QUITAPP ok")) { eng_send("HOST %s", HOST_USB); return; }
-    if(!strncmp(l, "STAGE ", 6)) { if(view == V_PLAY) set_status(tr(S_BRP_STARTING)); return; }
+    if(!strncmp(l, "STAGE ", 6)) { if(view == V_PLAY || view == V_VIDEO) set_status(tr(S_BRP_STARTING)); return; }
+    if(!strncmp(l, "VSTATS ", 7)) {
+        if(view == V_VIDEO && st_lbl) {
+            double f = atof(l + 7);
+            char b[64];
+            snprintf(b, sizeof b, tr(S_BRP_FPS), (int)(f + 0.5));
+            lv_label_set_text(st_lbl, b);
+        }
+        return;
+    }
     if(!strcmp(l, "STARTED")) {
         streaming = true;
         starting = false;
         pad_flush(true);
-        if(view == V_PLAY) set_status(tr(S_BRP_CONNECTED));
+        if(view == V_PLAY || view == V_VIDEO) set_status(tr(S_BRP_CONNECTED));
         return;
     }
     if(!strncmp(l, "TERMINATED", 10) || !strncmp(l, "FAILED", 6) || !strncmp(l, "ERR start", 9) ||
@@ -611,6 +821,15 @@ static void pad_tick(lv_timer_t *t)
 {
     (void)t;
     pad_flush(false);                                    /* controle físico: o estado a cada 8 ms */
+    if(view == V_VIDEO) {                                /* algo visível por cima: o vídeo para */
+        static int shown = -1;
+        lv_obj_t *top = lv_layer_top();
+        int busy = 0;
+        for(uint32_t i = 0; i < lv_obj_get_child_count(top); i++)
+            if(!lv_obj_has_flag(lv_obj_get_child(top, (int32_t)i), LV_OBJ_FLAG_HIDDEN)) busy = 1;
+        if(busy == shown) { /* igual */ }
+        else { shown = busy; eng_send("SHOW %d", !busy); if(!busy && video_box) lv_obj_invalidate(video_box); }
+    }
     if(view == V_PLAY && streaming && st_lbl) {
         static char last[96];
         char b[96];
@@ -625,6 +844,7 @@ static void pad_tick(lv_timer_t *t)
 void scr_brp_demo(const char *line)
 {
     if(!body) return;
+    if(!strcmp(line, "+video")) { session_video = true; view = V_VIDEO; streaming = true; starting = false; build(); on_line((char[]){"VSTATS 27.5 0 36"}); return; }
     if(!strcmp(line, "+play")) { view = V_PLAY; streaming = true; starting = false; build(); set_status(tr(S_BRP_CONNECTED)); return; }
     if(!strcmp(line, "+lock")) { lock_mode = true; v_lock = F_RIGHT | F_A; stick_x = 20000; stick_y = 12000; stick_locked = true; vb_paint(); stick_paint(); return; }
     char b[256];
@@ -646,6 +866,8 @@ static void create(lv_obj_t *parent, int arg)
     napps = 0;
     host_err[0] = host_ver[0] = 0;
     lock_mode = false;
+    session_video = right_next = drag_mode = false;
+    quality_load();
     char err[160] = "";
     if(!eng_start(err, sizeof err)) snprintf(host_err, sizeof host_err, "%s", err[0] ? err : "motor");
     io_t = lv_timer_create(io_tick, 30, NULL);
@@ -660,7 +882,7 @@ static void destroy(void)
     gamepad_capture(false, NULL);
     streaming = starting = false;
     eng_stop();                                          /* RELEASE + STOP + EOF: nada preso no PC */
-    root = body = st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = NULL;
+    root = body = st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = video_box = rclick_btn = drag_btn = NULL;
     nvb = 0;
 }
 

@@ -574,6 +574,7 @@ int screenshot_run(const char *dir)
     scr_brp_demo("APP 4|Steam Big Picture"); scr_brp_demo("APPS fim"); pump(100); shot("40c-brp-apps");
     scr_brp_demo("+play");          pump(100); shot("40d-brp-controle");
     scr_brp_demo("+lock");          pump(100); shot("40e-brp-travado");
+    scr_brp_demo("+video");         pump(100); shot("40f-brp-imagem");
     go(SCR_POWER, 0);               shot("17-potencia");
     scroll_content_end();           shot("17b-potencia-plano");
     go(SCR_PERF, 0);                shot("17c-desempenho");

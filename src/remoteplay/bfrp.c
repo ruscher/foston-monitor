@@ -13,7 +13,10 @@
  *   PAD botões lt rt lx ly rx ry                (estado inteiro do controle 1; botões = *_FLAG)
  *   KEY código_vk 1|0 modificadores             teclado (códigos virtuais do Windows, como o Moonlight)
  *   MREL dx dy / MBTN botão 1|0 / SCROLL n      mouse
+ *   MABS x y largura altura                     ponteiro do mouse na posição (toque na imagem)
+ *   SHOW 1|0                                    desenha ou não o vídeo (algo por cima dele)
  *   RELEASE                                     solta tudo (botões, eixos, teclas, mouse)
+ *   START ... video x y l a                     com vídeo: o retângulo da tela -> VSTATS qps erros ms
  *
  * Modo Somente Controle: START com video=0. A sessão sobe no menor fluxo e os quadros são
  * descartados sem decodificar; a entrada vai pelo canal de controle cifrado do próprio Sunshine
@@ -40,6 +43,8 @@
 #include <Limelight.h>
 #include "client.h"
 #include "errors.h"
+#include "video.h"
+#include <poll.h>
 
 static SERVER_DATA server;
 static bool have_server;
@@ -102,14 +107,15 @@ static int dr_setup(int fmt, int w, int h, int rate, void *ctx, int flags)
 {
     (void)fmt; (void)ctx; (void)flags;
     out("VIDEO %dx%d %d", w, h, rate);
+    if(want_video && video_setup(w, h)) { out("ERR decodificador"); return -1; }
     return 0;
 }
 
 static int dr_submit(PDECODE_UNIT du)
 {
-    (void)du;
-    frames_in++;                                         /* Somente Controle: descarta */
-    return DR_OK;
+    frames_in++;
+    if(!want_video) return DR_OK;                        /* Somente Controle: descarta */
+    return video_submit(du);
 }
 
 static int ar_init(int cfg, const POPUS_MULTISTREAM_CONFIGURATION oc, void *ctx, int flags)
@@ -204,8 +210,9 @@ static void cmd_apps(void)
 
 static STREAM_CONFIGURATION cfg;
 
-static void cmd_start(int app, int w, int h, int fps, int kbps, int video)
+static void cmd_start(int app, int w, int h, int fps, int kbps, int video, int vx, int vy, int vw, int vh)
 {
+    if(video && video_open(vx, vy, vw, vh)) { out("ERR framebuffer"); return; }
     if(!have_server || !server.paired) { out("ERR não pareado"); return; }
     if(streaming) { out("ERR já em sessão"); return; }
     LiInitializeStreamConfiguration(&cfg);
@@ -228,7 +235,9 @@ static void cmd_start(int app, int w, int h, int fps, int kbps, int video)
     LiInitializeVideoCallbacks(&dr);
     dr.setup = dr_setup;
     dr.submitDecodeUnit = dr_submit;
-    dr.capabilities = CAPABILITY_DIRECT_SUBMIT;
+    /* com vídeo: a thread de decodificação da moonlight-common-c (fila e descarte dela); sem
+     * vídeo: descarta direto na thread de recepção */
+    dr.capabilities = want_video ? 0 : CAPABILITY_DIRECT_SUBMIT;
     LiInitializeAudioCallbacks(&ar);
     ar.init = ar_init;
     ar.decodeAndPlaySample = ar_sample;
@@ -246,8 +255,9 @@ static void cmd_start(int app, int w, int h, int fps, int kbps, int video)
 static void cmd_stop(void)
 {
     release_all();
-    if(streaming || 1) LiStopConnection();
+    LiStopConnection();
     streaming = false;
+    video_close();
     out("STOPPED");
 }
 
@@ -261,9 +271,9 @@ static void command(char *l)
     else if(!strcmp(l, "UNPAIR")) { if(have_server) gs_unpair(&server); server.paired = false; out("UNPAIR ok"); }
     else if(!strcmp(l, "APPS")) cmd_apps();
     else if(!strcmp(l, "START")) {
-        int app = 0, w = 640, h = 360, fps = 30, kbps = 1000, video = 0;
-        sscanf(a, "%d %d %d %d %d %d", &app, &w, &h, &fps, &kbps, &video);
-        cmd_start(app, w, h, fps, kbps, video);
+        int app = 0, w = 640, h = 360, fps = 30, kbps = 1000, video = 0, vx = 80, vy = 48, vw = 640, vh = 360;
+        sscanf(a, "%d %d %d %d %d %d %d %d %d %d", &app, &w, &h, &fps, &kbps, &video, &vx, &vy, &vw, &vh);
+        cmd_start(app, w, h, fps, kbps, video, vx, vy, vw, vh);
     }
     else if(!strcmp(l, "STOP")) cmd_stop();
     else if(!strcmp(l, "QUITAPP")) { release_all(); if(have_server) gs_quit_app(&server); out("QUITAPP ok"); }
@@ -298,6 +308,12 @@ static void command(char *l)
         int n;
         if(sscanf(a, "%d", &n) == 1 && streaming) LiSendScrollEvent((signed char)clamp(n, -10, 10));
     }
+    else if(!strcmp(l, "MABS")) {                         /* ponteiro na posição (x, y) de uma área l x a */
+        int x, y, w, h;
+        if(sscanf(a, "%d %d %d %d", &x, &y, &w, &h) == 4 && w > 0 && h > 0 && streaming)
+            LiSendMousePositionEvent((short)clamp(x, 0, w - 1), (short)clamp(y, 0, h - 1), (short)w, (short)h);
+    }
+    else if(!strcmp(l, "SHOW")) video_show(atoi(a));
     else if(!strcmp(l, "RELEASE")) release_all();
     else out("ERR comando");
 }
@@ -310,10 +326,38 @@ int main(int argc, char **argv)
     mkdir(key_dir, 0700);
     out("READY");
     char line[512];
-    while(fgets(line, sizeof line, stdin)) {
-        size_t n = strlen(line);
-        while(n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
-        if(n) command(line);
+    int len = 0;
+    for(;;) {
+        struct pollfd pf = { 0, POLLIN, 0 };
+        int pr = poll(&pf, 1, 2000);
+        if(pr < 0 && errno == EINTR) continue;
+        if(pr > 0) {
+            ssize_t n = read(0, line + len, sizeof line - 1 - (size_t)len);
+            if(n <= 0) break;                             /* o shell fechou a entrada */
+            len += (int)n;
+            line[len] = 0;
+            char *s = line, *nl;
+            while((nl = strchr(s, '\n'))) {
+                *nl = 0;
+                if(nl > s && nl[-1] == '\r') nl[-1] = 0;
+                if(*s) command(s);
+                s = nl + 1;
+            }
+            len = (int)strlen(s);
+            memmove(line, s, (size_t)len + 1);
+            if(len >= (int)sizeof line - 1) len = 0;      /* linha grande demais: descarta */
+        }
+        if(streaming && want_video) {                     /* a cada ~2 s: quadros, erros e tempo */
+            static time_t last;
+            time_t t = time(NULL);
+            if(t - last >= 2) {
+                unsigned long f, e;
+                unsigned long long us;
+                video_stats(&f, &e, &us);
+                out("VSTATS %.1f %lu %llu", last ? f / (double)(t - last) : 0.0, e, f ? us / f / 1000 : 0);
+                last = t;
+            }
+        }
     }
     /* o shell fechou a entrada (saiu ou caiu): nada fica pressionado no PC */
     if(streaming) cmd_stop();

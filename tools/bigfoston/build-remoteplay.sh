@@ -39,14 +39,16 @@ cp "$M"/libgamestream/*.h "$W/gs/"
 CFLAGS="-O2 -march=armv6 -mfloat-abi=soft -pipe -D_GNU_SOURCE -DHAS_SOCKLEN_T -DHAS_POLL=1 -DHAS_FCNTL=1 \
  -DHAS_IOCTL=1 -DHAS_GETADDRINFO=1 -DHAS_GETNAMEINFO=1 -DHAS_INET_PTON=1 -DHAS_INET_NTOP=1 \
  -DHAS_MSGHDR_FLAGS=1 -DNDEBUG -Wno-deprecated-declarations"
-INC="-I$R/src/remoteplay -I$W/gs -I$C/src -I$C/enet/include -I$C/nanors -I$C/nanors/deps -I$C/nanors/deps/obl \
+FF=$B/ffmpeg-tv/inst                      # FFmpeg mínimo da TV (build-tv.sh): o mesmo H.264
+[ -f "$FF/lib/libavcodec.a" ] || { echo "falta $FF (tools/bigfoston/build-tv.sh)"; exit 1; }
+INC="-I$FF/include -I$R/src/remoteplay -I$W/gs -I$C/src -I$C/enet/include -I$C/nanors -I$C/nanors/deps -I$C/nanors/deps/obl \
  -I$SR/usr/include"
-SRC="$R/src/remoteplay/bfrp.c $W/gs/client.c $W/gs/http.c $W/gs/mkcert.c $W/gs/xml.c \
+SRC="$R/src/remoteplay/bfrp.c $R/src/remoteplay/video.c $W/gs/client.c $W/gs/http.c $W/gs/mkcert.c $W/gs/xml.c \
  $(ls $C/src/*.c) $C/enet/callbacks.c $C/enet/compress.c $C/enet/host.c $C/enet/list.c $C/enet/packet.c \
  $C/enet/peer.c $C/enet/protocol.c $C/enet/unix.c $C/nanors/rs.c $C/nanors/deps/obl/oblas_common.c \
  $C/nanors/deps/obl/oblas_lite.c"
 # shellcheck disable=SC2086
-"$CC" $CFLAGS $INC $SRC -o "$W/bfrp" -L"$SR/usr/lib" -lcurl -lssl -lcrypto -lexpat -lpthread -lm \
+"$CC" $CFLAGS $INC $SRC -o "$W/bfrp" "$FF/lib/libavcodec.a" "$FF/lib/libavutil.a" -L"$SR/usr/lib" -lcurl -lssl -lcrypto -lexpat -latomic -lpthread -lm \
     -Wl,-rpath,/mnt/sd/BigFoston/web/lib 2> "$W/build.log" || { grep -E "error" "$W/build.log" | head -30; exit 1; }
 "$OW/host/bin/arm-buildroot-linux-musleabi-strip" "$W/bfrp"
 ls -la "$W/bfrp"
