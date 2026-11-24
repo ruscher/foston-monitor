@@ -690,7 +690,9 @@ static void engine_start(const char *url)
     if(remote_on) return;                         /* o PC está navegando */
     notice_hide();
     if(!webproc_available()) { show_notice(tr(S_WEB_NO_ENGINE), false); return; }
-    webproc_opts_t o = { BF_SCREEN_W, ph, settings()->web_js, !settings()->web_no_images, NULL };
+    /* JavaScript sempre ligado (pedido do usuário, 24/11/2026: o Google recusa sem ele); o
+     * ajuste web_js fica no settings.conf só por compatibilidade */
+    webproc_opts_t o = { BF_SCREEN_W, ph, true, !settings()->web_no_images, NULL };
     char err[200];
     engine_ready = false;
     stopping = false;
@@ -1487,7 +1489,6 @@ static void open_menu(void)
     lv_obj_set_size(b, 52, 42);
     lv_obj_add_event_cb(b, zoom_click, LV_EVENT_CLICKED, (void *)1);
     page_switch_row(panel, tr(S_WEB_SAVE_DATA), settings()->web_no_images, opt_toggle, (void *)0);
-    page_switch_row(panel, tr(S_WEB_JS), settings()->web_js, opt_toggle, (void *)1);
     page_switch_row(panel, tr(S_WEB_PC_MODE), settings()->web_pc, opt_toggle, (void *)2);
     page_switch_row(panel, tr(S_WEB_FS_SHARP), settings()->web_fs_sharp, opt_toggle, (void *)3);
     panel_row(LV_SYMBOL_CHARGE, tr(S_SET_PERFMODE), tr(S_SUB_PERFMODE), menu_pick, (void *)7);

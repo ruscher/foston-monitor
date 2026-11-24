@@ -87,3 +87,41 @@ celular.
   trocas de contexto voluntárias contra 510 mil forçadas, ou seja, o `poll` voltava na hora. Se
   acontecer de novo, o syslog mostra o descritor: procure `laço ocupado` com `grep` em
   `/var/log/messages`.
+
+## Páginas abrindo "com muita dificuldade" (24/11/2026, segunda rodada)
+
+Medido com um artigo da Wikipédia (294 KiB de HTML) pelo motor do FOSTON:
+
+1. **O motor girava a 100 % da CPU.**
+   - A libcurl 8.20 põe no `fd_set` o eventfd com que a thread do resolvedor de nomes a acorda,
+     mas só o esvazia dentro de `curl_multi_poll`/`wait`. O NetSurf usa `select`.
+   - Depois do primeiro sinal, o eventfd ficava sempre pronto: ~800 voltas por segundo sem nada a
+     fazer.
+   - Correção em `src/web/frontend/gui.c` (`drain_wakeups`): o que estiver pronto e não for
+     socket nem os comandos é lido uma vez, como a curl faz no `curl_multi_poll`.
+   - Resultado: CPU do motor em 76 s de 66 s para **11 s**.
+2. **O tethering do celular parou de encaminhar.**
+   - Com a `bnep0` "conectada", o celular não respondia nem ao ping no gateway nem ao DHCP ao
+     reconectar.
+   - Passavam só ~500 bytes/s; até o `bfdl` parava no meio do arquivo.
+   - Antes, a mesma conexão tinha baixado 262 KB inteiros. Desligar e religar o "Tethering
+     Bluetooth" no celular resolve.
+   - Pendente: o agente detectar isso sozinho (gateway sem resposta) e avisar na tela.
+3. **JavaScript:** agora sempre ligado no motor (o Google recusa sem ele). O interruptor saiu do
+   menu. É o Duktape do NetSurf: páginas que dependem de JavaScript moderno podem continuar
+   incompletas.
+
+### Cache no cartão (pedido) — por que não foi feito
+
+O motor roda como o usuário `bigfoston`, sem privilégios, e o cartão é vfat (dono e permissões
+fixos para o root).
+
+- Deixar o motor gravar no cartão daria a ele o cartão inteiro, inclusive os programas que o root
+  executa (`BigFoston/tv/bftvd`, por exemplo). Uma página maliciosa que explorasse o motor viraria
+  root.
+- O caminho seguro seria um arquivo-imagem ext4 montado em loop. O kernel do FOSTON não tem nem
+  loop nem ext4 (seria preciso recompilar e regravar o kernel).
+- O NetSurf também foi compilado sem o armazenamento em disco (`NETSURF_FS_BACKING_STORE`).
+
+Imagens por último: o NetSurf já desenha a página quando o HTML e o CSS chegam e as imagens entram
+depois, uma a uma. O que impedia ver isso era o laço girando e o download parado.

@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <stdint.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -692,6 +693,23 @@ static void read_commands(void)
 
 /* ------------------------------------------------------------- laço */
 
+/* A libcurl 8.20 põe no fd_set o eventfd com que a thread do resolvedor de nomes a acorda, mas
+ * só o esvazia dentro de curl_multi_poll/wait; o NetSurf usa select. Depois do primeiro sinal o
+ * eventfd ficava sempre pronto: ~800 voltas por segundo sem nada a fazer, o motor a 100 % de
+ * CPU, o download da página parado e as conexões novas sem tempo (curl 7). Medido no FOSTON
+ * (24/11/2026) com a Wikipédia. Esvazia o que estiver pronto e não for socket nem os comandos
+ * (é o que a curl faz no curl_multi_poll: o eventfd é só um aviso). */
+static void drain_wakeups(fd_set *rd, int maxfd)
+{
+	for (int fd = 1; fd <= maxfd; fd++) {
+		struct stat st;
+		if (!FD_ISSET(fd, rd) || fstat(fd, &st) || S_ISSOCK(st.st_mode) || S_ISREG(st.st_mode))
+			continue;
+		uint64_t v;                 /* uma leitura zera o contador do eventfd (não bloqueia: está pronto) */
+		if (read(fd, &v, sizeof v) < 0) { /* nada: a curl já leu */ }
+	}
+}
+
 static void run(void)
 {
 	while (!done) {
@@ -721,6 +739,8 @@ static void run(void)
 			NSLOG(netsurf, CRITICAL, "select: %s", strerror(errno));
 			break;
 		}
+		if (r > 0)
+			drain_wakeups(&rd, maxfd);
 		if (r > 0 && FD_ISSET(0, &rd))
 			read_commands();
 		flush();
