@@ -27,22 +27,20 @@ abrir as abas é imediato.
 
 ## Controles
 
-Um cartão por controle conectado, com a miniatura do controle (`padview` de 160 px), o nome e
-selos arredondados: Bluetooth com o endereço, **bateria** (lida de
-`/sys/class/power_supply/ps-controller-battery-<endereço>`, com o ícone do nível; o
-`hid-playstation` a publica) e o mapa. Também:
-- o nome;
-- Bluetooth (endereço) ou USB;
-- o **mapa** e de onde veio: "banco do SC Controller", "embutido no BigFoston", "registrado por
-  você" ou, em amarelo, "padrão do Linux: registre se algum botão estiver trocado";
+Um cartão por controle conectado:
+- a miniatura do controle (`padview` de 160 px) e o nome;
+- selos arredondados: Bluetooth com o endereço (ou USB), **bateria** com o ícone do nível
+  (lida de `/sys/class/power_supply/ps-controller-battery-<endereço>`, que o `hid-playstation`
+  publica) e o **mapa** com a origem: "banco do SC Controller", "embutido no BigFoston",
+  "registrado por você" ou, em amarelo, "padrão do Linux: registre se algum botão estiver
+  trocado";
 - o GUID;
 - os botões **Testar** e **Registrar**.
 
 Sem controle, o cartão diz como ligar ("Já pareado? Aperte PS") ou parear, e tem o botão
-Abrir Bluetooth. No rodapé, o tamanho do banco: "746 modelos para Linux e N registrados por
-você".
-
-A lista se refaz sozinha quando um controle chega ou sai: o timer confere a cada 400 ms.
+Abrir Bluetooth. No rodapé, um selo com o tamanho do banco: "746 modelos no banco · N
+registrados por você". A lista se refaz sozinha quando um controle chega ou sai: o timer
+confere a cada 400 ms.
 
 ## Testar
 
@@ -50,29 +48,14 @@ A lista se refaz sozinha quando um controle chega ou sai: o timer confere a cada
 - o nome e a bateria;
 - os dois analógicos em números;
 - os gatilhos em barras;
-- o último evento cru;
+- o último evento cru, por exemplo `KEY 0x131 b1 = 1`, com o código do evdev e o número do
+  SDL (para comparar com o banco);
 - a contagem de eventos;
-- uma barra que enche enquanto B está segurado (2 s para sair).
-
-O desenho antigo era feito só de objetos do LVGL:
-- **silhueta**: o corpo e as duas pegadas;
-- **botões que acendem**: ombros L1/R1 (LB/RB), direcional, Back/Start, Guia (PS) e, no
-  PlayStation, o touchpad;
-- **gatilhos**: barras que enchem conforme o quanto são apertados;
-- **analógicos**: um anel com um ponto que anda; o anel acende ao afundar (L3/R3);
-- **botões de frente**: no PlayStation, as formas △ ○ ✕ □ desenhadas com linhas e nas cores do
-  console (a fonte não tem esses símbolos); nos outros, A B X Y nas cores do Xbox.
-
-Botão aceso ganha cor, brilho e um traço que contrasta com o fundo, para o rótulo não
-sumir. Embaixo aparecem:
-- o último evento cru, por exemplo `EV_KEY 0x131 (b1) = 1`, com o código do evdev e o
-  número do SDL (para comparar com o banco);
-- a contagem de eventos;
-- a dica: "Segure B (Bola) por 2 s ou toque em Controles para sair".
+- a dica "Segure B (Bola) por 2 s para sair do teste" e uma barra que enche enquanto B está
+  segurado.
 
 Enquanto o testador está aberto, o controle **não mexe na interface** (`gamepad_capture`):
-o B não volta e o cursor some. Para sair pelo controle, segure **B por 2 s**. O timer roda a
-30 quadros/s só nesta aba.
+o B não volta e o cursor some. O timer roda a 30 quadros/s só nesta aba.
 
 ## Registrar (o "Device registration" do sc-controller)
 
