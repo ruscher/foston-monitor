@@ -53,6 +53,7 @@ void settings_defaults(bf_settings_t *s)
     s->perf_prio = true;
     s->perf_tag = true;
     s->perf_modal = true;
+    s->perf_pad = true;
     s->show_date = true;
     s->clock_24h = true;
     s->nav_voice = true;
@@ -147,6 +148,7 @@ void settings_load(void)
         else if(!strcmp(k, "perf_prio"))     cur.perf_prio = atoi(v) != 0;
         else if(!strcmp(k, "perf_tag"))      cur.perf_tag = atoi(v) != 0;
         else if(!strcmp(k, "perf_modal"))    cur.perf_modal = atoi(v) != 0;
+        else if(!strcmp(k, "perf_pad"))      cur.perf_pad = atoi(v) != 0;
         else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
@@ -193,9 +195,9 @@ bool settings_save(void)
             cur.web_js ? 1 : 0, cur.web_no_images ? 1 : 0, cur.web_search, cur.web_zoom, cur.web_pc ? 1 : 0);
     fprintf(f, "web_fs_sharp = %d\n", cur.web_fs_sharp ? 1 : 0);
     fprintf(f, "perf_auto = %d\nperf_enter_s = %d\nperf_exit_s = %d\nperf_svc = %u\nperf_quiet = %d\n"
-               "perf_prio = %d\nperf_tag = %d\nperf_modal = %d\n",
+               "perf_prio = %d\nperf_tag = %d\nperf_modal = %d\nperf_pad = %d\n",
             cur.perf_auto ? 1 : 0, cur.perf_enter_s, cur.perf_exit_s, cur.perf_svc, cur.perf_quiet ? 1 : 0,
-            cur.perf_prio ? 1 : 0, cur.perf_tag ? 1 : 0, cur.perf_modal ? 1 : 0);
+            cur.perf_prio ? 1 : 0, cur.perf_tag ? 1 : 0, cur.perf_modal ? 1 : 0, cur.perf_pad ? 1 : 0);
     fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);

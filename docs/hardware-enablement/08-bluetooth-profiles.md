@@ -126,6 +126,6 @@ o teste no aparelho com o dedo está pendente.
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
   (mpg123), precisa de uma rota para o BlueALSA.
 - Viva-voz (HFP/SCO) e microfone; mouse Bluetooth (o cursor do controle já existe).
-- `hid-playstation` no kernel (luz, vibração e bateria do DualShock/DualSense): falta
-  espaço na `\ResidentFlash` para o zImage maior.
+- Usar a luz, a vibração e a bateria do DualShock/DualSense, agora que o kernel tem o
+  `hid-playstation` (24/11/2026; +12 KB no zImage).
 - Decidir se o firmware oficial passa para bibliotecas compartilhadas.

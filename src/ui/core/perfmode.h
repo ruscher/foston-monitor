@@ -1,5 +1,7 @@
-/* perfmode.h — modo performance: enquanto um vídeo toca no app Internet, os serviços que não
- * ajudam a ver o vídeo param (GPS, Bluetooth, telefone, tarefas agendadas) e voltam depois.
+/* perfmode.h — modo performance: enquanto um vídeo toca no app Internet ou um controle de jogo
+ * está conectado, os serviços que não ajudam param (GPS, Bluetooth, telefone, tarefas
+ * agendadas) e voltam depois. Um app que precisa de um deles (GPS, Telefone, Bluetooth) o
+ * religa enquanto está aberto (perfmode_hold).
  *
  * Só para o que estava rodando (o que o usuário desligou continua desligado) e volta na ordem
  * inversa. Parar leva ~3 s e voltar ~6 s (o Bluetooth carrega o firmware do chip): numa
@@ -27,6 +29,12 @@ void       perfmode_enter(unsigned svc, bool prio);
  * pedido) */
 void       perfmode_leave(void);
 pm_state_t perfmode_state(void);
+/* o app aberto usa estes grupos: com o modo ligado eles voltam a rodar (o GPS no app GPS) e
+ * param de novo quando o app solta (0). Não muda o estado (continua PM_ON) */
+void       perfmode_hold(unsigned svc);
+unsigned   perfmode_held(void);
+/* prioridade (nice) de um processo do sistema pelo nome; false se não achou */
+bool       perfmode_renice(const char *proc, int nice);
 /* na inicialização: um shell anterior parou serviços e não religou (travou, foi atualizado)?
  * religa agora (estado PM_LEAVING); true se havia algo a religar */
 bool       perfmode_recover(void);

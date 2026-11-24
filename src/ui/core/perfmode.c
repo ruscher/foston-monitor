@@ -131,32 +131,53 @@ static unsigned stopped_groups(void)
     return g;
 }
 
-static bool still_wanted(void)
+static unsigned held;                   /* grupos que o app aberto usa: voltam com o modo ligado */
+static bool dirty;                      /* o alvo mudou desde que a thread olhou */
+
+/* com mu: o que deve ficar parado agora */
+static unsigned target_locked(void) { return desired ? groups & ~held : 0; }
+
+static unsigned target_now(void)
 {
     pthread_mutex_lock(&mu);
-    bool d = desired;
+    unsigned t = target_locked();
     pthread_mutex_unlock(&mu);
-    return d;
+    return t;
 }
 
-static void do_enter(unsigned g)
+/* Acerta os serviços com o alvo: religa (na ordem inversa) o que não deve mais estar parado e
+ * para (na ordem) o que deve. Religar vem antes: é o que um app que acabou de abrir espera. */
+static void reconcile(unsigned target)
 {
-    /* religou há pouco (o vídeo voltou logo depois de parar): deixa os serviços terminarem
-     * de subir antes de parar de novo; desistiu no meio, nem para */
-    while(now_ms() - started_at < SETTLE_MS) {
-        if(!still_wanted()) return;
-        usleep(100000);
-    }
-    bool pick[N_SVC];
+    bool start[N_SVC], stop[N_SVC];
     int n = 0;
     for(int i = 0; i < N_SVC; i++) {
-        pick[i] = !stopped[i] && (g & svc[i].group) && access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
-        if(pick[i]) n++;
+        start[i] = stopped[i] && !(target & svc[i].group);
+        stop[i] = !stopped[i] && (target & svc[i].group) && access(svc[i].script, X_OK) == 0 && running(svc[i].proc);
+        n += start[i] + stop[i];
     }
     done = 0;
     total = n;
+    bool started = false;
+    for(int i = N_SVC - 1; i >= 0; i--) {
+        if(!start[i]) continue;
+        if(!running(svc[i].proc)) run(svc[i].script, "start", START_MS);
+        stopped[i] = false;
+        paused = stopped_groups();
+        note_write();
+        started = true;
+        done++;
+    }
+    if(started) started_at = now_ms();
     for(int i = 0; i < N_SVC; i++) {
-        if(!pick[i]) continue;
+        if(!stop[i]) continue;
+        /* religou há pouco (o vídeo voltou, saiu do GPS e voltou): deixa os serviços terminarem
+         * de subir antes de parar de novo; se o alvo mudou no meio, a próxima volta decide */
+        while(now_ms() - started_at < SETTLE_MS) {
+            if(!(target_now() & svc[i].group)) break;
+            usleep(100000);
+        }
+        if(!(target_now() & svc[i].group)) { done++; continue; }
         stopped[i] = true;
         paused = stopped_groups();
         note_write();
@@ -170,23 +191,7 @@ static void do_enter(unsigned g)
         }
         done++;
     }
-}
-
-static void do_leave(void)
-{
-    int n = 0;
-    for(int i = 0; i < N_SVC; i++) if(stopped[i]) n++;
-    done = 0;
-    total = n;
-    for(int i = N_SVC - 1; i >= 0; i--) {
-        if(!stopped[i]) continue;
-        if(!running(svc[i].proc)) run(svc[i].script, "start", START_MS);
-        stopped[i] = false;
-        paused = stopped_groups();
-        done++;
-    }
-    unlink(NOTE);
-    started_at = now_ms();
+    if(!stopped_groups()) unlink(NOTE);
 }
 
 static void *worker(void *arg)
@@ -194,35 +199,34 @@ static void *worker(void *arg)
     (void)arg;
     pthread_mutex_lock(&mu);
     for(;;) {
-        pm_state_t s = state;                    /* PM_ENTERING ou PM_LEAVING */
-        unsigned g = groups;
+        dirty = false;
+        unsigned t = target_locked();
         pthread_mutex_unlock(&mu);
-        if(s == PM_ENTERING) do_enter(g);
-        else do_leave();
+        reconcile(t);
         pthread_mutex_lock(&mu);
-        if(s == PM_ENTERING) state = desired ? PM_ON : PM_LEAVING;
-        else state = desired ? PM_ENTERING : PM_OFF;
-        if(state == PM_ON || state == PM_OFF) break;
+        if(!dirty) break;                        /* ninguém mudou o alvo no meio */
+        state = desired ? (state == PM_ON ? PM_ON : PM_ENTERING) : PM_LEAVING;
     }
+    state = desired ? PM_ON : PM_OFF;
     busy = false;
     pthread_mutex_unlock(&mu);
     return NULL;
 }
 
-/* com mu: começa a troca se o estado parado não é o desejado */
+/* com mu: a thread confere o alvo (começa uma, se não há) */
 static void kick(void)
 {
-    if(busy) return;                             /* a thread em curso emenda sozinha */
-    pm_state_t from = state;
-    if(desired && from == PM_OFF) state = PM_ENTERING;
-    else if(!desired && from == PM_ON) state = PM_LEAVING;
-    else return;
+    dirty = true;
+    if(busy) return;                             /* a thread em curso confere de novo ao terminar */
     busy = true;
     pthread_t t;
     pthread_attr_t a;
     pthread_attr_init(&a);
     pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
-    if(pthread_create(&t, &a, worker, NULL)) { state = from; busy = false; }
+    if(pthread_create(&t, &a, worker, NULL)) {
+        busy = false;
+        state = desired ? PM_ON : PM_OFF;
+    }
     pthread_attr_destroy(&a);
 }
 
@@ -231,9 +235,12 @@ void perfmode_enter(unsigned g, bool prio)
     /* a thread que chama (a da interface): no Linux a prioridade é por thread */
     if(prio && !prio_set && setpriority(PRIO_PROCESS, 0, -5) == 0) prio_set = true;
     pthread_mutex_lock(&mu);
-    desired = true;
-    groups = g;
-    kick();
+    if(!desired || groups != g) {
+        desired = true;
+        groups = g;
+        if(state == PM_OFF || state == PM_LEAVING) state = PM_ENTERING;
+        kick();
+    }
     pthread_mutex_unlock(&mu);
 }
 
@@ -241,9 +248,30 @@ void perfmode_leave(void)
 {
     if(prio_set) { setpriority(PRIO_PROCESS, 0, 0); prio_set = false; }
     pthread_mutex_lock(&mu);
-    desired = false;
-    kick();
+    if(desired || state != PM_OFF) {
+        desired = false;
+        if(state != PM_OFF) state = PM_LEAVING;
+        kick();
+    }
     pthread_mutex_unlock(&mu);
+}
+
+void perfmode_hold(unsigned g)
+{
+    pthread_mutex_lock(&mu);
+    if(g != held) {
+        held = g;
+        if(desired) kick();                      /* desligado: nada parado, nada a fazer */
+    }
+    pthread_mutex_unlock(&mu);
+}
+
+unsigned perfmode_held(void)
+{
+    pthread_mutex_lock(&mu);
+    unsigned h = held;
+    pthread_mutex_unlock(&mu);
+    return h;
 }
 
 bool perfmode_recover(void)
@@ -261,10 +289,17 @@ bool perfmode_recover(void)
     fclose(f);
     paused = stopped_groups();
     bool go = n && state == PM_OFF && !busy;
-    if(go) { state = PM_ON; desired = false; kick(); go = state == PM_LEAVING; }
+    if(go) { desired = false; state = PM_LEAVING; kick(); }
     pthread_mutex_unlock(&mu);
     if(!n) unlink(NOTE);
     return go;
+}
+
+/* prioridade de um processo do sistema pelo nome (o bluetoothd leva os dados do controle) */
+bool perfmode_renice(const char *proc, int nice)
+{
+    pid_t p = find_proc(proc);
+    return p && setpriority(PRIO_PROCESS, (id_t)p, nice) == 0;
 }
 
 pm_state_t perfmode_state(void)

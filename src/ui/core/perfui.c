@@ -10,6 +10,8 @@
 #include "theme.h"
 #include "i18n.h"
 #include "hwkbd.h"
+#include "gamepad.h"
+#include <sys/resource.h>
 #include "../widgets/dialog.h"
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +19,7 @@
 #define C_PERF 0xe66100
 
 static bool manual, video, suppressed;   /* suppressed: desligado pelo usuário com o vídeo tocando */
+static bool pad, pad_suppressed;         /* controle de jogo conectado; desligado à mão com ele */
 static bool on;                          /* o que foi pedido ao perfmode */
 static lv_timer_t *delay_t, *tick_t;
 static lv_obj_t *tag, *tag_lbl;
@@ -118,7 +121,10 @@ static void pm_open(void)
 
 /* ---------------------------------------------------------------- ligar e desligar */
 
-static bool wanted(void) { return manual || (video && !suppressed && settings()->perf_auto); }
+static bool wanted(void)
+{
+    return manual || (video && !suppressed && settings()->perf_auto) || (pad && !pad_suppressed && settings()->perf_pad);
+}
 
 static void apply(void)
 {
@@ -127,15 +133,17 @@ static void apply(void)
     on = w;
     if(w) {
         if(settings()->perf_quiet) fx_quiet(true);
-        unsigned svc = settings()->perf_svc;
-        if(hwkbd_bt_connected()) svc &= ~PM_SVC_BT;   /* o teclado Bluetooth continua digitando */
-        perfmode_enter(svc, settings()->perf_prio);
+        /* o Bluetooth de teclado/controle e o app aberto: perfmode_hold (tick) */
+        perfmode_enter(settings()->perf_svc, false);
     }
     else {
         fx_quiet(false);
         perfmode_leave();
     }
-    pm_open();
+    /* ligado ou desligado só pelo controle: sem a janela que segura os toques (a pessoa vai
+     * jogar agora); a etiqueta avisa */
+    bool pad_only = !manual && !(video && !suppressed && settings()->perf_auto);
+    if(!pad_only) pm_open();
 }
 
 static void delay_done(lv_timer_t *t)
@@ -175,6 +183,7 @@ void perfui_manual(bool m)
 {
     manual = m;
     if(!m && video) suppressed = true;           /* desligou à mão: não volta neste vídeo */
+    if(!m && pad) pad_suppressed = true;         /* nem com este controle */
     schedule(0);
 }
 
@@ -182,6 +191,7 @@ void perfui_disable(void)
 {
     manual = false;
     if(video) suppressed = true;
+    if(pad) pad_suppressed = true;
     schedule(0);
 }
 
@@ -197,7 +207,8 @@ void perfui_settings_changed(void)
 perf_why_t perfui_why(void)
 {
     if(perfmode_state() == PM_OFF && !on) return PERF_WHY_NONE;
-    return manual ? PERF_WHY_MANUAL : PERF_WHY_VIDEO;
+    if(manual) return PERF_WHY_MANUAL;
+    return video && !suppressed && settings()->perf_auto ? PERF_WHY_VIDEO : pad ? PERF_WHY_PAD : PERF_WHY_VIDEO;
 }
 
 bool perfui_video_playing(void) { return video; }
@@ -225,7 +236,9 @@ void perfui_dialog(void)
 {
     if(dlg_bd) return;
     char body[300];
-    snprintf(body, sizeof body, "%s\n%s", tr(manual ? S_PERFM_WHY_MANUAL : S_PERFM_WHY_VIDEO), tr(S_PERFM_TAG_BODY));
+    perf_why_t w = perfui_why();
+    snprintf(body, sizeof body, "%s\n%s", tr(w == PERF_WHY_MANUAL ? S_PERFM_WHY_MANUAL : w == PERF_WHY_PAD ? S_PERFM_WHY_PAD
+                                              : S_PERFM_WHY_VIDEO), tr(S_PERFM_TAG_BODY));
     static const char *b[3];
     b[0] = tr(S_PERFM_DISABLE);
     b[1] = tr(S_PERFM_CONFIGURE);
@@ -268,9 +281,80 @@ static void tag_make(void)
 void perfui_tag_hide(bool hide) { tag_hidden = hide; }
 void perfui_tag_offset(int y) { tag_y = y; }
 
+/* ---------------------------------------------------------------- apps e controle */
+
+#define HOLD_RELEASE_MS 3000             /* saiu do app: pausa de novo depois disso */
+#define PAD_ENTER_MS    1000             /* controle conectou: liga depois disso */
+
+/* o que o app aberto precisa que esteja rodando */
+static unsigned app_needs(bf_screen_t s)
+{
+    switch(s) {
+    case SCR_MAP: case SCR_GPS: return PM_SVC_GPS;
+    case SCR_PHONE: return PM_SVC_PHONE | PM_SVC_BT;
+    case SCR_BLUETOOTH: return PM_SVC_BT;
+    default: return 0;
+    }
+}
+
+static unsigned hold_now;
+static bool hold_dropping;               /* o app largou algo: pausa de novo em hold_drop_at */
+static uint32_t hold_drop_at;
+static bool prio_now, bt_boosted;
+static uint32_t boost_at;
+
+static void holds_update(void)
+{
+    unsigned need = app_needs(nav_current().scr);
+    if(hwkbd_bt_connected()) need |= PM_SVC_BT;  /* teclado ou controle Bluetooth continua */
+    unsigned add = need & ~hold_now, drop = hold_now & ~need;
+    if(add) {                                    /* o app está esperando: já */
+        hold_now |= add;
+        perfmode_hold(hold_now);
+    }
+    if(!drop) { hold_dropping = false; return; }
+    if(!hold_dropping) {                         /* pode voltar ao app logo: espera um pouco */
+        hold_dropping = true;
+        hold_drop_at = lv_tick_get() + HOLD_RELEASE_MS;
+    } else if((int32_t)(lv_tick_get() - hold_drop_at) >= 0) {
+        hold_dropping = false;
+        hold_now = need;
+        perfmode_hold(hold_now);
+    }
+}
+
+/* prioridade: a interface com o modo ligado (perf_prio) ou com um controle; o bluetoothd com
+ * um controle (ele lê o canal HID do Bluetooth e entrega ao kernel pelo uhid) */
+static void prio_update(void)
+{
+    bool want = (on && settings()->perf_prio) || pad;
+    if(want != prio_now && setpriority(PRIO_PROCESS, 0, want ? -5 : 0) == 0) prio_now = want;
+    /* de novo a cada 5 s: o bluetoothd pode ter reiniciado */
+    if(pad && (!bt_boosted || (int32_t)(lv_tick_get() - boost_at) >= 5000)) {
+        bt_boosted = perfmode_renice("bluetoothd", -10);
+        boost_at = lv_tick_get();
+    } else if(!pad && bt_boosted) {
+        perfmode_renice("bluetoothd", 0);
+        bt_boosted = false;
+    }
+}
+
+static void pad_update(void)
+{
+    bool now = gamepad_count() > 0;
+    if(now == pad) return;
+    pad = now;
+    if(!pad) pad_suppressed = false;             /* o próximo controle pode ligar de novo */
+    if(manual || (video && !suppressed && settings()->perf_auto)) return;   /* outro motivo segura */
+    schedule(pad ? PAD_ENTER_MS : (uint32_t)settings()->perf_exit_s * 1000u);
+}
+
 static void tick(lv_timer_t *t)
 {
     (void)t;
+    pad_update();
+    holds_update();
+    prio_update();
     pm_update();
     if(!tag) tag_make();
     pm_state_t st = perfmode_state();
@@ -281,8 +365,15 @@ static void tick(lv_timer_t *t)
     }
     /* nada de etiqueta por cima da janela de progresso ou do diálogo (ficava acesa sobre o
      * fundo escurecido), nem em Ajustes > Modo performance (o cartão de estado já diz) */
+    /* ligado pelo controle (jogando, por muito tempo): a etiqueta avisa por 6 s e some, para
+     * não ficar por cima das telas; Ajustes > Modo performance continua mostrando */
+    static pm_state_t last_st = PM_OFF;
+    static uint32_t on_since;
+    if(st == PM_ON && last_st != PM_ON) on_since = lv_tick_get();
+    last_st = st;
+    bool brief = perfui_why() == PERF_WHY_PAD && st == PM_ON && lv_tick_elaps(on_since) > 6000;
     bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
-                (st == PM_ON || st == PM_ENTERING);
+                (st == PM_ON || st == PM_ENTERING) && !brief;
     if(show) {
         lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);
         if(lv_obj_has_flag(tag, LV_OBJ_FLAG_HIDDEN)) {

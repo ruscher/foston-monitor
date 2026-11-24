@@ -364,7 +364,8 @@ energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também
   a página. Volume, mudo e Play/Pause funcionam em qualquer lugar.
 - A primeira tecla com a tela apagada ou escurecida só acende a tela.
 - O modo performance não pausa o Bluetooth enquanto há um teclado ou controle Bluetooth
-  conectado.
+  conectado; um controle de jogo também liga o modo, e o app aberto religa o serviço que usa
+  (GPS, Telefone, Bluetooth) — [jogos-e-pacotes/07](jogos-e-pacotes/07-latencia-e-modo-performance.md).
 - Teste sem teclado: `echo "key 30 1" > /run/bigfoston/ctl` (código `KEY_*`, 1 apertou,
   0 soltou) e as capturas 23b–23e do `--screenshot`, que conferem campo, Esc, rolagem,
   diálogos, Run, Terminal e Internet.
@@ -400,10 +401,10 @@ botões viram teclas entregues como as do teclado físico:
 - **Mapa de cada controle**: formato do SDL GameControllerDB (`core/padmap.c`). Procura no
   banco do usuário (controles registrados), nos bancos dos apps instalados (o SC Controller
   traz 746 modelos para Linux), nas linhas embutidas (DualShock 4 e DualSense pelo Bluetooth
-  sem o `hid-playstation`, que o kernel não tem por falta de espaço na `\ResidentFlash`) e,
-  por fim, no padrão do Linux pelos códigos. Detalhes em
-  [jogos-e-pacotes/03](jogos-e-pacotes/03-mapa-de-controles.md). Sem o driver da Sony não
-  há luz, vibração nem nível de bateria.
+  com o `hid-generic`) e, por fim, no padrão do Linux pelos códigos. Detalhes em
+  [jogos-e-pacotes/03](jogos-e-pacotes/03-mapa-de-controles.md). Desde 24/11/2026 o kernel
+  tem o `hid-playstation`, que configura o DualShock para mandar relatórios no ritmo certo
+  (sem ele eram ~6/s): [jogos-e-pacotes/07](jogos-e-pacotes/07-latencia-e-modo-performance.md).
 - **Bateria**: o controle do PlayStation nunca desliga sozinho fora do console. Parado
   10 min, o shell pede `disconnect` ao `bfbt-agent` (endereço pelo `EVIOCGUNIQ`, que o BlueZ
   preenche) e o controle desliga; o botão PS o liga e ele reconecta sozinho.

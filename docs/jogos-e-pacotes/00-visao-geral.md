@@ -16,6 +16,7 @@ mapeia e registra controles de jogo usando o banco de controles do
 | 4 | [SC Controller](04-sc-controller.md) | o app: controles, testador ao vivo, registro de controle |
 | 5 | [Criar um app](05-criar-um-app.md) | guia para os próximos apps (`.desktop`, ícone, cor, tela) |
 | 6 | [Testes e medidas](06-testes.md) | testes de unidade, capturas, roteiro no aparelho |
+| 7 | [Tempo real e modo performance](07-latencia-e-modo-performance.md) | atraso medido, `hid-playstation`, prioridade, serviços religados pelo app |
 
 ## Em uma frase por peça
 

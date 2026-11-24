@@ -51,6 +51,7 @@ typedef struct {
     bool perf_prio;     /* a interface com prioridade maior enquanto ligado */
     bool perf_tag;      /* etiqueta flutuante "Performance" no canto */
     bool perf_modal;    /* janela com barra de progresso ao ligar e desligar */
+    bool perf_pad;      /* liga sozinho com um controle de jogo conectado */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */

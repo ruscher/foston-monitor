@@ -41,6 +41,10 @@ static void command(char *l)
     else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
     else if(!strncmp(l, "group ", 6)) nav_go(SCR_APPGROUP, atoi(l + 6));
     else if(!strcmp(l, "app sc-controller")) nav_go(SCR_SCC, 0);
+    else if(!strcmp(l, "app map")) nav_go(SCR_MAP, 0);
+    else if(!strcmp(l, "app gps")) nav_go(SCR_GPS, 0);
+    else if(!strcmp(l, "app phone")) nav_go(SCR_PHONE, 0);
+    else if(!strcmp(l, "app bluetooth")) nav_go(SCR_BLUETOOTH, 0);
     else if(!strncmp(l, "install-ask ", 12)) apps_install_ask(l + 12);   /* o diálogo "Instalar?" */
     else if(!strncmp(l, "install ", 8)) apps_install_now(l + 8);       /* sem perguntar (bfapp.py) */
     else if(!strncmp(l, "uninstall ", 10)) apps_uninstall_now(l + 10);
