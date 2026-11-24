@@ -40,6 +40,7 @@ ICONS = [
     ("gallery",    0xF302),  # images
     ("phone",      0xF095),  # phone (Telefone)
     ("web",        None),    # Internet: globo com órbita (desenho próprio, render_web)
+    ("games",      0xF11B),  # gamepad (grupo Jogos)
 ]
 
 

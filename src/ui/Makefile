@@ -156,6 +156,7 @@ screenshots: sim
 HOST_CC ?= gcc
 test:
 	@rm -rf build/test/webdata && mkdir -p build/test/webdata
+	$(HOST_CC) -std=gnu11 -O1 -g -fsanitize=address,undefined -w -c third_party/lodepng/lodepng.c -o build/test/lodepng.o
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_webdata.c core/webdata.c -o build/test/test_webdata
 	./build/test/test_webdata build/test/webdata
@@ -165,6 +166,14 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_kbdmap.c core/kbdmap.c -o build/test/test_kbdmap
 	./build/test/test_kbdmap
+	@rm -rf build/test/padmap && mkdir -p build/test/padmap
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_padmap.c core/padmap.c -o build/test/test_padmap
+	./build/test/test_padmap build/test/padmap
+	@rm -rf build/test/pkg && mkdir -p build/test/pkg
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ithird_party/lodepng \
+		tests/test_pkg.c core/pkg.c build/test/lodepng.o -o build/test/test_pkg
+	./build/test/test_pkg $(CURDIR)/build/test/pkg
 
 run: sim
 	./build/sim/bigfoston-shell

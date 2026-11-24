@@ -15,4 +15,7 @@ void      svg_size(const svgdoc_t *d, int *w, int *h);
  * nunca passa de max_px pixels de lado. Libera a anterior em img. */
 bool      svg_render(svgdoc_t *d, float scale, lv_color_t bg, int max_px, lv_image_dsc_t *img);
 void      svg_image_free(lv_image_dsc_t *img);
+/* ícone de app: o desenho cabe em box x box (com margem), só a forma (A8, a opacidade de
+ * cada pixel), para ser pintado com image_recolor como os ícones do sistema */
+bool      svg_render_mask(const char *path, int box, lv_image_dsc_t *img);
 #endif

@@ -16,6 +16,7 @@
 #include "../widgets/tile.h"
 #include "../widgets/dialog.h"
 #include "../core/webdata.h"
+#include "../core/apps.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
 #include <string.h>
@@ -49,7 +50,7 @@ static const app_t apps[] = {
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8
-#define MAX_PAGES ((N_APPS + WEB_APPS_MAX + PER_PAGE - 1) / PER_PAGE)   /* + WebApps no fim */
+#define MAX_PAGES ((N_APPS + BF_GRP__N + WEB_APPS_MAX + PER_PAGE - 1) / PER_PAGE)   /* + grupos e WebApps */
 #define I_SETTINGS 10
 
 int home_app_count(void) { return N_APPS; }
@@ -84,6 +85,26 @@ static void webapp_long(lv_event_t *e)
     const char *b[2] = { tr(S_WEB_REMOVE), tr(S_WEB_CANCEL) };
     dialog_open(LV_SYMBOL_TRASH, pal()->danger, tr(S_WEB_APP_REMOVE), body, b, 2, -1, 0,
                 webapp_remove_answer, (void *)(intptr_t)j);
+}
+
+/* Grupos de apps instalados (pacotes .bfapp): uma pasta por grupo com apps, depois dos apps do
+ * sistema. Jogos aparece sempre (vazio, mostra como instalar). Na lista da grade o grupo g é
+ * o número -1 - g. */
+static void group_click(lv_event_t *e) { nav_go(SCR_APPGROUP, (int)(intptr_t)lv_event_get_user_data(e)); }
+
+static lv_obj_t *group_tile(lv_obj_t *grid, bf_group_t g)
+{
+    int idx[4];
+    int n = apps_in_group(g, idx, 4), total = apps_in_group(g, (int[64]){ 0 }, 64);
+    tile_mini_t m[4];
+    static char ini[4][8];
+    for(int i = 0; i < n; i++) {
+        const bf_app_entry_t *a = apps_get(idx[i]);
+        web_initial(a->name, ini[i], sizeof ini[i]);
+        m[i] = (tile_mini_t){ apps_icon(a), ini[i], apps_color(a) };
+    }
+    return tile_create_folder(grid, desktop_group_name(g), desktop_group_color(g), m, total, group_click,
+                              (void *)(intptr_t)g);
 }
 
 /* ================================================================== grade */
@@ -148,10 +169,13 @@ static lv_obj_t *arrow(lv_obj_t *parent, const char *sym, int dir)
 static void create_grid(lv_obj_t *parent, bool kiosk)
 {
     const bf_palette_t *p = pal();
-    int list[N_APPS + WEB_APPS_MAX], n = 0;
+    int list[N_APPS + BF_GRP__N + WEB_APPS_MAX], n = 0;
     for(int i = 0; i < N_APPS; i++)
         if(!kiosk || ((settings()->home_apps >> i & 1u) && i != I_SETTINGS)) list[n++] = i;
     if(!kiosk) {                                   /* o quiosque mostra só os apps escolhidos */
+        int tmp[1];
+        for(int g = 0; g < BF_GRP__N; g++)
+            if(g == BF_GRP_GAMES || apps_in_group((bf_group_t)g, tmp, 1)) list[n++] = -1 - g;
         web_apps_load();
         for(int j = 0; j < web_apps_count(); j++) list[n++] = N_APPS + j;
     }
@@ -184,7 +208,8 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
         for(int k = pg * PER_PAGE; k < n && k < (pg + 1) * PER_PAGE; k++) {
             int i = list[k];
             lv_obj_t *t;
-            if(i < N_APPS)
+            if(i < 0) t = group_tile(grid, (bf_group_t)(-1 - i));
+            else if(i < N_APPS)
                 t = tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click,
                                 (void *)(intptr_t)i);
             else {

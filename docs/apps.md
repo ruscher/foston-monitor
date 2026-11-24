@@ -1,5 +1,7 @@
 # Apps do BigFoston OS (shell LVGL no FOSTON)
 
+Apps de fora do sistema (pacotes `.bfapp`, grupos como Jogos): [jogos-e-pacotes](jogos-e-pacotes/00-visao-geral.md).
+
 Estado em 2026-11-21. Todos testados no aparelho, salvo indicação.
 
 | App | Estado | Notas |
@@ -10,6 +12,7 @@ Estado em 2026-11-21. Todos testados no aparelho, salvo indicação.
 | Livros | **FUNCIONANDO** | EPUB, TXT, PDF (texto) e SVG — detalhes abaixo |
 | Galeria | **FUNCIONANDO** | JPEG, PNG, GIF (animado no visualizador), BMP e SVG — detalhes abaixo |
 | GPS (Big GPS) | **FUNCIONANDO** | mapa offline em tela cheia, destino por toque longo ou busca, rotas para carro/moto/bicicleta/a pé, navegação com voz, favoritos e recentes — [big-gps](big-gps/00-visao-geral.md); estado do receptor no botão de satélites ([gps.md](gps.md)) |
+| SC Controller (pacote, grupo Jogos) | **FUNCIONANDO** | teste ao vivo, mapa do SDL GameControllerDB e registro de controles; instalado por `.bfapp` — [jogos-e-pacotes](jogos-e-pacotes/00-visao-geral.md) |
 | TV, Bluetooth, FM | NÃO IMPLEMENTADO | dependem de hardware/firmware proprietário (ver [04-linux-port.md](04-linux-port.md)) |
 
 ## Arquivos: gravação

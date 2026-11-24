@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- SC Controller para o BigFoston: controle com o direcional e os quatro botões vazados.
+       Só a forma importa (o shell pinta de branco sobre o degradê da cor do app). -->
+  <path fill="#fff" fill-rule="evenodd" d="
+    M17 14 H47 C57 14 61 23 62.6 34 C64 45 61.5 54 55 54 C49.5 54 46.5 47.5 43.5 43 H20.5
+    C17.5 47.5 14.5 54 9 54 C2.5 54 0 45 1.4 34 C3 23 7 14 17 14 Z
+    M14 25 h5 v5 h5 v5 h-5 v5 h-5 v-5 h-5 v-5 h5 Z
+    M43.5 26.5 a3.5 3.5 0 1 0 7 0 a3.5 3.5 0 1 0 -7 0 Z
+    M50.5 33.5 a3.5 3.5 0 1 0 7 0 a3.5 3.5 0 1 0 -7 0 Z
+    M43.5 40.5 a3.5 3.5 0 1 0 7 0 a3.5 3.5 0 1 0 -7 0 Z
+    M36.5 33.5 a3.5 3.5 0 1 0 7 0 a3.5 3.5 0 1 0 -7 0 Z
+    M27 22 h10 a2 2 0 0 1 0 4 h-10 a2 2 0 0 1 0 -4 Z"/>
+</svg>

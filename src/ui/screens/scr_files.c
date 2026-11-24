@@ -21,6 +21,7 @@
 #include "../core/osd.h"
 #include "../core/sdctl.h"
 #include "../core/player.h"
+#include "../core/apps.h"
 #include "../assets/icons/bf_icons.h"
 #include <dirent.h>
 #include <stdio.h>
@@ -36,7 +37,7 @@
 #define IMG_MAX     (8 * 1024 * 1024)
 #define C_FILES     0xe0a40c
 
-typedef enum { K_DIR, K_AUDIO, K_IMAGE, K_BOOK, K_TEXT, K_OTHER } kind_t;
+typedef enum { K_DIR, K_AUDIO, K_IMAGE, K_BOOK, K_TEXT, K_PKG, K_OTHER } kind_t;
 
 typedef struct {
     char *name;
@@ -71,12 +72,14 @@ static kind_t kind_of(const char *n, bool dir)
 {
     static const char *const audio[] = { "mp3", NULL };
     static const char *const book[] = { "epub", "pdf", NULL };
+    static const char *const pkg[] = { "bfapp", NULL };
     static const char *const text[] = { "txt", "log", "conf", "cfg", "ini", "sh", "desktop", "md",
                                         "csv", "json", "xml", "srt", "nmea", "sha256", "c", "h", NULL };
     if(dir) return K_DIR;
     if(ext_in(n, audio)) return K_AUDIO;
     if(img_is_image(n)) return K_IMAGE;           /* JPEG, PNG, BMP, GIF, SVG (core/imgload) */
     if(ext_in(n, book)) return K_BOOK;
+    if(ext_in(n, pkg)) return K_PKG;              /* app para instalar (core/pkg.c) */
     if(ext_in(n, text)) return K_TEXT;
     return K_OTHER;
 }
@@ -89,6 +92,7 @@ static const char *kind_symbol(kind_t k)
     case K_IMAGE: return LV_SYMBOL_IMAGE;
     case K_BOOK:  return LV_SYMBOL_FILE;
     case K_TEXT:  return LV_SYMBOL_FILE;
+    case K_PKG:   return LV_SYMBOL_DOWNLOAD;
     default:      return LV_SYMBOL_FILE;
     }
 }
@@ -295,6 +299,7 @@ static void open_entry(lv_event_t *e)
     case K_AUDIO: music_play_file(path); break;
     case K_IMAGE: if(!imgview_open(path)) open_image(path, ents[i].name); break;
     case K_BOOK:  book_open_file(path); break;
+    case K_PKG:   apps_install_ask(path); break;
     default:      open_text(path, ents[i].name); break;    /* texto ou desconhecido: tenta como texto */
     }
 }
@@ -810,6 +815,7 @@ void scr_files_demo(const char *path)
         const char *n = strrchr(path, '/');
         n = n ? n + 1 : path;
         if(kind_of(n, false) == K_IMAGE) { if(!imgview_open(path)) open_image(path, n); }
+        else if(kind_of(n, false) == K_PKG) apps_install_ask(path);
         else open_text(path, n);
         return;
     }

@@ -371,6 +371,9 @@ energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também
 
 ## Controle de jogo
 
+Testar, mapear e registrar controles: app SC Controller, no grupo Jogos
+([jogos-e-pacotes](jogos-e-pacotes/00-visao-geral.md)).
+
 Controles Bluetooth ou USB (`src/ui/core/gamepad.c`) usam a interface inteira, sem foco de
 teclado: o analógico esquerdo move um **cursor** (um segundo indev de ponteiro do LVGL, em
 modo de evento, desenhado na `lv_layer_sys`) e o Xis/A toca onde ele está, como o dedo
@@ -394,12 +397,13 @@ botões viram teclas entregues como as do teclado físico:
   `BTN_TOUCH` (o touchpad do DualShock com o driver da Sony fica de fora). O shell liga o
   `fuzz` dos analógicos (1/64 da faixa) pelo `EVIOCSABS`: parado, o controle não manda
   nenhum evento (medido: 0 em 5 s) e a interface não acorda.
-- **DualShock 4 / DualSense sem driver**: o kernel não tem o `hid-playstation` (o
-  `zImage` + initrd já estão no limite da `\ResidentFlash`), então o `hid-generic`
-  entrega os botões na ordem do relatório HID (□ ✕ ○ △ L1 R1 L2 R2 Share Options L3 R3 PS
-  em `BTN_A`…`BTN_THUMBR`) e o analógico direito em Z/RZ. Fabricante 054c com `BTN_C` e
-  `BTN_Z` declarados = esse mapa; o shell converte para o padrão do Linux (o mesmo do
-  `hid-playstation` e do `xpad`). Sem o driver não há luz, vibração nem nível de bateria.
+- **Mapa de cada controle**: formato do SDL GameControllerDB (`core/padmap.c`). Procura no
+  banco do usuário (controles registrados), nos bancos dos apps instalados (o SC Controller
+  traz 746 modelos para Linux), nas linhas embutidas (DualShock 4 e DualSense pelo Bluetooth
+  sem o `hid-playstation`, que o kernel não tem por falta de espaço na `\ResidentFlash`) e,
+  por fim, no padrão do Linux pelos códigos. Detalhes em
+  [jogos-e-pacotes/03](jogos-e-pacotes/03-mapa-de-controles.md). Sem o driver da Sony não
+  há luz, vibração nem nível de bateria.
 - **Bateria**: o controle do PlayStation nunca desliga sozinho fora do console. Parado
   10 min, o shell pede `disconnect` ao `bfbt-agent` (endereço pelo `EVIOCGUNIQ`, que o BlueZ
   preenche) e o controle desliga; o botão PS o liga e ele reconecta sozinho.

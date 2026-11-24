@@ -415,36 +415,35 @@ enum { DEV_NONE, DEV_KBD, DEV_PAD };
 
 /* teclado: letras, espaço e Enter. Controle de jogo: analógico (X/Y) e botões de gamepad ou
  * joystick. Nenhum dos dois com BTN_TOUCH (touchscreen, touchpad do controle) */
-static int classify(int fd, bool *sony_generic)
+static int classify(int fd, pm_bits_t *bits)
 {
-    unsigned long ev[BITS(EV_MAX + 1)] = { 0 }, keys[BITS(KEY_MAX + 1)] = { 0 }, abs[BITS(ABS_MAX + 1)] = { 0 };
-    *sony_generic = false;
+    unsigned long ev[BITS(EV_MAX + 1)] = { 0 };
+    memset(bits, 0, sizeof *bits);
     if(ioctl(fd, EVIOCGBIT(0, sizeof ev), ev) < 0 || !TEST(EV_KEY, ev)) return DEV_NONE;
-    if(ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0 || TEST(BTN_TOUCH, keys)) return DEV_NONE;
-    if(TEST(KEY_A, keys) && TEST(KEY_Z, keys) && TEST(KEY_SPACE, keys) && TEST(KEY_ENTER, keys)) return DEV_KBD;
-    if(!TEST(EV_ABS, ev) || ioctl(fd, EVIOCGBIT(EV_ABS, sizeof abs), abs) < 0) return DEV_NONE;
-    if(!TEST(ABS_X, abs) || !TEST(ABS_Y, abs) || !(TEST(BTN_GAMEPAD, keys) || TEST(BTN_JOYSTICK, keys)))
+    if(ioctl(fd, EVIOCGBIT(EV_KEY, sizeof bits->key), bits->key) < 0 || pm_bits_test(bits, true, BTN_TOUCH))
         return DEV_NONE;
-    /* PlayStation sem o hid-playstation: BTN_C e BTN_Z existem (o driver não os usa) */
-    struct input_id id = { 0 };
-    ioctl(fd, EVIOCGID, &id);
-    *sony_generic = id.vendor == 0x054c && TEST(BTN_C, keys) && TEST(BTN_Z, keys);
+    if(pm_bits_test(bits, true, KEY_A) && pm_bits_test(bits, true, KEY_Z) && pm_bits_test(bits, true, KEY_SPACE) &&
+       pm_bits_test(bits, true, KEY_ENTER)) return DEV_KBD;
+    if(!TEST(EV_ABS, ev) || ioctl(fd, EVIOCGBIT(EV_ABS, sizeof bits->abs), bits->abs) < 0) return DEV_NONE;
+    if(!pm_bits_test(bits, false, ABS_X) || !pm_bits_test(bits, false, ABS_Y) ||
+       !(pm_bits_test(bits, true, BTN_GAMEPAD) || pm_bits_test(bits, true, BTN_JOYSTICK)))
+        return DEV_NONE;
     return DEV_PAD;
 }
 
 /* faixas dos eixos; nos analógicos o kernel passa a filtrar o tremor (fuzz): o analógico
  * parado não acorda a interface (DS4 parado com o fuzz: 0 eventos em 5 s) */
-static void pad_axes(int fd, gp_axis_t ax[GPA__N])
+static void pad_axes(int fd, const pm_bits_t *bits, gp_axis_t ax[GP_NABS])
 {
-    static const uint16_t code[GPA__N] = { ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y };
-    for(int i = 0; i < GPA__N; i++) {
+    for(unsigned c = 0; c < GP_NABS; c++) {
         struct input_absinfo a;
-        ax[i] = (gp_axis_t){ 0 };
-        if(ioctl(fd, EVIOCGABS(code[i]), &a) < 0) continue;
-        ax[i] = (gp_axis_t){ a.minimum, a.maximum, a.flat, a.maximum > a.minimum };
-        if(i < GPA_HX && a.fuzz == 0 && a.maximum - a.minimum >= 64) {
+        ax[c] = (gp_axis_t){ 0 };
+        if(!pm_bits_test(bits, false, c) || ioctl(fd, EVIOCGABS(c), &a) < 0) continue;
+        ax[c] = (gp_axis_t){ a.minimum, a.maximum, a.maximum > a.minimum };
+        bool hat = c >= ABS_HAT0X && c <= ABS_HAT3Y;
+        if(!hat && a.fuzz == 0 && a.maximum - a.minimum >= 64) {
             a.fuzz = (a.maximum - a.minimum) / 64;
-            ioctl(fd, EVIOCSABS(code[i]), &a);
+            ioctl(fd, EVIOCSABS(c), &a);
         }
     }
 }
@@ -504,32 +503,34 @@ static void scan(bool announce)
         int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
         if(fd < 0) fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if(fd < 0) continue;
-        bool sony = false;
-        int kind = classify(fd, &sony);
+        static pm_bits_t bits;
+        int kind = classify(fd, &bits);
+        if(kind == DEV_NONE) { close(fd); continue; }
+        char name[64] = "";
+        if(ioctl(fd, EVIOCGNAME(sizeof name - 1), name) < 0 || !name[0])
+            snprintf(name, sizeof name, "%s", tr(kind == DEV_PAD ? S_PAD_GENERIC : S_KBD_GENERIC));
+        name[sizeof name - 1] = 0;
+        struct input_id id = { 0 };
+        ioctl(fd, EVIOCGID, &id);
         int pad = -1;
         if(kind == DEV_PAD) {
-            gp_axis_t ax[GPA__N];
+            static gp_axis_t ax[GP_NABS];
             char addr[18];
-            pad_axes(fd, ax);
+            pad_axes(fd, &bits, ax);
             pad_addr(fd, addr);
-            pad = gamepad_attach(sony, ax, addr);
-            if(pad < 0) kind = DEV_NONE;
+            gp_id_t gid = { id.bustype, id.vendor, id.product, id.version };
+            pad = gamepad_attach(name, &gid, &bits, ax, addr);
+            if(pad < 0) { close(fd); continue; }
         }
-        if(kind == DEV_NONE) { close(fd); continue; }
         kdev_t *k = &devs[ndev++];
         k->fd = fd;
         k->pad = pad;
         snprintf(k->path, sizeof k->path, "%s", path);
-        k->name[0] = 0;
-        if(ioctl(fd, EVIOCGNAME(sizeof k->name - 1), k->name) < 0 || !k->name[0])
-            snprintf(k->name, sizeof k->name, "%s", tr(pad >= 0 ? S_PAD_GENERIC : S_KBD_GENERIC));
-        k->name[sizeof k->name - 1] = 0;
-        struct input_id id = { 0 };
-        ioctl(fd, EVIOCGID, &id);
+        snprintf(k->name, sizeof k->name, "%s", name);
         k->bt = id.bustype == BUS_BLUETOOTH;
         if(pad < 0) set_leds(fd);
-        fprintf(stderr, "bigfoston: %s em %s: %s (%s%s)\n", pad >= 0 ? "controle" : "teclado", path, k->name,
-                k->bt ? "Bluetooth" : "USB/outro", sony ? ", PlayStation sem driver" : "");
+        fprintf(stderr, "bigfoston: %s em %s: %s (%s)\n", pad >= 0 ? "controle" : "teclado", path, k->name,
+                k->bt ? "Bluetooth" : "USB/outro");
         if(announce && settings()->notify)
             osd_show(k->bt ? &bf_icon_bluetooth : &bf_icon_usb, 0x3584e4, tr(pad >= 0 ? S_PAD_IN : S_KBD_IN), k->name);
     }

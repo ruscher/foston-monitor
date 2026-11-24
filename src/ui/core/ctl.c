@@ -3,6 +3,7 @@
 #include "nav.h"
 #include "hwkbd.h"
 #include "perfui.h"
+#include "apps.h"
 #include "../screens/screens.h"
 #include "lvgl.h"
 #include <errno.h>
@@ -38,6 +39,11 @@ static void command(char *l)
     else if(!strncmp(l, "page ", 5)) scr_home_show_page(atoi(l + 5));
     else if(!strcmp(l, "app perfmode")) nav_go(SCR_PERFMODE, 0);
     else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
+    else if(!strncmp(l, "group ", 6)) nav_go(SCR_APPGROUP, atoi(l + 6));
+    else if(!strcmp(l, "app sc-controller")) nav_go(SCR_SCC, 0);
+    else if(!strncmp(l, "install-ask ", 12)) apps_install_ask(l + 12);   /* o diálogo "Instalar?" */
+    else if(!strncmp(l, "install ", 8)) apps_install_now(l + 8);       /* sem perguntar (bfapp.py) */
+    else if(!strncmp(l, "uninstall ", 10)) apps_uninstall_now(l + 10);
     else if(!strncmp(l, "key ", 4)) {             /* tecla crua do teclado físico: "key 30 1" */
         int code = 0, val = 0;
         if(sscanf(l + 4, "%d %d", &code, &val) == 2 && code > 0 && code < 0x300) hwkbd_feed((uint16_t)code, val);

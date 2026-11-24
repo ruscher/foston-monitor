@@ -29,6 +29,8 @@ int screenshot_run(const char *dir)
 #include "webremote.h"
 #include "hwkbd.h"
 #include "gamepad.h"
+#include "apps.h"
+#include "padmap.h"
 #include <linux/input.h>
 #include "lodepng.h"
 #include <stdio.h>
@@ -259,10 +261,22 @@ static void gamepad_tests(void)
 {
     /* DualShock 4 sem driver (hid-generic): □=0x130 ✕=0x131 ○=0x132 △=0x133 ... PS=0x13c,
      * analógicos 0..255, direcional no HAT */
-    gp_axis_t ax[GPA__N];
-    for(int i = 0; i < GPA__N; i++) ax[i] = (gp_axis_t){ 0, 255, 0, true };
-    ax[GPA_HX] = ax[GPA_HY] = (gp_axis_t){ -1, 1, 0, true };
-    int ds4 = gamepad_attach(true, ax, "");
+    static gp_axis_t ax[GP_NABS];
+    static pm_bits_t bits, sbits;
+    for(unsigned c = ABS_X; c <= ABS_RZ; c++) { ax[c] = (gp_axis_t){ 0, 255, true }; pm_bits_set(&bits, false, c); }
+    ax[ABS_HAT0X] = ax[ABS_HAT0Y] = (gp_axis_t){ -1, 1, true };
+    pm_bits_set(&bits, false, ABS_HAT0X);
+    pm_bits_set(&bits, false, ABS_HAT0Y);
+    sbits = bits;
+    for(unsigned c = 0x130; c <= 0x13d; c++) pm_bits_set(&bits, true, c);
+    static const unsigned skeys[] = { BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR, BTN_TL2, BTN_TR2,
+                                      BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR };
+    for(size_t i = 0; i < sizeof skeys / sizeof skeys[0]; i++) pm_bits_set(&sbits, true, skeys[i]);
+    const gp_id_t ds4id = { BUS_BLUETOOTH, 0x054c, 0x09cc, 0x0100 }, stdid = { BUS_BLUETOOTH, 0x1234, 0x5678, 1 };
+    int ds4 = gamepad_attach("Wireless Controller", &ds4id, &bits, ax, "");
+    gp_info_t gi;
+    kcheck("controle: DS4 sem driver usa o mapa embutido",
+           gamepad_info(ds4, &gi) && gi.map_from == GPM_BUILTIN && !strcmp(gi.guid, "050000004c050000cc09000000010000"));
     kcheck("controle: conectado", ds4 >= 0 && gamepad_count() == 1);
     for(int a = ABS_X; a <= ABS_RZ; a++) pev(ds4, EV_ABS, (uint16_t)a, 128);
 
@@ -347,7 +361,8 @@ static void gamepad_tests(void)
     kcheck("controle: △ confirma o diálogo", dlg_answer == 1 && !dialog_is_open());
 
     /* controle com o mapa padrão (hid-playstation, xpad...): BTN_EAST (0x131) volta */
-    int std = gamepad_attach(false, ax, "");
+    int std = gamepad_attach("Controle Padrão", &stdid, &sbits, ax, "");
+    kcheck("controle padrão: mapa do Linux", gamepad_info(std, &gi) && gi.map_from == GPM_DEFAULT);
     go(SCR_SETTINGS, 0);
     nav_go(SCR_KEYBOARD, 0); pump(300);
     pbtn(std, BTN_EAST);
@@ -358,6 +373,131 @@ static void gamepad_tests(void)
     pump(50);
     kcheck("controle: cursor some ao desconectar", !gamepad_cursor(NULL, NULL) && gamepad_count() == 0);
     printf("controle: %d falha(s) no total com o teclado\n", kb_fail);
+}
+
+/* ---------------------------------------------- apps instalados e SC Controller */
+static void apps_tests(void)
+{
+    const char *pkg = getenv("BIGFOSTON_TEST_BFAPP");      /* pkg/apps/sc-controller.bfapp */
+    if(!pkg || !*pkg) { printf("apps: sem BIGFOSTON_TEST_BFAPP, testes pulados\n"); return; }
+    apps_uninstall_now("sc-controller");                    /* sobra de outra rodada */
+    static gp_axis_t ax[GP_NABS];
+    static pm_bits_t bits;
+    for(unsigned c = ABS_X; c <= ABS_RZ; c++) { ax[c] = (gp_axis_t){ 0, 255, true }; pm_bits_set(&bits, false, c); }
+    ax[ABS_HAT0X] = ax[ABS_HAT0Y] = (gp_axis_t){ -1, 1, true };
+    pm_bits_set(&bits, false, ABS_HAT0X);
+    pm_bits_set(&bits, false, ABS_HAT0Y);
+    for(unsigned c = 0x130; c <= 0x13d; c++) pm_bits_set(&bits, true, c);
+    const gp_id_t ds4id = { BUS_BLUETOOTH, 0x054c, 0x09cc, 0x0100 };
+    int ds4 = gamepad_attach("Wireless Controller", &ds4id, &bits, ax, "");
+    for(int a = ABS_X; a <= ABS_RZ; a++) pev(ds4, EV_ABS, (uint16_t)a, 128);
+    gp_info_t gi;
+
+    /* Jogos existe mesmo vazio */
+    go(SCR_APPGROUP, BF_GRP_GAMES); pump(300);
+    shot("44a-jogos-vazio");
+    kcheck("apps: Jogos vazio", apps_count() == 0 && nav_current().scr == SCR_APPGROUP);
+
+    /* Arquivos -> .bfapp: "Instalar?"; Enter = Instalar */
+    apps_install_ask(pkg); pump(200);
+    shot("44b-instalar");
+    dialog_key(true); pump(300);
+    shot("44c-instalado");
+    const bf_app_entry_t *a = apps_find("sc-controller");
+    kcheck("apps: instalado em Jogos", a && apps_group_of(a) == BF_GRP_GAMES && !strcmp(a->name, "SC Controller"));
+    kcheck("apps: ícone do pacote", a && apps_icon(a) != NULL);
+    dialog_key(false); pump(100);
+    kcheck("controle: mapa agora do banco do SC Controller", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
+
+    go(SCR_HOME, HOME_ARG_APPS); pump(200);
+    scr_home_show_page(1); pump(300);
+    shot("44d-apps-pasta-jogos");
+    go(SCR_APPGROUP, BF_GRP_GAMES); pump(400);
+    shot("44e-grupo-jogos");
+
+    /* abre o app pelo .desktop (X-BigFoston-Screen) */
+    apps_launch(a); pump(400);
+    kcheck("apps: abre o SC Controller", nav_current().scr == SCR_SCC);
+    shot("44f-scc-controles");
+
+    /* testador: o controle não mexe na interface */
+    scr_scc_demo_tab(1); pump(200);
+    pev(ds4, EV_KEY, 0x131, 1);                      /* ✕ */
+    pev(ds4, EV_KEY, 0x134, 1);                      /* L1 */
+    pev(ds4, EV_ABS, ABS_X, 40);
+    pev(ds4, EV_ABS, ABS_Y, 200);
+    pev(ds4, EV_ABS, ABS_RY, 230);                   /* R2 analógico */
+    pev(ds4, EV_ABS, ABS_HAT0X, 1);
+    pump(200);
+    shot("44g-scc-testar");
+    pev(ds4, EV_KEY, 0x131, 0);
+    pev(ds4, EV_KEY, 0x134, 0);
+    pev(ds4, EV_ABS, ABS_X, 128);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    pev(ds4, EV_ABS, ABS_RY, 128);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pbtn(ds4, 0x132);                                 /* ○: no testador não volta */
+    pump(200);
+    kcheck("scc: no testador o controle não navega", nav_current().scr == SCR_SCC);
+    pev(ds4, EV_KEY, 0x132, 1);                       /* ○ segurado 2 s: sai do teste */
+    pump(2300);
+    pev(ds4, EV_KEY, 0x132, 0);
+    pump(100);
+    pbtn(ds4, 0x132);                                 /* fora do teste, ○ volta */
+    pump(300);
+    kcheck("scc: segurar ○ sai do testador", nav_current().scr == SCR_APPGROUP);
+
+    /* registro: as 21 etapas como o DS4 sem driver, com os gatilhos em repouso no 0 */
+    apps_launch(apps_find("sc-controller")); pump(400);
+    pev(ds4, EV_ABS, ABS_RX, 0);
+    pev(ds4, EV_ABS, ABS_RY, 0);
+    scr_scc_demo_tab(2); pump(200);
+    shot("44h-scc-registrar");
+    scr_scc_demo_tab(3); pump(100);
+    shot("44i-scc-registrar-passo");
+    static const struct { uint16_t t, c; int32_t on, off; } seq[] = {
+        { EV_KEY, 0x131, 1, 0 }, { EV_KEY, 0x132, 1, 0 }, { EV_KEY, 0x130, 1, 0 }, { EV_KEY, 0x133, 1, 0 },
+        { EV_KEY, 0x134, 1, 0 }, { EV_KEY, 0x135, 1, 0 }, { EV_ABS, ABS_RX, 255, 0 }, { EV_ABS, ABS_RY, 255, 0 },
+        { EV_KEY, 0x138, 1, 0 }, { EV_KEY, 0x139, 1, 0 }, { EV_KEY, 0x13c, 1, 0 }, { EV_KEY, 0x13a, 1, 0 },
+        { EV_KEY, 0x13b, 1, 0 }, { EV_ABS, ABS_HAT0Y, -1, 0 }, { EV_ABS, ABS_HAT0Y, 1, 0 },
+        { EV_ABS, ABS_HAT0X, -1, 0 }, { EV_ABS, ABS_HAT0X, 1, 0 }, { EV_ABS, ABS_X, 255, 128 },
+        { EV_ABS, ABS_Y, 255, 128 }, { EV_ABS, ABS_Z, 255, 128 }, { EV_ABS, ABS_RZ, 255, 128 },
+    };
+    for(size_t k = 0; k < sizeof seq / sizeof seq[0]; k++) {
+        pev(ds4, seq[k].t, seq[k].c, seq[k].on);
+        pev(ds4, seq[k].t, seq[k].c, seq[k].off);
+        pump(30);
+    }
+    pump(200);
+    shot("44j-scc-registrar-fim");
+    scr_scc_demo_tab(4); pump(300);
+    kcheck("scc: registro salvo e usado", gamepad_info(ds4, &gi) && gi.map_from == GPM_USER);
+    /* o mapa ensinado é o mesmo da linha oficial do banco */
+    char path[320], line[1024] = "";
+    gamepad_user_db(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if(f) { if(!fgets(line, sizeof line, f)) line[0] = 0; fclose(f); }
+    padmap_t mine, off;
+    padmap_parse(line, &mine);
+    padmap_parse("050000004c050000cc09000000010000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,platform:Linux,", &off);
+    bool same = true;
+    for(int c = 0; c < PC__N; c++)
+        if(memcmp(&mine.src[c], &off.src[c], sizeof mine.src[c])) {
+            same = false;
+            printf("controle: registro difere em %s\n", padmap_ctl_name(c));
+        }
+    kcheck("scc: registro igual ao banco do SDL", same);
+    /* o registro vale na interface: ✕ toca */
+    pev(ds4, EV_ABS, ABS_RX, 128);
+    pev(ds4, EV_ABS, ABS_RY, 128);
+    scr_scc_demo_tab(5); pump(300);
+    kcheck("scc: esquecer volta ao banco", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
+
+    /* desinstalar: o grupo fica vazio e o controle volta ao mapa embutido */
+    kcheck("apps: desinstala", apps_uninstall_now("sc-controller") && !apps_find("sc-controller"));
+    kcheck("controle: sem o app, mapa embutido", gamepad_info(ds4, &gi) && gi.map_from == GPM_BUILTIN);
+    gamepad_detach(ds4);
+    printf("apps: %d falha(s) no total\n", kb_fail);
 }
 
 int screenshot_run(const char *dir)
@@ -475,6 +615,7 @@ int screenshot_run(const char *dir)
     unsetenv("BIGFOSTON_FM_STATUS");
     keyboard_tests();
     gamepad_tests();
+    apps_tests();
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
