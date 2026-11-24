@@ -125,7 +125,9 @@ static bool eng_start(char *err, size_t errn)
         /* a interface primeiro: decodificando, o motor ocupa a CPU e, com a mesma prioridade,
          * o toque e a barra da tela cheia chegavam segundos atrasados (medido 24/11/2026) */
         setpriority(PRIO_PROCESS, 0, 5);
-        char *av[] = { bin, "--keys", keys, NULL };
+        /* o relay do PC primeiro (vídeo e som decodificados lá, tools/bigfoston/brp-relay-install.sh);
+         * sem ele, o motor decodifica aqui (modo direto) */
+        char *av[] = { bin, "--keys", keys, "--relay", HOST_USB, NULL };
         execv(bin, av);
         _exit(127);
     }
@@ -532,11 +534,12 @@ static bool inv_off;
 
 static void ui_draw(bool on)
 {
-    /* no aparelho, religar o redesenho não trazia a barra de volta (no simulador, sim); a camada
-     * preta da tela cheia já cobre a interface, então o redesenho fica sempre ligado: no máximo
-     * o relógio do alto, uma vez por minuto, pisca um pedaço preto até o quadro seguinte */
-    (void)on;
-    inv_off = false;
+    /* tela cheia sem a barra: a interface não se redesenha (os ícones do topo, o relógio, se
+     * redesenhavam por baixo da camada preta e piscavam quadrados pretos sobre o vídeo). O LVGL
+     * conta liga/desliga; aqui cada lado é chamado uma vez só */
+    if(on == !inv_off) return;
+    inv_off = !on;
+    lv_display_enable_invalidation(lv_display_get_default(), on);
 }
 
 static void bar_y_anim(void *o, int32_t v) { lv_obj_set_style_translate_y(o, v, 0); }

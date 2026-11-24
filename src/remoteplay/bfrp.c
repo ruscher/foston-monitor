@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -48,6 +49,12 @@
 #include "errors.h"
 #include "video.h"
 #include "audio.h"
+#include "relay.h"
+#include "proto.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <poll.h>
 
 static SERVER_DATA server;
@@ -58,6 +65,16 @@ static pthread_mutex_t out_mx = PTHREAD_MUTEX_INITIALIZER;
 static void out(const char *fmt, ...)
 {
     va_list ap;
+#ifdef BFRP_RELAY
+    char b[600];
+    va_start(ap, fmt);
+    int n = vsnprintf(b, sizeof b, fmt, ap);
+    va_end(ap);
+    if(n < 0) return;
+    if(n >= (int)sizeof b) n = (int)sizeof b - 1;
+    relay_send('E', b, (uint32_t)n);
+    fprintf(stderr, "> %s\n", b);
+#else
     pthread_mutex_lock(&out_mx);
     va_start(ap, fmt);
     vfprintf(stdout, fmt, ap);
@@ -65,6 +82,7 @@ static void out(const char *fmt, ...)
     fputc('\n', stdout);
     fflush(stdout);
     pthread_mutex_unlock(&out_mx);
+#endif
 }
 
 /* nomes vindos do host: sem quebras de linha nem o separador '|' (o protocolo é por linhas) */
@@ -234,6 +252,18 @@ static void cmd_start(int app, int w, int h, int fps, int kbps, int video, int v
     cfg.supportedVideoFormats = VIDEO_FORMAT_H264;
     cfg.encryptionFlags = ENCFLG_NONE;
     want_video = video != 0;
+#ifdef BFRP_RELAY
+    if(want_video) {
+        /* o relay decodifica no PC: pede o vídeo bom e rápido do Sunshine (no próprio PC) e reduz
+         * ao tamanho do FOSTON; a largura pedida pela tela vira a do quadro enviado */
+        relay_set_target(w);
+        cfg.width = 1280;
+        cfg.height = 720;
+        cfg.fps = 60;
+        cfg.bitrate = 12000;
+        cfg.packetSize = 1392;
+    }
+#endif
     int r = gs_start_app(&server, &cfg, app, false, false, 1);
     if(r != GS_OK) { out("ERR start %d %s", r, gs_error ? gs_error : ""); return; }
 
@@ -344,11 +374,117 @@ static void command(char *l)
     else out("ERR comando");
 }
 
+#ifdef BFRP_RELAY
+static void serve(int c)
+{
+    int one = 1, snd = 1 << 20;
+    setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+    setsockopt(c, SOL_SOCKET, SO_SNDBUF, &snd, sizeof snd);
+    relay_attach(c);
+    out("READY");
+    proto_rx_t rx = { 0 };
+    rx.cap = 64 * 1024;
+    rx.buf = malloc(rx.cap);
+    time_t last = 0;
+    while(rx.buf) {
+        struct pollfd p = { c, POLLIN, 0 };
+        int pr = poll(&p, 1, 1000);
+        if(pr < 0 && errno == EINTR) continue;
+        if(pr > 0) {
+            if(rx.n == rx.cap) break;
+            ssize_t n = read(c, rx.buf + rx.n, rx.cap - rx.n);
+            if(n <= 0) break;
+            rx.n += (size_t)n;
+            char type;
+            uint8_t *d;
+            uint32_t l;
+            size_t used;
+            int r;
+            while((r = proto_take(&rx, &type, &d, &l, &used)) == 1) {
+                if(type == 'Q') relay_ack();
+                else if(type == 'K' && l < 500) {
+                    char cmd[512];
+                    memcpy(cmd, d, l);
+                    cmd[l] = 0;
+                    command(cmd);
+                }
+                memmove(rx.buf, rx.buf + used, rx.n - used);
+                rx.n -= used;
+            }
+            if(r < 0) break;
+        }
+        time_t t = time(NULL);
+        if(streaming && want_video && t - last >= 2) {
+            unsigned long f, e, dec, sent, ap, al, au;
+            unsigned long long us, bytes;
+            video_stats(&f, &e, &us);
+            relay_stats(&dec, &sent, &bytes);
+            audio_stats(&ap, &al, &au);
+            double dt = last ? (double)(t - last) : 2.0;
+            out("VSTATS %.1f %lu 0", f / dt, e);
+            fprintf(stderr, "relay: decodificados %.1f/s, enviados %.1f/s, desenhados %.1f/s, %.0f KB/s, som %lu\n",
+                    dec / dt, sent / dt, f / dt, bytes / dt / 1024, ap);
+            last = t;
+        }
+    }
+    /* o FOSTON saiu ou a rede USB caiu: nada preso no PC */
+    if(streaming) cmd_stop();
+    relay_attach(-1);
+    free(rx.buf);
+}
+
+/* conecta no FOSTON (que escuta enquanto o app Big Remote Play está aberto): o firewall do PC
+ * só libera as portas do Sunshine, e uma conexão que sai do PC passa. Tenta a cada 0,5 s. */
+static int connect_foston(const char *addr, int port)
+{
+    int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+    if(s < 0) return -1;
+    struct sockaddr_in a = { 0 };
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    if(inet_pton(AF_INET, addr, &a.sin_addr) != 1) { close(s); return -1; }
+    int r = connect(s, (struct sockaddr *)&a, sizeof a);
+    if(r < 0 && errno != EINPROGRESS) { close(s); return -1; }
+    struct pollfd p = { s, POLLOUT, 0 };
+    if(r < 0 && (poll(&p, 1, 400) != 1 || (p.revents & (POLLERR | POLLHUP)))) { close(s); return -1; }
+    int err = 0;
+    socklen_t el = sizeof err;
+    getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &el);
+    if(err) { close(s); return -1; }
+    fcntl(s, F_SETFL, 0);
+    return s;
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
-    for(int i = 1; i + 1 < argc; i++)
+    const char *addr = "192.168.7.2";                    /* o FOSTON pela rede USB */
+    for(int i = 1; i + 1 < argc; i++) {
         if(!strcmp(argv[i], "--keys")) snprintf(key_dir, sizeof key_dir, "%s", argv[++i]);
+        else if(!strcmp(argv[i], "--foston")) addr = argv[++i];
+    }
+    mkdir(key_dir, 0700);
+    fprintf(stderr, "relay: procurando o FOSTON em %s:%d\n", addr, RELAY_PORT);
+    for(;;) {
+        int c = connect_foston(addr, RELAY_PORT);
+        if(c < 0) { usleep(500000); continue; }
+        fprintf(stderr, "relay: FOSTON conectado\n");
+        serve(c);
+        close(c);
+        fprintf(stderr, "relay: FOSTON saiu\n");
+    }
+}
+#else
+int main(int argc, char **argv)
+{
+    signal(SIGPIPE, SIG_IGN);
+    const char *relay = NULL;
+    for(int i = 1; i + 1 < argc; i++) {
+        if(!strcmp(argv[i], "--keys")) snprintf(key_dir, sizeof key_dir, "%s", argv[++i]);
+        else if(!strcmp(argv[i], "--relay")) relay = argv[++i];
+    }
+    /* o relay do PC primeiro (vídeo e som decodificados lá); sem ele, o modo direto */
+    if(relay && relay_client_main(relay, RELAY_PORT) == 0) return 0;
     mkdir(key_dir, 0700);
     out("READY");
     char line[512];
@@ -392,3 +528,4 @@ int main(int argc, char **argv)
     if(streaming) cmd_stop();
     return 0;
 }
+#endif

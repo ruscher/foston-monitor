@@ -33,6 +33,8 @@ static int fb_stride = 800, fb_w = 800, fb_h = 480;
 static int out_x, out_y, out_w, out_h;
 static int full_out_h;                                  /* altura da área (sem o CLIP) */
 static atomic_int show = 1;
+static const uint8_t *dirty_rows;                       /* relay: linhas de origem que mudaram */
+static atomic_int force_full = 1;                        /* redesenho inteiro no próximo quadro */
 static AVCodecContext *vc;
 static AVPacket *pk;
 static AVFrame *fr;
@@ -92,10 +94,11 @@ int video_open(int x, int y, int w, int h)
     if(w > fb_w - x) w = fb_w - x;
     if(h > fb_h - y) h = fb_h - y;
     out_x = x; out_y = y; out_w = w; out_h = h;
+    atomic_store(&force_full, 1);
     return w > 0 && h > 0 ? 0 : -1;
 }
 
-void video_show(int on) { atomic_store(&show, on); }
+void video_show(int on) { atomic_store(&show, on); if(on) atomic_store(&force_full, 1); }
 
 static void blit2x(const AVFrame *f)
 {
@@ -155,6 +158,9 @@ static int ct_x, ct_y, ct_w, ct_h;                     /* conteúdo, sem as faix
 static double vp_x, vp_y, vp_w, vp_h;                  /* recorte mostrado, em pontos do quadro */
 static int zoom_pct = 100;
 static double cen_x = -1, cen_y = -1;                  /* centro pedido (-1: o do conteúdo) */
+static int passthrough;                                /* relay: o quadro já vem cortado e no tamanho */
+
+void video_passthrough(int on) { passthrough = on; }
 
 static bool black_row(const AVFrame *f, int y, int x0, int x1)
 {
@@ -305,7 +311,11 @@ static void blit_smooth(const AVFrame *f)
     static unsigned long n;
     int w = f->width, h = f->height, W = out_w & ~1, H = out_h;
     if(w > 1022 || W > 1024 || w < 2 || h < 2) return;
-    if(n++ % 15 == 0 || w != fr_w || h != fr_h) {
+    if(passthrough) {                                    /* relay: o quadro inteiro, sem corte nem zoom */
+        pthread_mutex_lock(&vp_mx);
+        fr_w = w; fr_h = h; ct_x = ct_y = 0; ct_w = w; ct_h = h; zoom_pct = 100; cen_x = cen_y = -1;
+        pthread_mutex_unlock(&vp_mx);
+    } else if(n++ % 15 == 0 || w != fr_w || h != fr_h) {
         if(w != fr_w || h != fr_h) { pthread_mutex_lock(&vp_mx); fr_w = w; fr_h = h; ct_w = 0; pthread_mutex_unlock(&vp_mx); }
         autocrop(f);
     }
@@ -333,11 +343,54 @@ static void blit_smooth(const AVFrame *f)
     }
 }
 
+/* Ampliação 2x suave e rápida (relay: o PC manda exatamente a metade da área): sem tabelas de
+ * posição. Cada linha de origem vira uma linha dobrada em palavras de 32 bits (ponto, média com o
+ * seguinte); as linhas de saída pares copiam, as ímpares são a média de duas linhas dobradas.
+ * Medido no FOSTON: a genérica 320 -> 800x450 gastava ~23 ms por quadro. */
+
+static void blit2x_smooth(const AVFrame *f)
+{
+    static uint32_t dl[2][512], avg[512];               /* linhas dobradas e a média (com cache) */
+    int w = f->width, h = f->height, words = w;          /* w pontos de origem -> w palavras */
+    if(w > 512 || w < 2 || h < 2) return;
+    int H = out_h;                                       /* linhas a pintar (o CLIP pode cortar) */
+    const uint8_t *dr = atomic_exchange(&force_full, 0) ? NULL : dirty_rows;
+    int cur = 0;
+    for(int sy = 0; sy < h; sy++) {
+        /* a linha dobrada sy entra nas saídas 2sy-1, 2sy e 2sy+1 */
+        bool here = !dr || dr[sy], before = sy > 0 && (!dr || dr[sy - 1]), after = sy + 1 < h && dr && dr[sy + 1];
+        if(!here && !before && !after) { cur ^= 1; continue; }
+        uint32_t *o = dl[cur];
+        const uint8_t *yy = f->data[0] + sy * f->linesize[0];
+        const uint8_t *u = f->data[1] + (sy / 2) * f->linesize[1], *v = f->data[2] + (sy / 2) * f->linesize[2];
+        uint16_t prev = 0;
+        for(int x = 0; x < w; x += 2) {
+            int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
+            uint16_t a = px(yy[x], rv, g, bu), b = px(yy[x + 1], rv, g, bu);
+            if(x) o[x - 1] |= (uint32_t)AVG16(prev, a) << 16;   /* o meio-termo do par anterior */
+            o[x] = (uint32_t)a | (uint32_t)AVG16(a, b) << 16;
+            o[x + 1] = b;
+            prev = b;
+        }
+        o[w - 1] |= (uint32_t)prev << 16;               /* a borda repete o último ponto */
+        int oy = sy * 2;
+        if(sy > 0 && (here || before) && oy - 1 < H) {  /* linha ímpar anterior: média das duas */
+            const uint32_t *a = dl[cur ^ 1];
+            for(int i = 0; i < words; i++) avg[i] = AVG32(a[i], o[i]);
+            memcpy(fb + (out_y + oy - 1) * fb_stride + out_x, avg, (size_t)words * 4);   /* em rajada */
+        }
+        if(here && oy < H) memcpy(fb + (out_y + oy) * fb_stride + out_x, o, (size_t)words * 4);
+        cur ^= 1;
+    }
+    int last = h * 2 - 1;                                /* a última linha ímpar repete a última */
+    if(last < H && (!dr || dr[h - 1])) memcpy(fb + (out_y + last) * fb_stride + out_x, dl[cur ^ 1], (size_t)words * 4);
+}
+
 static atomic_int smooth = 1;
 static atomic_int clip_rows;                         /* linhas de baixo que não são desenhadas (barra) */
 
 void video_smooth(int on) { atomic_store(&smooth, on); }
-void video_clip(int rows) { atomic_store(&clip_rows, rows < 0 ? 0 : rows); }
+void video_clip(int rows) { atomic_store(&clip_rows, rows < 0 ? 0 : rows); atomic_store(&force_full, 1); }
 
 static void blit(const AVFrame *f)
 {
@@ -346,7 +399,9 @@ static void blit(const AVFrame *f)
     full_out_h = full_h;
     if(c > 0 && c < out_h) out_h -= c;                  /* a barra do rodapé por cima: não pinta ali */
     bool aligned = !(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 3);
-    if(atomic_load(&smooth) && aligned) blit_smooth(f);
+    if(atomic_load(&smooth) && aligned && passthrough && f->width * 2 == out_w && f->height * 2 == full_h)
+        blit2x_smooth(f);                                /* relay: metade exata da área */
+    else if(atomic_load(&smooth) && aligned) blit_smooth(f);
     else {
         if(aligned && f->width * 2 == out_w && f->height * 2 == full_h && !c) blit2x(f);
         else blit_scaled(f);
@@ -409,6 +464,25 @@ int video_submit(PDECODE_UNIT du)
         atomic_fetch_add(&dec_us, now_us() - t0);
     }
     return DR_OK;
+}
+
+/* relay: desenha um quadro YUV 4:2:0 contíguo (Y, depois U e V) já no tamanho da área */
+void video_draw_yuv(const uint8_t *buf, int w, int h, const uint8_t *dirty)
+{
+    dirty_rows = dirty;
+    static AVFrame *f;
+    if(!f) f = av_frame_alloc();
+    if(!f) return;
+    f->width = w;
+    f->height = h;
+    f->format = AV_PIX_FMT_YUV420P;
+    f->data[0] = (uint8_t *)buf;
+    f->data[1] = (uint8_t *)buf + w * h;
+    f->data[2] = (uint8_t *)buf + w * h + (w / 2) * ((h + 1) / 2);   /* altura ímpar: (h + 1) / 2 */
+    f->linesize[0] = w;
+    f->linesize[1] = f->linesize[2] = w / 2;
+    blit(f);
+    atomic_fetch_add(&n_dec, 1);
 }
 
 void video_stats(unsigned long *frames, unsigned long *errors, unsigned long long *us)

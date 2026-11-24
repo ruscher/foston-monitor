@@ -16,5 +16,7 @@ void video_clip(int rows);                      /* não pinta as últimas linhas
 void video_zoom(int pct);                       /* 100..400 % */
 void video_pan(int dx, int dy, int aw, int ah); /* arrastar com zoom (pontos da área l x a) */
 int  video_map(int ax, int ay, int aw, int ah, int *fx, int *fy, int *fw, int *fh);   /* toque -> quadro */
+void video_passthrough(int on);                 /* relay: sem corte nem zoom local */
+void video_draw_yuv(const uint8_t *buf, int w, int h, const uint8_t *dirty);   /* relay: quadro pronto; dirty[l] = linha mudou (NULL: todas) */
 void video_close(void);
 #endif

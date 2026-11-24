@@ -139,6 +139,9 @@ static bool wanted(void) { return strong() || settings()->perf_always; }
 static unsigned svc_now(void)
 {
     unsigned s = settings()->perf_svc;
+    /* Big Remote Play: o controle Bluetooth precisa conectar e ficar (pode chegar depois de a
+     * sessão começar) e as chamadas, chegar: nunca pausa Bluetooth nem telefone */
+    if(stream && !stream_suppressed && settings()->perf_stream) s &= ~(PM_SVC_BT | PM_SVC_PHONE);
     return strong() ? s : s & (PM_SVC_GPS | PM_SVC_CRON);
 }
 
@@ -335,6 +338,7 @@ static unsigned app_needs(bf_screen_t s)
     case SCR_MAP: case SCR_GPS: return PM_SVC_GPS;
     case SCR_PHONE: return PM_SVC_PHONE | PM_SVC_BT;
     case SCR_BLUETOOTH: return PM_SVC_BT;
+    case SCR_BRP: return PM_SVC_BT;                  /* o controle Bluetooth do jogo */
     default: return 0;
     }
 }
