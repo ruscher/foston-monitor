@@ -1,0 +1,316 @@
+/* bfrp.c — motor do Big Remote Play no FOSTON: cliente GameStream (Sunshine) sobre a libgamestream
+ * e a moonlight-common-c do Moonlight Embedded (GPLv3). O shell (src/ui/screens/scr_brp.c) fala com
+ * ele por linhas em stdin/stdout, como com o bfweb:
+ *
+ *   shell -> bfrp                               bfrp -> shell
+ *   HOST endereço                               HOST nome|pareado|ocupado|app_atual|versão  ou ERR ...
+ *   PAIR                                        PIN nnnn (digite no Sunshine) ... PAIR ok | PAIR erro ...
+ *   UNPAIR                                      UNPAIR ok
+ *   APPS                                        APP id|nome ... APPS fim
+ *   START app largura altura qps kbps video     STAGE nome / STARTED / TERMINATED código
+ *   STOP                                        STOPPED
+ *   QUITAPP                                     QUITAPP ok
+ *   PAD botões lt rt lx ly rx ry                (estado inteiro do controle 1; botões = *_FLAG)
+ *   KEY código_vk 1|0 modificadores             teclado (códigos virtuais do Windows, como o Moonlight)
+ *   MREL dx dy / MBTN botão 1|0 / SCROLL n      mouse
+ *   RELEASE                                     solta tudo (botões, eixos, teclas, mouse)
+ *
+ * Modo Somente Controle: START com video=0. A sessão sobe no menor fluxo e os quadros são
+ * descartados sem decodificar; a entrada vai pelo canal de controle cifrado do próprio Sunshine
+ * (sem agente extra no PC).
+ *
+ * Segurança: o par de chaves do cliente fica em <dados>/remoteplay (o pareamento por PIN do
+ * Sunshine); o motor nunca deixa um botão pressionado no PC: RELEASE ao parar, ao fechar a
+ * entrada (o shell saiu ou caiu) e quando a conexão termina.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+#include <errno.h>
+#include <pthread.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <Limelight.h>
+#include "client.h"
+#include "errors.h"
+
+static SERVER_DATA server;
+static bool have_server;
+static char key_dir[256] = "/data/bigfoston/remoteplay";
+static pthread_mutex_t out_mx = PTHREAD_MUTEX_INITIALIZER;
+
+static void out(const char *fmt, ...)
+{
+    va_list ap;
+    pthread_mutex_lock(&out_mx);
+    va_start(ap, fmt);
+    vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    fputc('\n', stdout);
+    fflush(stdout);
+    pthread_mutex_unlock(&out_mx);
+}
+
+/* nomes vindos do host: sem quebras de linha nem o separador '|' (o protocolo é por linhas) */
+static void clean(char *d, size_t n, const char *s)
+{
+    size_t j = 0;
+    for(; s && *s && j + 1 < n; s++) d[j++] = (*s == '\n' || *s == '\r' || *s == '|') ? ' ' : *s;
+    d[j] = 0;
+}
+
+/* ------------------------------------------------------------ estado da entrada */
+
+static volatile bool streaming;
+static int pad_buttons, pad_lt, pad_rt, pad_lx, pad_ly, pad_rx, pad_ry;
+static unsigned char keys_down[256];
+static unsigned char mouse_down[8];
+
+static void send_pad(void)
+{
+    if(!streaming) return;
+    LiSendMultiControllerEvent(0, 1, pad_buttons, (unsigned char)pad_lt, (unsigned char)pad_rt,
+                               (short)pad_lx, (short)pad_ly, (short)pad_rx, (short)pad_ry);
+}
+
+static void release_all(void)
+{
+    pad_buttons = pad_lt = pad_rt = pad_lx = pad_ly = pad_rx = pad_ry = 0;
+    if(!streaming) { memset(keys_down, 0, sizeof keys_down); memset(mouse_down, 0, sizeof mouse_down); return; }
+    send_pad();
+    for(int k = 0; k < 256; k++)
+        if(keys_down[k]) { LiSendKeyboardEvent((short)(0x8000 | k), KEY_ACTION_UP, 0); keys_down[k] = 0; }
+    for(int b = 1; b < 8; b++)
+        if(mouse_down[b]) { LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, b); mouse_down[b] = 0; }
+}
+
+static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* ------------------------------------------------------------ callbacks da sessão */
+
+static bool want_video;
+static unsigned long frames_in;
+
+static int dr_setup(int fmt, int w, int h, int rate, void *ctx, int flags)
+{
+    (void)fmt; (void)ctx; (void)flags;
+    out("VIDEO %dx%d %d", w, h, rate);
+    return 0;
+}
+
+static int dr_submit(PDECODE_UNIT du)
+{
+    (void)du;
+    frames_in++;                                         /* Somente Controle: descarta */
+    return DR_OK;
+}
+
+static int ar_init(int cfg, const POPUS_MULTISTREAM_CONFIGURATION oc, void *ctx, int flags)
+{
+    (void)cfg; (void)oc; (void)ctx; (void)flags;
+    return 0;
+}
+
+static void ar_sample(char *d, int n) { (void)d; (void)n; }    /* som: fase seguinte (Opus) */
+
+static void cl_stage_starting(int s) { out("STAGE %s", LiGetStageName(s)); }
+static void cl_stage_failed(int s, int err) { out("FAILED %s %d", LiGetStageName(s), err); }
+static void cl_started(void) { streaming = true; out("STARTED"); }
+static void cl_terminated(int err)
+{
+    streaming = false;                                   /* o host já solta os controles ao cair */
+    memset(keys_down, 0, sizeof keys_down);
+    memset(mouse_down, 0, sizeof mouse_down);
+    out("TERMINATED %d", err);
+}
+static void cl_log(const char *fmt, ...)
+{
+    if(!getenv("BFRP_DEBUG")) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
+static void cl_status(int st) { out("STATUS %s", st == CONN_STATUS_POOR ? "ruim" : "boa"); }
+
+/* ------------------------------------------------------------ comandos */
+
+static void cmd_host(const char *addr)
+{
+    if(have_server) { have_server = false; }
+    char a[128];
+    clean(a, sizeof a, addr);
+    int r = gs_init(&server, a, 47989, key_dir, getenv("BFRP_DEBUG") ? 1 : 0, true);
+    if(r != GS_OK) { out("ERR host %d %s", r, gs_error ? gs_error : ""); return; }
+    have_server = true;
+    char name[96];
+    clean(name, sizeof name, server.serverInfo.address);
+    out("HOST %s|%d|%d|%d|%s", name, server.paired ? 1 : 0, server.currentGame ? 1 : 0, server.currentGame,
+        server.serverInfo.serverInfoAppVersion ? server.serverInfo.serverInfoAppVersion : "");
+}
+
+static char pair_pin[5];
+
+static void *pair_thread(void *a)
+{
+    (void)a;
+    int r = gs_pair(&server, pair_pin);
+    if(r == GS_OK) { server.paired = true; out("PAIR ok"); }
+    else out("PAIR erro %d %s", r, gs_error ? gs_error : "");
+    return NULL;
+}
+
+static void cmd_pair(void)
+{
+    if(!have_server) { out("ERR sem host"); return; }
+    if(server.paired) { out("PAIR ok"); return; }
+    unsigned char b[2];
+    FILE *f = fopen("/dev/urandom", "rb");
+    if(!f || fread(b, 1, 2, f) != 2) { if(f) fclose(f); out("ERR aleatório"); return; }
+    fclose(f);
+    snprintf(pair_pin, sizeof pair_pin, "%04u", (unsigned)((b[0] << 8 | b[1]) % 10000));
+    out("PIN %s", pair_pin);
+    pthread_t t;
+    pthread_create(&t, NULL, pair_thread, NULL);          /* espera o PIN ser digitado no host */
+    pthread_detach(t);
+}
+
+static void cmd_apps(void)
+{
+    if(!have_server || !server.paired) { out("ERR não pareado"); return; }
+    PAPP_LIST list = NULL;
+    if(gs_applist(&server, &list) != GS_OK) { out("ERR apps %s", gs_error ? gs_error : ""); return; }
+    int n = 0;
+    for(PAPP_LIST l = list; l && n < 200; l = l->next, n++) {
+        char name[128];
+        clean(name, sizeof name, l->name);
+        out("APP %d|%s", l->id, name);
+    }
+    while(list) { PAPP_LIST nx = list->next; free(list->name); free(list); list = nx; }
+    out("APPS fim");
+}
+
+static STREAM_CONFIGURATION cfg;
+
+static void cmd_start(int app, int w, int h, int fps, int kbps, int video)
+{
+    if(!have_server || !server.paired) { out("ERR não pareado"); return; }
+    if(streaming) { out("ERR já em sessão"); return; }
+    LiInitializeStreamConfiguration(&cfg);
+    cfg.width = clamp(w, 320, 1920);
+    cfg.height = clamp(h, 180, 1080);
+    cfg.fps = clamp(fps, 10, 60);
+    cfg.bitrate = clamp(kbps, 300, 20000);
+    cfg.packetSize = 1024;
+    cfg.streamingRemotely = STREAM_CFG_AUTO;
+    cfg.audioConfiguration = AUDIO_CONFIGURATION_STEREO;
+    cfg.supportedVideoFormats = VIDEO_FORMAT_H264;
+    cfg.encryptionFlags = ENCFLG_NONE;
+    want_video = video != 0;
+    int r = gs_start_app(&server, &cfg, app, false, false, 1);
+    if(r != GS_OK) { out("ERR start %d %s", r, gs_error ? gs_error : ""); return; }
+
+    static DECODER_RENDERER_CALLBACKS dr;
+    static AUDIO_RENDERER_CALLBACKS ar;
+    static CONNECTION_LISTENER_CALLBACKS cl;
+    LiInitializeVideoCallbacks(&dr);
+    dr.setup = dr_setup;
+    dr.submitDecodeUnit = dr_submit;
+    dr.capabilities = CAPABILITY_DIRECT_SUBMIT;
+    LiInitializeAudioCallbacks(&ar);
+    ar.init = ar_init;
+    ar.decodeAndPlaySample = ar_sample;
+    LiInitializeConnectionCallbacks(&cl);
+    cl.stageStarting = cl_stage_starting;
+    cl.stageFailed = cl_stage_failed;
+    cl.connectionStarted = cl_started;
+    cl.connectionTerminated = cl_terminated;
+    cl.logMessage = cl_log;
+    cl.connectionStatusUpdate = cl_status;
+    r = LiStartConnection(&server.serverInfo, &cfg, &cl, &dr, &ar, NULL, 0, NULL, 0);
+    if(r != 0) { streaming = false; out("ERR conexão %d", r); }
+}
+
+static void cmd_stop(void)
+{
+    release_all();
+    if(streaming || 1) LiStopConnection();
+    streaming = false;
+    out("STOPPED");
+}
+
+static void command(char *l)
+{
+    char *a = strchr(l, ' ');
+    if(a) *a++ = 0;
+    else a = l + strlen(l);
+    if(!strcmp(l, "HOST")) cmd_host(a);
+    else if(!strcmp(l, "PAIR")) cmd_pair();
+    else if(!strcmp(l, "UNPAIR")) { if(have_server) gs_unpair(&server); server.paired = false; out("UNPAIR ok"); }
+    else if(!strcmp(l, "APPS")) cmd_apps();
+    else if(!strcmp(l, "START")) {
+        int app = 0, w = 640, h = 360, fps = 30, kbps = 1000, video = 0;
+        sscanf(a, "%d %d %d %d %d %d", &app, &w, &h, &fps, &kbps, &video);
+        cmd_start(app, w, h, fps, kbps, video);
+    }
+    else if(!strcmp(l, "STOP")) cmd_stop();
+    else if(!strcmp(l, "QUITAPP")) { release_all(); if(have_server) gs_quit_app(&server); out("QUITAPP ok"); }
+    else if(!strcmp(l, "PAD")) {
+        int b, lt, rt, lx, ly, rx, ry;
+        if(sscanf(a, "%d %d %d %d %d %d %d", &b, &lt, &rt, &lx, &ly, &rx, &ry) == 7) {
+            pad_buttons = b & 0xffff; pad_lt = clamp(lt, 0, 255); pad_rt = clamp(rt, 0, 255);
+            pad_lx = clamp(lx, -32768, 32767); pad_ly = clamp(ly, -32768, 32767);
+            pad_rx = clamp(rx, -32768, 32767); pad_ry = clamp(ry, -32768, 32767);
+            send_pad();
+        }
+    }
+    else if(!strcmp(l, "KEY")) {
+        int k, d, m = 0;
+        if(sscanf(a, "%d %d %d", &k, &d, &m) >= 2 && k > 0 && k < 256 && streaming) {
+            keys_down[k] = d ? 1 : 0;
+            LiSendKeyboardEvent((short)(0x8000 | k), d ? KEY_ACTION_DOWN : KEY_ACTION_UP, (char)(m & 0x1f));
+        }
+    }
+    else if(!strcmp(l, "MREL")) {
+        int dx, dy;
+        if(sscanf(a, "%d %d", &dx, &dy) == 2 && streaming) LiSendMouseMoveEvent((short)clamp(dx, -500, 500), (short)clamp(dy, -500, 500));
+    }
+    else if(!strcmp(l, "MBTN")) {
+        int b, d;
+        if(sscanf(a, "%d %d", &b, &d) == 2 && b >= 1 && b <= 5 && streaming) {
+            mouse_down[b] = d ? 1 : 0;
+            LiSendMouseButtonEvent(d ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, b);
+        }
+    }
+    else if(!strcmp(l, "SCROLL")) {
+        int n;
+        if(sscanf(a, "%d", &n) == 1 && streaming) LiSendScrollEvent((signed char)clamp(n, -10, 10));
+    }
+    else if(!strcmp(l, "RELEASE")) release_all();
+    else out("ERR comando");
+}
+
+int main(int argc, char **argv)
+{
+    signal(SIGPIPE, SIG_IGN);
+    for(int i = 1; i + 1 < argc; i++)
+        if(!strcmp(argv[i], "--keys")) snprintf(key_dir, sizeof key_dir, "%s", argv[++i]);
+    mkdir(key_dir, 0700);
+    out("READY");
+    char line[512];
+    while(fgets(line, sizeof line, stdin)) {
+        size_t n = strlen(line);
+        while(n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = 0;
+        if(n) command(line);
+    }
+    /* o shell fechou a entrada (saiu ou caiu): nada fica pressionado no PC */
+    if(streaming) cmd_stop();
+    return 0;
+}

@@ -114,6 +114,7 @@ static void changed(void)
 
 static const struct { const char *name; bf_screen_t scr; } screens[] = {
     { "sc-controller", SCR_SCC },
+    { "big-remote-play", SCR_BRP },
 };
 
 static char term_cmd[300];

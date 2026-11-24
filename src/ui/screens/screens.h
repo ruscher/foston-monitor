@@ -10,7 +10,7 @@ extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, sc
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
        scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def,
        scr_appearance_def, scr_bigscreen_def, scr_gallery_def, scr_gps_def, scr_map_def, scr_perf_def, scr_bluetooth_def, scr_phone_def, scr_tv_def, scr_fm_def, scr_web_def, scr_perfmode_def,
-       scr_keyboard_def, scr_appgroup_def, scr_scc_def;
+       scr_keyboard_def, scr_appgroup_def, scr_scc_def, scr_brp_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {
@@ -81,4 +81,5 @@ void scr_scc_demo_tab(int t);             /* SC Controller: 0..2 abas; 3 registr
 void scr_book_demo(const char *path);     /* NULL: biblioteca */
 void book_open_file(const char *path);     /* Arquivos -> Livros */
 
+void scr_brp_demo(const char *line);     /* roteiro de capturas: linhas do motor */
 #endif

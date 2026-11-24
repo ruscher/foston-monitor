@@ -432,7 +432,7 @@ static void tick(lv_timer_t *t)
                  lv_tick_elaps(on_since) > 6000;
     bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
                 perfui_why() != PERF_WHY_PLAN &&
-                nav_current().scr != SCR_SCC && nav_current().scr != SCR_TV &&
+                nav_current().scr != SCR_SCC && nav_current().scr != SCR_BRP && nav_current().scr != SCR_TV &&
                 (st == PM_ON || st == PM_ENTERING) && !brief;
     if(show) {
         lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);

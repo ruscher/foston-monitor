@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Big Remote Play
+Comment=Play on your computer with the FOSTON as the controller (Sunshine)
+Comment[pt]=Jogue no computador com o FOSTON como controle (Sunshine)
+Comment[es]=Juegue en la computadora con el FOSTON como mando (Sunshine)
+Categories=Game;
+Keywords=remote;play;sunshine;moonlight;stream;controle;gamepad;BigLinux;
+Icon=icon.svg
+Exec=big-remote-play
+X-BigFoston-Screen=big-remote-play
+X-BigFoston-Color=#6a3df0

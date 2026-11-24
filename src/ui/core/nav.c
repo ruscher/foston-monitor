@@ -33,6 +33,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_KEYBOARD] = &scr_keyboard_def,
     [SCR_APPGROUP] = &scr_appgroup_def,
     [SCR_SCC] = &scr_scc_def,
+    [SCR_BRP] = &scr_brp_def,
 };
 
 static lv_obj_t *content;

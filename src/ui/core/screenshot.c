@@ -565,6 +565,15 @@ int screenshot_run(const char *dir)
     scroll_content_end();           shot("16b-data-fim");
     go(SCR_DATE, 1);                shot("16c-data-ajustar");
     go(SCR_DATE, 2);                shot("16d-data-fuso");
+    go(SCR_BRP, 0);
+    scr_brp_demo("HOST 192.168.7.1|0|0|0|7.1.431.-1"); pump(100); shot("40-brp-inicio");
+    scr_brp_demo("PIN 4821");       pump(100); shot("40b-brp-pin");
+    scr_brp_demo("PAIR ok");
+    scr_brp_demo("HOST 192.168.7.1|1|0|0|7.1.431.-1");
+    scr_brp_demo("APP 1|01 - Monitor"); scr_brp_demo("APP 2|Desktop"); scr_brp_demo("APP 3|Desktop Low");
+    scr_brp_demo("APP 4|Steam Big Picture"); scr_brp_demo("APPS fim"); pump(100); shot("40c-brp-apps");
+    scr_brp_demo("+play");          pump(100); shot("40d-brp-controle");
+    scr_brp_demo("+lock");          pump(100); shot("40e-brp-travado");
     go(SCR_POWER, 0);               shot("17-potencia");
     scroll_content_end();           shot("17b-potencia-plano");
     go(SCR_PERF, 0);                shot("17c-desempenho");
