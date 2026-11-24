@@ -328,7 +328,11 @@ static void holds_update(void)
 static void prio_update(void)
 {
     bool want = (on && settings()->perf_prio) || pad;
-    if(want != prio_now && setpriority(PRIO_PROCESS, 0, want ? -5 : 0) == 0) prio_now = want;
+    if(want != prio_now && setpriority(PRIO_PROCESS, 0, want ? -5 : 0) == 0) {
+        prio_now = want;
+        FILE *f = fopen("/proc/self/oom_score_adj", "w");   /* a interface nunca é morta por falta de memória */
+        if(f) { fprintf(f, "%d\n", want ? -1000 : 0); fclose(f); }
+    }
     /* de novo a cada 5 s: o bluetoothd pode ter reiniciado */
     if(pad && (!bt_boosted || (int32_t)(lv_tick_get() - boost_at) >= 5000)) {
         bt_boosted = perfmode_renice("bluetoothd", -10);

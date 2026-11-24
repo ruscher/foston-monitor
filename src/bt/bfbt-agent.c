@@ -880,6 +880,77 @@ static void become_peripheral(const char *addr)
     close(s);
 }
 
+/* Teclado e controle de jogo em tempo real (medido em 24/11/2026 com o DualShock 4):
+ *  - o controle pede o modo sniff quando fica parado e, com o MT6611, o enlace em sniff chega
+ *    a ~3 relatórios/s, com buracos de até 2 s: o atraso "oscila" (bom ativo, ruim em sniff).
+ *    A política do enlace sem sniff (0x080D = 0) faz o chip recusar o pedido, e Exit Sniff
+ *    (0x0804) tira o enlace do sniff se já entrou;
+ *  - ativo, o Tpoll padrão (40 slots, 25 ms) limitava a ~38 relatórios/s. QoS Setup (0x0807)
+ *    "garantido", latência 1250 us: ~62 relatórios/s, 99% em menos de 28 ms.
+ * Uma vez por conexão, 1 s depois de conectado. Gasta mais bateria do teclado/controle. */
+static void hid_link_fast(const char *addr)
+{
+    unsigned v[6];
+    if(sscanf(addr, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;
+    struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };
+    int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);
+    if(s < 0) return;
+    struct conn_info_req r;
+    memset(&r, 0, sizeof r);
+    for(int i = 0; i < 6; i++) r.bdaddr[i] = (uint8_t)v[5 - i];
+    r.type = 1;                                          /* ACL */
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && ioctl(s, HCIGETCONNINFO, &r) == 0) {
+        uint16_t h = r.info.handle;
+        uint8_t hl = (uint8_t)h, hh = (uint8_t)(h >> 8);
+        unsigned char pol[] = { 0x01, 0x0d, 0x08, 0x04, hl, hh, 0x00, 0x00 };
+        unsigned char ex[] = { 0x01, 0x04, 0x08, 0x02, hl, hh };
+        unsigned char qos[] = { 0x01, 0x07, 0x08, 0x14, hl, hh, 0x00, 0x02,
+                                0x10, 0x27, 0x00, 0x00,      /* taxa: 10000 B/s */
+                                0x00, 0x00, 0x00, 0x00,      /* pico: sem limite */
+                                0xe2, 0x04, 0x00, 0x00,      /* latência: 1250 us */
+                                0xff, 0xff, 0xff, 0xff };    /* variação: qualquer */
+        int ok = write(s, pol, sizeof pol) == (ssize_t)sizeof pol;
+        usleep(20000);
+        ok &= write(s, ex, sizeof ex) == (ssize_t)sizeof ex;   /* fora do sniff dá "não permitido": tudo bem */
+        usleep(20000);
+        ok &= write(s, qos, sizeof qos) == (ssize_t)sizeof qos;
+        if(ok) syslog(LOG_INFO, "teclado/controle: enlace sem sniff e com latência baixa");
+    }
+    close(s);
+}
+
+#define MAXHL 4
+static struct { char addr[18]; long since; int done; } hl[MAXHL];
+
+static void hid_link_tick(const state_t *st, long now)
+{
+    for(int k = 0; k < MAXHL; k++) {                     /* esquece quem desconectou */
+        if(!hl[k].addr[0]) continue;
+        int still = 0;
+        for(int i = 0; i < st->ndev; i++)
+            if(!strcmp(st->dev[i].addr, hl[k].addr) && st->dev[i].connected) still = 1;
+        if(!still) hl[k].addr[0] = 0;
+    }
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->connected || strncmp(d->icon, "input-", 6)) continue;
+        int k, freek = -1;
+        for(k = 0; k < MAXHL && strcmp(hl[k].addr, d->addr); k++)
+            if(!hl[k].addr[0] && freek < 0) freek = k;
+        if(k == MAXHL) {
+            if(freek < 0) continue;
+            k = freek;
+            snprintf(hl[k].addr, sizeof hl[k].addr, "%s", d->addr);
+            hl[k].since = now;
+            hl[k].done = 0;
+        }
+        if(!hl[k].done && now - hl[k].since >= 1000) {
+            hl[k].done = 1;
+            hid_link_fast(d->addr);
+        }
+    }
+}
+
 /* um pedido por conexão, 2 s depois de os perfis estarem conectados */
 #define MAXRS 8
 static struct { char addr[18]; long since; int done; } rs[MAXRS];
@@ -969,6 +1040,7 @@ int main(int argc, char **argv)
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
             role_switch_tick(&st, now);
+            hid_link_tick(&st, now);
             if(!st.powered) powered_at = 0;
             else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
             /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,
@@ -982,7 +1054,15 @@ int main(int argc, char **argv)
         static const long when[] = { 3000, 15000, 60000 };
         if(powered_at && reconnect_done < 3 && now - powered_at >= when[reconnect_done]) {
             reconnect_done++;
+            /* com teclado ou controle conectado, não procura ninguém: enquanto o MT6611 chama
+             * um aparelho ausente (Create Connection, até ~5 s de page) o enlace do controle
+             * fica sem relatório nenhum (medido: 0/s por 5 s, o "controle travou e depois
+             * mexeu sozinho"). O celular ainda pode conectar sozinho (quem chama é ele). */
+            int hid_on = 0;
             for(int i = 0; i < st.ndev; i++)
+                if(st.dev[i].connected && !strncmp(st.dev[i].icon, "input-", 6)) hid_on = 1;
+            if(hid_on) syslog(LOG_INFO, "reconexão automática adiada: teclado/controle conectado");
+            for(int i = 0; i < st.ndev && !hid_on; i++)
                 /* teclados e mouses reconectam sozinhos (o BlueZ cuida dos que pedem ao
                  * computador): aqui só atrasariam o celular com uma espera de ~5 s */
                 if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected && strncmp(st.dev[i].icon, "input-", 6))
@@ -1023,6 +1103,8 @@ int main(int argc, char **argv)
         if((hid_fix_until || hid_conn_at) && timeout > 500) timeout = 500;
         for(int k = 0; k < MAXRS; k++)
             if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
+        for(int k = 0; k < MAXHL; k++)
+            if(hl[k].addr[0] && !hl[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;
         if(dbus_connection_get_dispatch_status(bus) == DBUS_DISPATCH_DATA_REMAINS) timeout = 0;
         if(dbus_connection_has_messages_to_send(bus)) p[0].events |= POLLOUT;

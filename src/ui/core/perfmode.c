@@ -299,7 +299,14 @@ bool perfmode_recover(void)
 bool perfmode_renice(const char *proc, int nice)
 {
     pid_t p = find_proc(proc);
-    return p && setpriority(PRIO_PROCESS, (id_t)p, nice) == 0;
+    if(!p || setpriority(PRIO_PROCESS, (id_t)p, nice)) return false;
+    /* memória: o sistema roda da RAM sem swap, nada sai dela; o que resta é o kernel matar um
+     * processo se a memória acabar. Com prioridade, ele fica de fora (-1000); sem, o padrão */
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/oom_score_adj", (int)p);
+    FILE *f = fopen(path, "w");
+    if(f) { fprintf(f, "%d\n", nice < 0 ? -1000 : 0); fclose(f); }
+    return true;
 }
 
 pm_state_t perfmode_state(void)

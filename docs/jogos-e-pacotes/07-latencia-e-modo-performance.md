@@ -49,6 +49,33 @@ ls /sys/bus/hid/drivers/          # tem "playstation"
 /usr/sbin/bfsnoop /tmp/s.bin 5    # no PC: btmon -r s.bin | grep -c "> ACL"  -> centenas
 ```
 
+## Depois do driver: o atraso ainda oscilava (24/11/2026, segunda rodada)
+
+Com o `hid-playstation` ativo, o atraso continuou "bom às vezes, ruim às vezes". A captura
+HCI mostrou três causas, todas no enlace Bluetooth:
+
+| Causa | Medido | Correção (`bfbt-agent`) |
+|---|---|---|
+| O controle pede **modo sniff** quando fica parado; com o MT6611, o enlace em sniff entrega ~3 relatórios/s, com buracos de até 2 s. Exit Sniff resolvia só por ~2 s, até o controle pedir de novo | sniff: 3–6/s, intervalo de até 2348 ms; ativo: 33/s | por conexão de teclado/controle, a política do enlace sem sniff (HCI `0x080D` = 0) e Exit Sniff (`0x0804`) |
+| Ativo, o **Tpoll** padrão (40 slots, 25 ms) limita os relatórios | ~38/s, um a cada 26 ms | **QoS Setup** (`0x0807`), serviço garantido, latência 1250 us (concedido): **~64/s, 99% em menos de 25 ms, pior caso 28 ms** |
+| **Reconexão automática ao celular ausente** (3, 15 e 60 s depois de ligar o Bluetooth): o chip procura (page) até ~5 s e, nesse tempo, o controle fica **mudo** | 0 relatórios/s por 5 s seguidos | sem reconexão automática enquanto houver teclado ou controle conectado; o celular ainda pode conectar sozinho |
+
+Tudo aplicado 1 s depois de cada conexão (`hid_link_tick`), com o aviso "teclado/controle:
+enlace sem sniff e com latência baixa" no log. O teclado Bluetooth recebe o mesmo tratamento.
+Custo: mais bateria no teclado e no controle.
+
+Depois das três correções, 20 s seguidos sem nenhum buraco:
+`62 63 62 64 67 63 77 75 68 67 64 63 65 66 63 64 72 66 63` relatórios por segundo.
+
+Ainda congelam o controle por alguns segundos, porque o MT6611 não consegue manter o enlace
+enquanto faz outra coisa:
+- **Procurar** aparelhos na tela Bluetooth;
+- tocar em **Conectar** num aparelho desligado (o chip tenta por ~5 s).
+
+**Custo de CPU do controle transmitindo** (64 relatórios/s, `/proc/<pid>/stat` em 10 s): `bluetoothd`
+8,4% (inclui o `hid-playstation`, que roda no contexto de quem escreve no `uhid`) e a fila do
+HCI 1,2%. A UART do Bluetooth recebe ~450 interrupções/s (~13 bytes cada).
+
 ## Prioridade (CPU)
 
 Com um controle conectado (`perfui.c`, `prio_update`):
@@ -57,9 +84,12 @@ Com um controle conectado (`perfui.c`, `prio_update`):
 - o **`bluetoothd`** fica com nice −10, reaplicado a cada 5 s, caso ele reinicie. É ele que lê o
   canal HID do Bluetooth e entrega ao kernel pelo `uhid`, então está no caminho de cada botão.
 
-A fila de trabalho do HCI no kernel já é de alta prioridade (`WQ_HIGHPRI`). Memória: o
-FOSTON não tem swap e sobram ~89 MB, então nada do shell sai da RAM. Travar páginas com
-`mlock` não mudaria nada.
+A fila de trabalho do HCI no kernel já é de alta prioridade (`WQ_HIGHPRI`).
+
+**Memória:** o sistema roda inteiro da RAM (initramfs), sem swap, e sobram ~89 MB; nada do
+shell nem do `bluetoothd` sai da memória, então `mlock` não mudaria nada. O risco que sobra
+é o kernel matar um processo se a memória acabar: com um controle conectado, a interface e o
+`bluetoothd` ficam com `oom_score_adj` −1000 e nunca são escolhidos.
 
 ## Modo performance por app
 
