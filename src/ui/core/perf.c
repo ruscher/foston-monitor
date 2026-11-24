@@ -71,8 +71,21 @@ static void ev_cb(lv_event_t *e)
     }
 }
 
+/* diagnóstico: as áreas invalidadas (quem faz a tela redesenhar parada) vão para o log */
+static uint64_t inv_until;
+void perf_trace_invalidate(uint32_t ms) { inv_until = perf_now_us() + (uint64_t)ms * 1000u; }
+
+static void inv_cb(lv_event_t *e)
+{
+    if(!inv_until || perf_now_us() > inv_until) return;
+    const lv_area_t *a = lv_event_get_param(e);
+    if(a) fprintf(stderr, "invalidado %d,%d %dx%d\n", (int)a->x1, (int)a->y1, (int)lv_area_get_width(a),
+                  (int)lv_area_get_height(a));
+}
+
 void perf_init(lv_display_t *d)
 {
+    lv_display_add_event_cb(d, inv_cb, LV_EVENT_INVALIDATE_AREA, NULL);
     lv_display_add_event_cb(d, ev_cb, LV_EVENT_RENDER_START, NULL);
     lv_display_add_event_cb(d, ev_cb, LV_EVENT_RENDER_READY, NULL);
     perf_reset();

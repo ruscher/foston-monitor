@@ -4,6 +4,7 @@
 #include "hwkbd.h"
 #include "perfui.h"
 #include "apps.h"
+#include "perf.h"
 #include "../screens/screens.h"
 #include "lvgl.h"
 #include <errno.h>
@@ -41,6 +42,15 @@ static void command(char *l)
     else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
     else if(!strncmp(l, "group ", 6)) nav_go(SCR_APPGROUP, atoi(l + 6));
     else if(!strcmp(l, "app sc-controller")) nav_go(SCR_SCC, 0);
+    else if(!strcmp(l, "perfstat reset")) perf_reset();
+    else if(!strcmp(l, "perfstat trace")) perf_trace_invalidate(1000);
+    else if(!strncmp(l, "perfstat ", 9)) {          /* medidas desde o reset: /run/bigfoston/perf.txt */
+        char b[600];
+        perf_format(b, sizeof b, l + 9);
+        FILE *f = fopen(CTL_DIR "/perf.txt", "a");
+        if(f) { fprintf(f, "%s\n", b); fclose(f); }
+        perf_reset();
+    }
     else if(!strcmp(l, "app map")) nav_go(SCR_MAP, 0);
     else if(!strcmp(l, "app gps")) nav_go(SCR_GPS, 0);
     else if(!strcmp(l, "app phone")) nav_go(SCR_PHONE, 0);
