@@ -30,6 +30,7 @@
 
 #include "core/perf.h"
 #include "core/powerkey.h"
+#include "core/hwkbd.h"
 #ifdef BIGFOSTON_TARGET
 #include <poll.h>
 #include <dirent.h>
@@ -47,14 +48,17 @@ static lv_indev_t *touch_indev;
 static void wait_events(uint32_t ms)
 {
 #ifdef BIGFOSTON_TARGET
-    struct pollfd pf[2];
+    struct pollfd pf[3 + HWKBD_MAX];
     int n = 0, ti = -1, ki = -1;
     if(touch_indev && touch_pending()) { lv_indev_read(touch_indev); return; }
     if(touch_indev && touch_fd() >= 0) { ti = n; pf[n++] = (struct pollfd){ touch_fd(), POLLIN, 0 }; }
     if(powerkey_fd() >= 0) { ki = n; pf[n++] = (struct pollfd){ powerkey_fd(), POLLIN, 0 }; }
+    int hk = n;                                       /* teclados físicos (core/hwkbd.c) */
+    n += hwkbd_poll_fds(pf + n, (int)(sizeof pf / sizeof pf[0]) - n);
     if(poll(pf, (nfds_t)n, (int)ms) > 0) {
         if(ti >= 0 && (pf[ti].revents & POLLIN)) lv_indev_read(touch_indev);
         if(ki >= 0 && (pf[ki].revents & (POLLIN | POLLERR | POLLHUP))) powerkey_read();
+        hwkbd_poll_done(pf + hk, n - hk);
     }
 #else
     usleep(ms * 1000);
@@ -199,6 +203,7 @@ int main(int argc, char **argv)
         else fprintf(stderr, "--open: tela desconhecida: %s\n", open_app);
     }
     app_apply_hw_settings();
+    hwkbd_init();                                     /* teclado Bluetooth/USB em qualquer tela */
 
     perf_init(disp);
     for(;;) {

@@ -34,6 +34,14 @@ static void poke(void)
     if(idle) lv_timer_reset(idle);
 }
 
+/* apagado por fora (app_rebuild_now limpa a camada de cima) */
+static void scrim_deleted(lv_event_t *e)
+{
+    if(lv_event_get_target(e) != scrim) return;
+    if(idle) { lv_timer_delete(idle); idle = NULL; }
+    scrim = panel = slider = pct_lbl = mute_lbl = NULL;
+}
+
 void volpop_close(void)
 {
     if(idle) { lv_timer_delete(idle); idle = NULL; }
@@ -77,6 +85,7 @@ void volpop_open(int x, int y)
     if(v > 0) before_mute = v;
 
     scrim = lv_obj_create(lv_layer_top());
+    lv_obj_add_event_cb(scrim, scrim_deleted, LV_EVENT_DELETE, NULL);
     lv_obj_remove_style_all(scrim);
     lv_obj_set_size(scrim, LV_PCT(100), LV_PCT(100));
     lv_obj_add_flag(scrim, LV_OBJ_FLAG_CLICKABLE);
@@ -118,3 +127,18 @@ void volpop_open(int x, int y)
 }
 
 bool volpop_is_open(void) { return panel != NULL; }
+
+void volpop_step(int delta)
+{
+    int v = status_provider()->volume_get();
+    if(v < 0) return;
+    if(!panel) volpop_open(BF_SCREEN_W - 120, 56);   /* perto do ícone de som da barra */
+    v += delta;
+    if(v < 0) v = 0;
+    if(v > 100) v = 100;
+    if(v > 0) before_mute = v;
+    status_provider()->volume_set(v);
+    status_refresh();
+    show(v);
+    poke();
+}

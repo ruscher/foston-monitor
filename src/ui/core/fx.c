@@ -137,6 +137,16 @@ static void undim_cb(lv_event_t *e)
     if(dim_cover) { lv_obj_delete_async(dim_cover); dim_cover = NULL; }
 }
 
+bool fx_undim(void)
+{
+    if(!dim_cover) return false;
+    const bf_status_provider_t *p = status_provider();
+    if(p->backlight_get() >= 0) p->backlight_set(settings()->backlight);
+    lv_obj_delete_async(dim_cover);
+    dim_cover = NULL;
+    return true;
+}
+
 void fx_tick(void)
 {
     int min = settings()->dim_min;

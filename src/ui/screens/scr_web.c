@@ -29,6 +29,8 @@
 #include "../core/fx.h"
 #include "../widgets/dialog.h"
 #include "../widgets/kbd.h"
+#include "../core/hwkbd.h"
+#include <linux/input.h>
 #include "../widgets/page.h"
 #include "../widgets/imgview.h"
 #include "../assets/icons/bf_icons.h"
@@ -1502,6 +1504,64 @@ static void menu_click(lv_event_t *e) { (void)e; if(panel) panel_close(); else o
 
 /* ---------------- tela ---------------- */
 
+/* ---------------- teclado físico (core/hwkbd.c) ----------------
+ * O campo de endereço aberto recebe as teclas antes (é um campo de texto do shell); o resto
+ * vai para a página: texto, setas, Enter, Tab, Ctrl+A/C/V/X/Z. Atalhos do navegador:
+ * Ctrl+L ou F6 endereço, F5 ou Ctrl+R recarregar, Alt+Esquerda/Direita voltar/avançar, Esc
+ * fecha o menu ou sai da tela cheia (e vai para a página). Na página inicial, digitar abre a
+ * pesquisa já com a letra. */
+static bool hw_key(const hwkey_t *k)
+{
+    bool ctrl = k->mods & HK_CTRL, alt = k->mods & HK_ALT;
+    if(!root) return false;
+    if((ctrl && k->code == KEY_L) || k->code == KEY_F6) {
+        if(!k->repeat) { if(fs_img) fs_leave(true); edit_open(); }
+        return true;
+    }
+    if(k->code == KEY_F5 || (ctrl && k->code == KEY_R)) { if(!k->repeat) reload_click(NULL); return true; }
+    if(alt && (k->code == KEY_LEFT || k->code == KEY_RIGHT)) {
+        if(!k->repeat) { if(k->code == KEY_LEFT) back_click(NULL); else fwd_click(NULL); }
+        return true;
+    }
+    if(k->code == KEY_ESC) {
+        if(k->repeat) return true;
+        if(ctx_menu) ctx_close();
+        else if(panel) panel_close();
+        else if(fs_img) fs_leave(true);
+        else {
+            if(page_kb) page_kb_hide();
+            if(engine_ready) eng_send("KEY escape");
+        }
+        return true;
+    }
+    if(panel || ctx_menu) return false;
+    if(start && !lv_obj_has_flag(start, LV_OBJ_FLAG_HIDDEN) && !fs_img) {
+        if(!k->text[0] || !strcmp(k->text, " ")) return false;   /* setas rolam a página inicial */
+        edit_open();
+        if(edit_ta) {
+            edit_fresh = false;
+            lv_textarea_set_text(edit_ta, "");
+            lv_textarea_add_text(edit_ta, k->text);
+        }
+        return true;
+    }
+    if(!engine_ready) return false;
+    if(ctrl && !alt) {
+        const char *n = k->code == KEY_A ? "selectall" : k->code == KEY_C ? "copy" : k->code == KEY_V ? "paste" :
+                        k->code == KEY_X ? "cut" : k->code == KEY_Z ? "undo" : NULL;
+        if(!n) return false;
+        eng_send("KEY %s", n);
+        return true;
+    }
+    if(k->text[0]) { eng_send("TEXT %s", k->text); return true; }
+    if(k->code == KEY_TAB && (k->mods & HK_SHIFT)) { eng_send("KEY shifttab"); return true; }
+    const char *n = hwkbd_key_name(k->code);
+    if(!n || alt) return false;
+    eng_send("KEY %s", n);
+    if(k->code == KEY_ENTER && page_kb) page_kb_hide();         /* como o OK do teclado da tela */
+    return true;
+}
+
 static void create(lv_obj_t *parent, int arg)
 {
     const bf_palette_t *p = pal();
@@ -1608,6 +1668,7 @@ static void create(lv_obj_t *parent, int arg)
     set_enabled(b_back, false);
     set_enabled(b_fwd, false);
     update_bar();
+    hwkbd_set_handler(hw_key);
     if(last_url[0]) engine_start(last_url);          /* volta ao app: reabre a página */
     else {
         show_start(true);
@@ -1617,6 +1678,7 @@ static void create(lv_obj_t *parent, int arg)
 
 static void destroy(void)
 {
+    hwkbd_set_handler(NULL);
     if(scroll_t) { lv_timer_delete(scroll_t); scroll_t = NULL; }
     if(ind_t) { lv_timer_delete(ind_t); ind_t = NULL; }
     ctx_close();

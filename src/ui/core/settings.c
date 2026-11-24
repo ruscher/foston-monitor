@@ -58,6 +58,7 @@ void settings_defaults(bf_settings_t *s)
     s->nav_voice = true;
     s->map_detail = BF_DETAIL_AUTO;
     s->map_avoid_toll = false;
+    s->kbd_layout = 0;                  /* automático: ABNT2 em português, EUA nas outras */
 }
 
 static void mkdir_p(const char *path)
@@ -155,6 +156,7 @@ void settings_load(void)
         else if(!strcmp(k, "map_avoid_toll")) cur.map_avoid_toll = atoi(v) != 0;
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
+        else if(!strcmp(k, "kbd_layout")) cur.kbd_layout = clampi(atoi(v), 0, 3);
     }
     fclose(f);
 }
@@ -201,6 +203,7 @@ bool settings_save(void)
     fprintf(f, "map_avoid_toll = %d\n", cur.map_avoid_toll ? 1 : 0);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
+    fprintf(f, "kbd_layout = %d\n", cur.kbd_layout);
     /* no cartão SD (FAT): o conteúdo vai ao cartão antes da troca de nome */
     bool ok = fflush(f) == 0 && fsync(fileno(f)) == 0;
     fclose(f);

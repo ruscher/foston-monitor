@@ -19,7 +19,7 @@ A memória compartilhada (fd ou arquivo) tem `L*A*2` bytes, RGB565, linha a linh
 | `LONG x y` | o que há no ponto → evento `FEAT` |
 | `SCROLL dx dy` | rola (a página ou um quadro interno sob o centro) |
 | `SCROLLTO x y` | posição absoluta |
-| `KEY nome` | enter, backspace, delete, left, right, up, down, tab, shifttab, escape, home, end, pageup, pagedown, selectall, copy, paste |
+| `KEY nome` | enter, backspace, delete, left, right, up, down, tab, shifttab, escape, home, end, pageup, pagedown, selectall, copy, paste (o modo completo também cut e undo; nomes desconhecidos são ignorados) |
 | `TEXT texto` | digita (UTF-8) |
 | `ZOOM pct` | 30..400 |
 | `DOWNLOAD url` | baixa o link (com origem e cookies) → `DLREQ` |

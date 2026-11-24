@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "theme.h"
 #include "i18n.h"
+#include "hwkbd.h"
 #include "../widgets/dialog.h"
 #include <stdio.h>
 #include <string.h>
@@ -26,6 +27,14 @@ static int tag_y;
 static lv_obj_t *pm_box, *pm_bar, *pm_title, *pm_sub;
 static pm_state_t pm_shown = PM_OFF;
 static uint32_t pm_since;
+
+/* apagada por fora (app_rebuild_now limpa a camada de cima ao trocar tema ou idioma) */
+static void pm_deleted(lv_event_t *e)
+{
+    if(lv_event_get_target(e) != pm_box) return;
+    pm_box = pm_bar = pm_title = pm_sub = NULL;
+    pm_shown = PM_OFF;
+}
 
 static void pm_close(void)
 {
@@ -69,6 +78,7 @@ static void pm_open(void)
     if(pm_box || !settings()->perf_modal) return;
     const bf_palette_t *p = pal();
     pm_box = lv_obj_create(lv_layer_top());
+    lv_obj_add_event_cb(pm_box, pm_deleted, LV_EVENT_DELETE, NULL);
     lv_obj_remove_style_all(pm_box);
     lv_obj_set_size(pm_box, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(pm_box, lv_color_black(), 0);
@@ -117,7 +127,9 @@ static void apply(void)
     on = w;
     if(w) {
         if(settings()->perf_quiet) fx_quiet(true);
-        perfmode_enter(settings()->perf_svc, settings()->perf_prio);
+        unsigned svc = settings()->perf_svc;
+        if(hwkbd_bt_connected()) svc &= ~PM_SVC_BT;   /* o teclado Bluetooth continua digitando */
+        perfmode_enter(svc, settings()->perf_prio);
     }
     else {
         fx_quiet(false);
@@ -224,9 +236,15 @@ void perfui_dialog(void)
     lv_obj_add_event_cb(dlg_bd, dlg_gone, LV_EVENT_DELETE, NULL);
 }
 
+static void tag_deleted(lv_event_t *e)
+{
+    if(lv_event_get_target(e) == tag) tag = tag_lbl = NULL;    /* o tick refaz */
+}
+
 static void tag_make(void)
 {
     tag = lv_button_create(lv_layer_top());
+    lv_obj_add_event_cb(tag, tag_deleted, LV_EVENT_DELETE, NULL);
     lv_obj_remove_style_all(tag);
     lv_obj_set_size(tag, LV_SIZE_CONTENT, 30);
     lv_obj_set_style_pad_hor(tag, 12, 0);

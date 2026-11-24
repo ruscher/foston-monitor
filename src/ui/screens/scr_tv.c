@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -192,9 +193,14 @@ static const char *ch_label(int i, char *b, size_t n)
 
 static void tv_spawn(char *const argv[])
 {
+    pid_t parent = getpid();
     pid_t p = fork();
     if(p == 0) {
         setsid();
+        /* o shell morreu (atualizado, travou): o vídeo para junto, senão continua desenhando
+         * por cima da interface nova sem ninguém para pará-lo */
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if(getppid() != parent) _exit(0);
         int nul = open("/dev/null", O_RDWR);               /* nada do player no log do shell */
         if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
         execv(argv[0], argv);

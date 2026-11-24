@@ -24,4 +24,6 @@ void fx_quiet(bool on);
 void fx_keep_awake(bool on);
 /* Chamado a cada segundo: escurece a tela após o tempo sem toque. */
 void fx_tick(void);
+/* tela escurecida? acende (teclado físico); true se estava escura */
+bool fx_undim(void);
 #endif

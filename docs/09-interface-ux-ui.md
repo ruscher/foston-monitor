@@ -341,6 +341,33 @@ quadro) um toque curto chegava inteiro, "encostou" e "soltou", numa leitura só,
 via só o estado final; o toque sumia. Agora a pressão é entregue primeiro e a soltura na
 leitura seguinte (`touch_pending()`, que o laço principal consulta antes de esperar).
 
+## Teclado físico
+
+Teclados Bluetooth (pareados em Ajustes > Bluetooth) ou USB funcionam em qualquer tela
+(`src/ui/core/hwkbd.c`). O shell vigia `/dev/input` (inotify) e abre todo `eventN` com
+teclas de letra: o teclado Bluetooth dorme e reconecta com outro número. Os botões de
+energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também declaram
+`KEY_POWER`), e a tecla Power do teclado não desliga nada.
+
+- **Layout** (Ajustes > Teclado físico): automático (ABNT2 em português, EUA nos outros
+  idiomas), ABNT2, EUA ou EUA internacional. Acentos por tecla morta (ABNT2: ´ ` ~ ^ ¨;
+  internacional: ' " ` ~ ^, com 'c = ç), AltGr, Caps Lock (também no Ç) e o teclado
+  numérico (sem Num Lock, navegação). Tradução em `core/kbdmap.c`, testada em
+  `tests/test_kbdmap.c` (`make test`).
+- **Para onde vai a tecla**: o campo de texto do teclado da tela aberto ou o campo tocado
+  por último (Enter aperta o OK do teclado da tela, Esc o fecha, Ctrl+Backspace apaga a
+  palavra); senão Enter/Esc num diálogo (botão principal / fechar); senão a tela (o
+  Terminal manda tudo ao shell, com Ctrl e Alt, e esconde o teclado da tela; o Internet
+  manda à página: texto, setas, Tab, Ctrl+A/C/V/X/Z, e tem Ctrl+L/F6 endereço, F5/Ctrl+R
+  recarregar, Alt+Esquerda/Direita, Esc sai da tela cheia; na página inicial, digitar abre a
+  pesquisa); senão Esc ou Alt+Esquerda voltam e as setas/Page Up/Page Down/Home/End rolam
+  a página. Volume, mudo e Play/Pause funcionam em qualquer lugar.
+- A primeira tecla com a tela apagada ou escurecida só acende a tela.
+- O modo performance não pausa o Bluetooth enquanto há um teclado Bluetooth conectado.
+- Teste sem teclado: `echo "key 30 1" > /run/bigfoston/ctl` (código `KEY_*`, 1 apertou,
+  0 soltou) e as capturas 23b–23e do `--screenshot`, que conferem campo, Esc, rolagem,
+  diálogos, Run, Terminal e Internet.
+
 ## Internacionalização
 
 Textos em `src/ui/core/i18n_strings.def`: `X(ID, "chave.estável", "pt-BR", "en", "es")`.

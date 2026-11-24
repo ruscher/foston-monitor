@@ -62,6 +62,9 @@ static bool has_key_power(int fd)
     if(ioctl(fd, EVIOCGBIT(0, sizeof ev), ev) < 0) return false;
     if(!((ev[EV_KEY / bpl] >> (EV_KEY % bpl)) & 1)) return false;
     if(ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0) return false;
+    /* um teclado completo (Bluetooth/USB) também declara KEY_POWER: não é o botão do FOSTON
+     * (core/hwkbd.c cuida dele) */
+    if((keys[KEY_A / bpl] >> (KEY_A % bpl)) & 1) return false;
     return (keys[KEY_POWER / bpl] >> (KEY_POWER % bpl)) & 1;
 }
 

@@ -30,6 +30,7 @@ static const bf_screen_def_t *const defs[SCR__COUNT] = {
     [SCR_FM] = &scr_fm_def,
     [SCR_WEB] = &scr_web_def,
     [SCR_PERFMODE] = &scr_perfmode_def,
+    [SCR_KEYBOARD] = &scr_keyboard_def,
 };
 
 static lv_obj_t *content;

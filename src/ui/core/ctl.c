@@ -1,6 +1,7 @@
 /* ctl.c — ver ctl.h. */
 #include "ctl.h"
 #include "nav.h"
+#include "hwkbd.h"
 #include "perfui.h"
 #include "../screens/screens.h"
 #include "lvgl.h"
@@ -36,6 +37,11 @@ static void command(char *l)
     else if(!strncmp(l, "app webapp ", 11)) nav_go(SCR_WEB, WEB_ARG_APP0 + atoi(l + 11));
     else if(!strncmp(l, "page ", 5)) scr_home_show_page(atoi(l + 5));
     else if(!strcmp(l, "app perfmode")) nav_go(SCR_PERFMODE, 0);
+    else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
+    else if(!strncmp(l, "key ", 4)) {             /* tecla crua do teclado físico: "key 30 1" */
+        int code = 0, val = 0;
+        if(sscanf(l + 4, "%d %d", &code, &val) == 2 && code > 0 && code < 0x300) hwkbd_feed((uint16_t)code, val);
+    }
     else if(!strcmp(l, "perf on")) perfui_manual(true);
     else if(!strcmp(l, "perf off")) perfui_disable();
     else if(!strcmp(l, "perf dialog")) perfui_dialog();

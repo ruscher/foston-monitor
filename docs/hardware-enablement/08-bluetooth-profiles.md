@@ -81,7 +81,17 @@ O shell é estático e não fala D-Bus; o `bfbt-agent` (libdbus, 0,9 MB de RAM) 
 - **Agente "DisplayYesNo"**: o pedido de pareamento aparece em qualquer tela do shell, com o
   código em letras grandes para comparar com o celular; Aceitar marca o aparelho como
   confiável. Serviços de aparelhos pareados e confiáveis são autorizados sem perguntar.
-  Aparelhos antigos que pedem digitar um PIN são recusados.
+- **Teclados** (HID): o BlueZ pede para o FOSTON mostrar um código (`DisplayPasskey`, chamado
+  de novo a cada tecla); o shell abre "Digite o código no teclado" com os números grandes e só
+  Cancelar (`CancelPairing`). Teclados antigos (antes do 2.1, `RequestPinCode`) recebem um PIN
+  de 6 dígitos sorteado e mostrado do mesmo jeito; outros aparelhos antigos, o PIN de fábrica
+  `0000`. O que o usuário pareia fica **confiável** (sem isso o BlueZ recusa a reconexão do
+  teclado quando ele acorda); teclados e mouses já pareados sem a marca são marcados uma vez.
+  Pareamentos vão para o cartão (`S35bluetooth save`) 1,5 s depois de parear ou esquecer,
+  não só ao desligar o Bluetooth. Teclados e mouses ficam fora da reconexão automática
+  (eles mesmos reconectam ao apertar uma tecla; a tentativa só atrasaria o celular ~5 s).
+  O kernel cria o `/dev/input/eventN` pelo `uhid`; o shell lê (ver
+  [Interface: teclado físico](../09-interface-ux-ui.md#teclado-físico)).
 - **Estado** em `/run/bigfoston-bt` (`chave=valor`; `dev=endereço|pareado|conectado|confiável|rssi|ícone|nome`,
   `req=`, `player=estado|título|artista|aparelho`, `result=operação|ok/erro/andamento|erro`).
 - **Comandos** no FIFO `/run/bigfoston-bt.cmd`: `on`, `off`, `visible 0|1`, `scan 0|1`,
@@ -103,5 +113,5 @@ o teste no aparelho com o dedo está pendente.
 - Teste do app no aparelho (pareamento novo pela tela, música pelos botões).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
   (mpg123), precisa de uma rota para o BlueALSA.
-- Viva-voz (HFP/SCO) e microfone; HID (teclado, mouse, controle).
+- Viva-voz (HFP/SCO) e microfone; HID além do teclado (mouse, controle).
 - Decidir se o firmware oficial passa para bibliotecas compartilhadas.

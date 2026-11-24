@@ -58,6 +58,7 @@ typedef struct {
     bool nav_voice;     /* Big GPS: instruções faladas */
     int  map_detail;    /* Big GPS: BF_DETAIL_* (Ajustes > Desempenho) */
     bool map_avoid_toll; /* Big GPS: rotas de carro e moto sem pedágio quando houver o arquivo */
+    int  kbd_layout;    /* teclado físico: BF_KBD_* (core/hwkbd.h); 0 = pelo idioma */
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };

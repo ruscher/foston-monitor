@@ -163,6 +163,25 @@ KEYS = {  # nome do protocolo -> (key, code, keyCode, texto)
     "escape": ("Escape", "Escape", 27, ""), "home": ("Home", "Home", 36, ""), "end": ("End", "End", 35, ""),
     "pageup": ("PageUp", "PageUp", 33, ""), "pagedown": ("PageDown", "PageDown", 34, ""),
 }
+# com modificador (2 = Ctrl, 8 = Shift) e o comando de edição do Chrome
+KEYS_MOD = {  # nome -> (key, code, keyCode, modificadores, comando)
+    "shifttab": ("Tab", "Tab", 9, 8, None),
+    "selectall": ("a", "KeyA", 65, 2, "selectAll"), "copy": ("c", "KeyC", 67, 2, "copy"),
+    "paste": ("v", "KeyV", 86, 2, "paste"), "cut": ("x", "KeyX", 88, 2, "cut"),
+    "undo": ("z", "KeyZ", 90, 2, "undo"),
+}
+
+
+def char_key(ch):
+    """key/code/keyCode de um caractere digitado (o que o Chrome receberia do teclado)."""
+    up = ch.upper()
+    if len(ch) == 1 and "A" <= up <= "Z":
+        return "Key" + up, ord(up)
+    if len(ch) == 1 and "0" <= ch <= "9":
+        return "Digit" + ch, ord(ch)
+    if ch == " ":
+        return "Space", 32
+    return "", 0
 
 
 def log(*a):
@@ -536,6 +555,17 @@ class Session:
         self.c.send("Input.dispatchMouseEvent", p, session=self.sid)
 
     def key(self, name):
+        m = KEYS_MOD.get(name)
+        if m:
+            key, code, vk, mods, cmd = m
+            base = {"key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk,
+                    "modifiers": mods}
+            down = dict(base, type="rawKeyDown")
+            if cmd:
+                down["commands"] = [cmd]
+            self.c.send("Input.dispatchKeyEvent", down, session=self.sid)
+            self.c.send("Input.dispatchKeyEvent", dict(base, type="keyUp"), session=self.sid)
+            return
         k = KEYS.get(name)
         if not k:
             return
@@ -597,7 +627,18 @@ class Session:
         elif cmd == "KEY":
             self.key(arg.strip())
         elif cmd == "TEXT":
-            self.c.send("Input.insertText", {"text": arg}, session=self.sid)
+            if len(arg) == 1:
+                # uma tecla (teclado da tela ou físico): keydown/keypress/keyup como um teclado de
+                # verdade, para os atalhos das páginas (espaço, k e f no YouTube) e a digitação
+                code, vk = char_key(arg)
+                base = {"key": arg, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
+                if arg != arg.lower():
+                    base["modifiers"] = 8
+                self.c.send("Input.dispatchKeyEvent", dict(base, type="keyDown", text=arg, unmodifiedText=arg),
+                            session=self.sid)
+                self.c.send("Input.dispatchKeyEvent", dict(base, type="keyUp"), session=self.sid)
+            elif arg:
+                self.c.send("Input.insertText", {"text": arg}, session=self.sid)
         elif cmd == "ZOOM" and nums:
             self.zoom = max(30, min(400, nums[0]))
             self.metrics()

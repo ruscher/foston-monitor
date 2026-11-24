@@ -2,7 +2,10 @@
  * fala D-Bus (docs/hardware-enablement/08-bluetooth-profiles.md).
  *
  *  - agente de pareamento "DisplayYesNo": o código aparece na tela do FOSTON e o usuário
- *    confirma; serviços de aparelhos pareados e confiáveis são autorizados direto;
+ *    confirma; teclados: o código aparece para digitar no teclado (DisplayPasskey, ou um PIN
+ *    sorteado nos antigos); o que o usuário pareia fica confiável (reconecta sozinho) e os
+ *    pareamentos vão para o cartão na hora; serviços de aparelhos pareados e confiáveis são
+ *    autorizados direto;
  *  - estado em /run/bigfoston-bt (chave=valor, reescrito por rename a cada mudança);
  *  - comandos, um por linha, no FIFO /run/bigfoston-bt.cmd:
  *      on | off                       liga/desliga o Bluetooth (S35bluetooth + marca)
@@ -48,6 +51,7 @@ typedef struct {
 static DBusConnection *bus;
 static volatile sig_atomic_t quit;
 static int dirty = 1, agent_ok, reconnect_done;   /* reconnect_done: tentativas feitas */
+static long save_soon;                              /* salvar os pareamentos (mono_ms) */
 static long powered_at;
 static long scan_until;                             /* busca: encerra sozinha (rouba o rádio do áudio) */
 #define SCAN_MS 20000                             /* quando o adaptador apareceu ligado */
@@ -58,6 +62,9 @@ static char last_result[160];
 static DBusMessage *req_msg;
 static char req_kind[16], req_dev[96];
 static unsigned req_pass;
+static int req_display;                  /* só mostra um código (já respondido): "passkey" */
+static char pair_path[128];              /* aparelho do último "pair" pedido pelo usuário */
+static char trusted_done[MAXDEV][96];    /* teclados pareados já marcados confiáveis */
 
 /* ------------------------------------------------------------ utilidades */
 
@@ -109,6 +116,9 @@ static void clean(char *dst, size_t n, const char *src)
 
 /* --------------------------------------------------- chamadas assíncronas */
 
+static void req_clear(void);
+static void set_bool(const char *path, const char *iface, const char *prop, int v);
+
 static void call_done(DBusPendingCall *pc, void *ud)
 {
     const char *what = ud;
@@ -119,7 +129,16 @@ static void call_done(DBusPendingCall *pc, void *ud)
         dirty = 1;
         return;
     }
-    if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
+    int failed = r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR;
+    if(!strcmp(what, "pair") || !strcmp(what, "forget")) {
+        if(!strcmp(what, "pair") && !failed && pair_path[0]) {
+            /* pareado pelo usuário: confiável (reconecta e é autorizado sem perguntar) */
+            set_bool(pair_path, "org.bluez.Device1", "Trusted", 1);
+        }
+        if(!failed) save_soon = mono_ms() + 1500;     /* pareamentos para o cartão */
+        if(req_display) req_clear();                   /* o código já não vale */
+    }
+    if(failed) {
         const char *msg = NULL;
         dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
         snprintf(last_result, sizeof last_result, "%s|erro|%s", what, dbus_message_get_error_name(r));
@@ -197,12 +216,18 @@ static void req_clear(void)
 {
     if(req_msg) dbus_message_unref(req_msg);
     req_msg = NULL;
+    req_display = 0;
     req_kind[0] = req_dev[0] = 0;
     dirty = 1;
 }
 
 static void req_answer(int yes)
 {
+    if(req_display) {                              /* código na tela: só dá para cancelar */
+        if(!yes && req_dev[0]) call_async(req_dev, "org.bluez.Device1", "CancelPairing", "cancel", 5000, DBUS_TYPE_INVALID);
+        req_clear();
+        return;
+    }
     if(!req_msg) return;
     if(yes && !strcmp(req_kind, "confirm")) set_bool(req_dev, "org.bluez.Device1", "Trusted", 1);
     reply_simple(req_msg, yes ? NULL : "org.bluez.Error.Rejected");
@@ -220,6 +245,27 @@ static void req_set(DBusMessage *msg, const char *kind, const char *dev, unsigne
 }
 
 static int dev_bool(const char *path, const char *prop);
+static unsigned dev_class(const char *path);
+
+/* mostra um código para digitar no aparelho (teclado); a resposta ao BlueZ já foi */
+static void disp_set(const char *dev, unsigned pass)
+{
+    if(req_msg) req_answer(0);
+    req_display = 1;
+    snprintf(req_kind, sizeof req_kind, "passkey");
+    snprintf(req_dev, sizeof req_dev, "%s", dev);
+    req_pass = pass;
+    dirty = 1;
+}
+
+static unsigned random6(void)
+{
+    unsigned v = 0;
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if(fd >= 0) { if(read(fd, &v, sizeof v) != (ssize_t)sizeof v) v = 0; close(fd); }
+    if(!v) v = (unsigned)mono_ms() * 2654435761u;
+    return v % 1000000u;
+}
 
 static DBusHandlerResult agent_msg(DBusConnection *c, DBusMessage *msg, void *ud)
 {
@@ -241,10 +287,44 @@ static DBusHandlerResult agent_msg(DBusConnection *c, DBusMessage *msg, void *ud
     } else if(!strcmp(mem, "Cancel")) {
         req_clear();
         reply_simple(msg, NULL);
-    } else if(!strcmp(mem, "Release") || !strcmp(mem, "DisplayPasskey") || !strcmp(mem, "DisplayPinCode")) {
+    } else if(!strcmp(mem, "DisplayPasskey")) {
+        /* teclado: o FOSTON mostra, o usuário digita no teclado e aperta Enter (chamado de
+         * novo a cada tecla, com o mesmo código) */
+        dbus_uint16_t entered = 0;
+        if(dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_UINT32, &pass,
+                                 DBUS_TYPE_UINT16, &entered, DBUS_TYPE_INVALID)) {
+            if(!req_display || req_pass != pass || strcmp(req_dev, dev)) {
+                syslog(LOG_INFO, "pareamento: código para digitar no aparelho");
+                disp_set(dev, pass);
+            }
+        }
+        reply_simple(msg, NULL);
+    } else if(!strcmp(mem, "DisplayPinCode")) {
+        const char *pin = NULL;
+        if(dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_STRING, &pin, DBUS_TYPE_INVALID) && pin)
+            disp_set(dev, (unsigned)strtoul(pin, NULL, 10));
+        reply_simple(msg, NULL);
+    } else if(!strcmp(mem, "RequestPinCode") &&
+              dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_INVALID)) {
+        /* aparelho antigo (antes do Bluetooth 2.1): teclado digita um PIN sorteado e mostrado
+         * aqui; fones e caixas de som usam o PIN fixo de fábrica, 0000 */
+        unsigned cls = dev_class(dev);
+        int kbd = ((cls >> 8) & 0x1f) == 0x05 && (cls & 0x40);
+        char pin[8];
+        if(kbd) { unsigned v = random6(); snprintf(pin, sizeof pin, "%06u", v); disp_set(dev, v); }
+        else snprintf(pin, sizeof pin, "0000");
+        const char *pp = pin;
+        DBusMessage *r = dbus_message_new_method_return(msg);
+        if(r) {
+            dbus_message_append_args(r, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID);
+            dbus_connection_send(bus, r, NULL);
+            dbus_message_unref(r);
+        }
+    } else if(!strcmp(mem, "Release")) {
         reply_simple(msg, NULL);
     } else {
-        /* RequestPinCode / RequestPasskey: aparelhos antigos que pedem digitar código */
+        /* RequestPasskey: o aparelho mostra um código para digitar aqui (o FOSTON não tem
+         * teclado de pareamento; não acontece com DisplayYesNo) */
         reply_simple(msg, "org.bluez.Error.Rejected");
     }
     return DBUS_HANDLER_RESULT_HANDLED;
@@ -276,6 +356,26 @@ static void agent_register(void)
 }
 
 /* ------------------------------------------------- leitura do estado */
+
+/* Device1.Class (0 = desconhecida) */
+static unsigned dev_class(const char *path)
+{
+    const char *iface = "org.bluez.Device1", *prop = "Class";
+    DBusMessage *m = dbus_message_new_method_call(BLUEZ, path, "org.freedesktop.DBus.Properties", "Get");
+    if(!m) return 0;
+    dbus_message_append_args(m, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
+    DBusMessage *r = dbus_connection_send_with_reply_and_block(bus, m, 2000, NULL);
+    dbus_message_unref(m);
+    if(!r) return 0;
+    dbus_uint32_t v = 0;
+    DBusMessageIter it, var;
+    if(dbus_message_iter_init(r, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_VARIANT) {
+        dbus_message_iter_recurse(&it, &var);
+        if(dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_UINT32) dbus_message_iter_get_basic(&var, &v);
+    }
+    dbus_message_unref(r);
+    return v;
+}
 
 /* lê um booleano de Device1 direto (usado pelo agente) */
 static int dev_bool(const char *path, const char *prop)
@@ -477,7 +577,7 @@ static void write_state(const state_t *s)
     for(int i = 0; i < s->ndev; i++)
         fprintf(f, "dev=%s|%d|%d|%d|%d|%s|%s\n", d[i].addr, d[i].paired, d[i].connected, d[i].trusted,
                 d[i].has_rssi ? d[i].rssi : 0, d[i].icon, d[i].name[0] ? d[i].name : d[i].addr);
-    if(req_msg) {
+    if(req_msg || req_display) {
         const char *name = "", *addr = "";
         for(int i = 0; i < s->ndev; i++)
             if(!strcmp(s->dev[i].path, req_dev)) { name = s->dev[i].name; addr = s->dev[i].addr; }
@@ -495,6 +595,30 @@ static void write_state(const state_t *s)
     if(last_result[0]) fprintf(f, "result=%s\n", last_result);
     fclose(f);
     rename(tmp, STATE);
+}
+
+/* Teclados (e mouses) pareados mas não confiáveis: o BlueZ recusa a reconexão quando acordam
+ * e o agente perguntaria a cada vez. Pareados aqui pelo usuário: ficam confiáveis (uma vez por
+ * aparelho; quem desmarcar por fora não é remarcado nesta execução). O código mostrado para
+ * digitar some quando o aparelho fica pareado. */
+static void trust_inputs(const state_t *s)
+{
+    for(int i = 0; i < s->ndev; i++) {
+        const dev_t_ *d = &s->dev[i];
+        if(req_display && d->paired && !strcmp(d->path, req_dev)) { req_clear(); save_soon = mono_ms() + 1500; }
+        if(!d->paired || d->trusted || strncmp(d->icon, "input-", 6)) continue;
+        int seen = 0, free_ = -1;
+        for(int k = 0; k < MAXDEV; k++) {
+            if(!strcmp(trusted_done[k], d->path)) seen = 1;
+            else if(free_ < 0 && !trusted_done[k][0]) free_ = k;
+        }
+        if(seen) continue;
+        if(free_ >= 0) snprintf(trusted_done[free_], sizeof trusted_done[free_], "%s", d->path);
+        syslog(LOG_INFO, "teclado/mouse pareado marcado como confiável");
+        set_bool(d->path, "org.bluez.Device1", "Trusted", 1);
+        save_soon = mono_ms() + 1500;
+        dirty = 1;
+    }
 }
 
 /* -------------------------------------------------------------- comandos */
@@ -542,7 +666,10 @@ static void command(char *line)
     } else if(valid_addr(arg)) {
         reconnect_done = 3;                       /* o usuário decide: sem reconexão automática */
         dev_path(path, sizeof path, arg);
-        if(!strcmp(line, "pair")) call_async(path, "org.bluez.Device1", "Pair", "pair", 60000, DBUS_TYPE_INVALID);
+        if(!strcmp(line, "pair")) {
+            snprintf(pair_path, sizeof pair_path, "%s", path);
+            call_async(path, "org.bluez.Device1", "Pair", "pair", 60000, DBUS_TYPE_INVALID);
+        }
         else if(!strcmp(line, "connect")) call_async(path, "org.bluez.Device1", "Connect", "connect", 30000, DBUS_TYPE_INVALID);
         else if(!strcmp(line, "disconnect")) call_async(path, "org.bluez.Device1", "Disconnect", "disconnect", 10000, DBUS_TYPE_INVALID);
         else if(!strcmp(line, "forget")) {
@@ -725,6 +852,7 @@ int main(int argc, char **argv)
             last_write = now;
             if(!agent_ok) agent_register();
             read_state(&st);
+            trust_inputs(&st);
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
             role_switch_tick(&st, now);
@@ -742,10 +870,13 @@ int main(int argc, char **argv)
         if(powered_at && reconnect_done < 3 && now - powered_at >= when[reconnect_done]) {
             reconnect_done++;
             for(int i = 0; i < st.ndev; i++)
-                if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected)
+                /* teclados e mouses reconectam sozinhos (o BlueZ cuida dos que pedem ao
+                 * computador): aqui só atrasariam o celular com uma espera de ~5 s */
+                if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected && strncmp(st.dev[i].icon, "input-", 6))
                     call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
+        if(save_soon && now >= save_soon) { save_soon = 0; run_service("save", NULL); }
         if(scan_until && now >= scan_until) {
             scan_until = 0;
             if(adapter[0]) call_async(adapter, "org.bluez.Adapter1", "StopDiscovery", "scan", 5000, DBUS_TYPE_INVALID);
@@ -755,6 +886,7 @@ int main(int argc, char **argv)
         int timeout = dirty ? 250 : (int)(next_full - now);
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
         if(scan_until && timeout > 1000) timeout = 1000;
+        if(save_soon && timeout > 500) timeout = 500;
         for(int k = 0; k < MAXRS; k++)
             if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;

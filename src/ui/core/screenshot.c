@@ -27,6 +27,8 @@ int screenshot_run(const char *dir)
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
 #include "webremote.h"
+#include "hwkbd.h"
+#include <linux/input.h>
 #include "lodepng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -106,6 +108,143 @@ static void wait_runner(void)
     extern bool runner_busy(void);
     for(int i = 0; i < 100 && runner_busy(); i++) pump(50);
     pump(150);
+}
+
+/* ---------------------------------------------- teclado físico (core/hwkbd.c) */
+static int kb_fail;
+
+static void kfeed(uint16_t code, uint16_t mod)
+{
+    if(mod) hwkbd_feed(mod, 1);
+    hwkbd_feed(code, 1);
+    hwkbd_feed(code, 0);
+    if(mod) hwkbd_feed(mod, 0);
+    pump(15);
+}
+
+/* digita como num ABNT2 (só o que os testes usam) */
+static void ktype(const char *s)
+{
+    static const char row1[] = "qwertyuiop", row2[] = "asdfghjkl", row3[] = "zxcvbnm";
+    for(; *s; s++) {
+        char c = *s, l = (char)(c | 0x20);
+        const char *p;
+        uint16_t sh = (c >= 'A' && c <= 'Z') ? KEY_LEFTSHIFT : 0;
+        if((p = strchr(row1, l)) && l >= 'a') kfeed((uint16_t)(KEY_Q + (p - row1)), sh);
+        else if((p = strchr(row2, l)) && l >= 'a') kfeed((uint16_t)(KEY_A + (p - row2)), sh);
+        else if((p = strchr(row3, l)) && l >= 'a') kfeed((uint16_t)(KEY_Z + (p - row3)), sh);
+        else if(c >= '1' && c <= '9') kfeed((uint16_t)(KEY_1 + (c - '1')), 0);
+        else if(c == '0') kfeed(KEY_0, 0);
+        else if(c == ' ') kfeed(KEY_SPACE, 0);
+        else if(c == '-') kfeed(KEY_MINUS, 0);
+        else if(c == '.') kfeed(KEY_DOT, 0);
+        else if(c == ',') kfeed(KEY_COMMA, 0);
+    }
+}
+
+static void kcheck(const char *what, bool ok)
+{
+    printf("teclado: %s %s\n", ok ? "ok" : "FALHOU", what);
+    if(!ok) kb_fail++;
+}
+
+static lv_obj_t *find_class(lv_obj_t *o, const lv_obj_class_t *c)
+{
+    if(lv_obj_check_type(o, c)) return o;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *r = find_class(lv_obj_get_child(o, (int32_t)i), c);
+        if(r) return r;
+    }
+    return NULL;
+}
+
+static int dlg_answer = -9;
+static void dlg_cb(int b, void *ud) { (void)ud; dlg_answer = b; }
+
+static void keyboard_tests(void)
+{
+    /* Ajustes > Teclado físico: o campo de teste já recebe o texto, com acentos ABNT2 */
+    go(SCR_SETTINGS, 0);
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    ktype("Ola");
+    kfeed(KEY_COMMA, 0);
+    kfeed(KEY_SPACE, 0);
+    ktype("a");
+    kfeed(KEY_SEMICOLON, 0);                          /* ç */
+    kfeed(KEY_APOSTROPHE, 0); ktype("a");              /* ~a = ã */
+    ktype("o ");
+    kfeed(KEY_LEFTBRACE, 0); ktype("E");               /* ´E = É */
+    kfeed(KEY_SEMICOLON, KEY_LEFTSHIFT);              /* Ç */
+    lv_obj_t *ta = find_class(lv_screen_active(), &lv_textarea_class);
+    const char *t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("campo de teste ABNT2", !strcmp(t, "Ola, a\xC3\xA7\xC3\xA3o \xC3\x89\xC3\x87"));
+    kfeed(KEY_BACKSPACE, 0);
+    kfeed(KEY_BACKSPACE, KEY_LEFTCTRL);               /* apaga a palavra */
+    t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("Backspace e Ctrl+Backspace", !strcmp(t, "Ola, a\xC3\xA7\xC3\xA3o "));
+    kfeed(KEY_HOME, 0); ktype("X");
+    t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("Home move o cursor", t[0] == 'X');
+    shot("23b-teclado-fisico");
+
+    /* Esc com o campo em foco: sai do campo; o segundo volta para Ajustes */
+    kfeed(KEY_ESC, 0); pump(50);
+    kcheck("Esc sai do campo", ta && !lv_obj_has_state(ta, LV_STATE_FOCUSED));
+    kfeed(KEY_ESC, 0); pump(300);
+    kcheck("Esc volta", nav_current().scr == SCR_SETTINGS);
+    kfeed(KEY_PAGEDOWN, 0); pump(400);
+    lv_obj_t *pg = lv_obj_get_child(app_content(), 0);
+    kcheck("Page Down rola Ajustes", pg && lv_obj_get_scroll_y(pg) > 0);
+
+    /* diálogo: Enter = botão principal, Esc = fechar (-1) */
+    static const char *b2[] = { "Não", "Sim" };
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    kfeed(KEY_ENTER, 0); pump(50);
+    kcheck("Enter no diálogo", dlg_answer == 1 && !dialog_is_open());
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    kfeed(KEY_ESC, 0); pump(50);
+    kcheck("Esc no diálogo", dlg_answer == -1 && !dialog_is_open() && nav_current().scr == SCR_SETTINGS);
+
+    /* Arquivos/Run: o teclado da tela com campo; Enter = OK dele */
+    go(SCR_RUN, RUN_ARG_NORMAL); pump(300);
+    lv_obj_t *rta = find_class(lv_screen_active(), &lv_textarea_class);
+    if(rta) lv_obj_send_event(rta, LV_EVENT_CLICKED, NULL);
+    pump(100);
+    ktype("echo teclado-ok");
+    t = rta ? lv_textarea_get_text(rta) : "";
+    kcheck("Run recebe o texto", strstr(t, "echo teclado-ok") != NULL);
+    shot("23c-run-teclado");
+
+    /* Terminal: tudo vai para o shell; o teclado da tela some na primeira tecla */
+    go(SCR_TERM, 0); pump(500);
+    ktype("echo TECLADO ");
+    kfeed(KEY_LEFTBRACE, 0); ktype("a");               /* á pelo shell */
+    kfeed(KEY_ENTER, 0);
+    pump(800);
+    kfeed(KEY_L, KEY_LEFTCTRL);                       /* Ctrl+L limpa a tela */
+    pump(400);
+    ktype("echo fim");
+    kfeed(KEY_ENTER, 0);
+    pump(800);
+    shot("23d-terminal-teclado");
+    kfeed(KEY_ESC, 0); pump(300);
+    kcheck("Esc no Terminal vai para o shell", nav_current().scr == SCR_TERM);
+
+    /* Internet: na página inicial, digitar abre o endereço com a letra; Esc fecha */
+    go(SCR_WEB, 0); pump(400);
+    ktype("w");
+    pump(100);
+    lv_obj_t *wta = find_class(lv_screen_active(), &lv_textarea_class);
+    t = wta ? lv_textarea_get_text(wta) : "";
+    kcheck("Internet: digitar abre o endereço", !strcmp(t, "w"));
+    ktype("ikipedia");
+    shot("23e-internet-teclado");
+    kfeed(KEY_ESC, 0); pump(100);
+    kcheck("Internet: Esc fecha o endereço", !find_class(lv_screen_active(), &lv_textarea_class));
+    kfeed(KEY_L, KEY_LEFTCTRL); pump(100);
+    kcheck("Internet: Ctrl+L abre o endereço", find_class(lv_screen_active(), &lv_textarea_class) != NULL);
+    kfeed(KEY_ESC, 0); pump(100);
+    printf("teclado: %d falha(s)\n", kb_fail);
 }
 
 int screenshot_run(const char *dir)
@@ -221,6 +360,7 @@ int screenshot_run(const char *dir)
     go(SCR_FM, 0); pump(500);       shot("22-fm-transmitir");
     fm_off(); pump(100);
     unsetenv("BIGFOSTON_FM_STATUS");
+    keyboard_tests();
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");

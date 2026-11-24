@@ -4,7 +4,7 @@
 
 static const char dialog_magic = 0;
 
-typedef struct { dialog_cb_t cb; void *ud; lv_obj_t *backdrop; } dlg_t;
+typedef struct { dialog_cb_t cb; void *ud; lv_obj_t *backdrop, *row; int primary, n; } dlg_t;
 
 static void free_dlg(lv_event_t *e) { lv_free(lv_event_get_user_data(e)); }
 
@@ -35,6 +35,7 @@ lv_obj_t *dialog_open(const char *symbol, lv_color_t sym_color, const char *titl
 
     dlg_t *d = lv_malloc(sizeof *d);
     d->cb = cb; d->ud = ud; d->backdrop = bd;
+    d->primary = primary_idx; d->n = n_btns;
     lv_obj_add_event_cb(bd, free_dlg, LV_EVENT_DELETE, d);
 
     lv_obj_t *card = bf_card(bd);
@@ -70,6 +71,7 @@ lv_obj_t *dialog_open(const char *symbol, lv_color_t sym_color, const char *titl
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, BF_SP_M, 0);
+    d->row = row;
     for(int i = 0; i < n_btns; i++) {
         int kind = i == danger_idx ? 2 : i == primary_idx ? 1 : 0;
         lv_obj_t *b = bf_button(row, NULL, btns[i], kind);
@@ -88,4 +90,40 @@ void dialog_close_all(void)
         if(lv_obj_get_user_data(c) == (void *)&dialog_magic)
             lv_obj_delete_async(c);
     }
+}
+
+/* o diálogo de cima que ainda não foi respondido (NULL = nenhum) */
+static dlg_t *top_dialog(void)
+{
+    lv_obj_t *top = lv_layer_top();
+    for(int32_t i = (int32_t)lv_obj_get_child_count(top) - 1; i >= 0; i--) {
+        lv_obj_t *c = lv_obj_get_child(top, i);
+        if(lv_obj_get_user_data(c) != (void *)&dialog_magic || lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) continue;
+        for(uint32_t k = 0; k < lv_obj_get_event_count(c); k++) {
+            lv_event_dsc_t *e = lv_obj_get_event_dsc(c, k);
+            if(lv_event_dsc_get_cb(e) == free_dlg) return lv_event_dsc_get_user_data(e);
+        }
+    }
+    return NULL;
+}
+
+bool dialog_is_open(void) { return top_dialog() != NULL; }
+
+bool dialog_key(bool enter)
+{
+    dlg_t *d = top_dialog();
+    if(!d) return false;
+    /* respondido: não acha de novo antes de sumir (delete_async) */
+    lv_obj_set_user_data(d->backdrop, NULL);
+    int idx = enter ? (d->primary >= 0 ? d->primary : d->n == 1 ? 0 : -2) : -1;
+    if(idx == -2) { lv_obj_set_user_data(d->backdrop, (void *)&dialog_magic); return true; }
+    if(idx >= 0) {
+        lv_obj_t *b = lv_obj_get_child(d->row, idx);
+        if(b) { lv_obj_send_event(b, LV_EVENT_CLICKED, NULL); return true; }
+    }
+    dialog_cb_t cb = d->cb;
+    void *ud = d->ud;
+    lv_obj_delete_async(d->backdrop);
+    if(cb) cb(-1, ud);
+    return true;
 }

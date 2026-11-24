@@ -149,7 +149,11 @@ void bt_poll_global(void)
     snprintf(pair_key, sizeof pair_key, "%s", key);
     const char *who = b.req_name[0] ? b.req_name : b.req_addr;
     char title[96], body[256];
-    if(!strcmp(b.req_kind, "confirm")) {
+    bool type_it = !strcmp(b.req_kind, "passkey");        /* teclado: digitar o código nele */
+    if(type_it) {
+        snprintf(title, sizeof title, "%s", tr(S_BT_KBD_PAIR));
+        snprintf(body, sizeof body, tr(S_BT_KBD_PAIR_BODY), who);
+    } else if(!strcmp(b.req_kind, "confirm")) {
         snprintf(title, sizeof title, tr(S_BT_PAIR_Q), who);
         snprintf(body, sizeof body, "%s", tr(S_BT_PAIR_CODE));
     } else {
@@ -157,12 +161,15 @@ void bt_poll_global(void)
         snprintf(body, sizeof body, "%s", tr(S_BT_AUTH_BODY));
     }
     const char *btns[] = { tr(S_BT_REJECT), tr(S_BT_ACCEPT) };
-    lv_obj_t *card = dialog_open(LV_SYMBOL_BLUETOOTH, lv_color_hex(0x3584e4), title, body, btns, 2, 1, -1,
-                                 pair_answer, NULL);
+    const char *cancel[] = { tr(S_CANCEL) };
+    lv_obj_t *card = type_it ? dialog_open(LV_SYMBOL_KEYBOARD, lv_color_hex(0x3584e4), title, body, cancel, 1, -1, -1,
+                                           pair_answer, NULL)
+                             : dialog_open(LV_SYMBOL_BLUETOOTH, lv_color_hex(0x3584e4), title, body, btns, 2, 1, -1,
+                                           pair_answer, NULL);
     pair_bd = lv_obj_get_parent(card);
     lv_obj_add_event_cb(pair_bd, pair_deleted, LV_EVENT_DELETE, NULL);
     /* o código em letras grandes: é o que o usuário compara com o celular */
-    if(!strcmp(b.req_kind, "confirm")) {
+    if(!strcmp(b.req_kind, "confirm") || type_it) {
         lv_obj_t *code = bf_label(card, b.req_code, BF_FONT_CLOCK, pal()->text);
         lv_obj_move_to_index(code, 2);
         lv_obj_set_style_text_letter_space(code, 6, 0);

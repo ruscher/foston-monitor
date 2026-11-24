@@ -162,6 +162,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_lz4dec.c core/lz4dec.c -llz4 -o build/test/test_lz4dec
 	./build/test/test_lz4dec
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_kbdmap.c core/kbdmap.c -o build/test/test_kbdmap
+	./build/test/test_kbdmap
 
 run: sim
 	./build/sim/bigfoston-shell

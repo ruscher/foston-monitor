@@ -29,6 +29,7 @@ static const item_t items[] = {
     { BF_SYMBOL_KEY,       0x33c7de, S_SET_SSH,       S_SUB_SSH,       SCR_SSH, 0 },
     { BF_SYMBOL_ROCKET,    0xe66100, S_SET_PERF,      S_SUB_PERF,      SCR_PERF, 0 },
     { LV_SYMBOL_CHARGE,    0xe66100, S_SET_PERFMODE,  S_SUB_PERFMODE,  SCR_PERFMODE, 0 },
+    { LV_SYMBOL_KEYBOARD,  0x3584e4, S_SET_KBD,       S_SUB_KBD,       SCR_KEYBOARD, 0 },
     { BF_SYMBOL_WRENCH,    0x8a93a5, S_SET_ADVANCED,  S_SUB_ADVANCED,  SCR_ADVANCED, 0 },
 };
 #define N_ITEMS (int)(sizeof items / sizeof items[0])
