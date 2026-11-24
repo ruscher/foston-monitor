@@ -28,6 +28,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/soundcard.h>
 #include <time.h>
 #include <unistd.h>
@@ -86,7 +87,9 @@ static const char *fw_path = "/mnt/sd/BigFoston/tv/isdbt_nova_12mhz_b0.inp";
 static double freq_mhz;
 static const char *state_path = "/run/bigfoston-tv";
 static double fps_shown, ts_kbps;
-static unsigned long frames_shown, frames_late;
+static int ladder;                                        /* degrau de decodificação (run_player) */
+static unsigned long audio_underruns;
+static unsigned long frames_shown, frames_late, frames_thin;
 
 static FILE *rec;                              /* -w: o TS também vai para o cartão */
 static unsigned long rec_bytes;
@@ -97,9 +100,27 @@ static void on_usr1(int s) { (void)s; rec_toggle = 1; }
 static const char *play_path;                  /* -p: toca um arquivo em vez da antena */
 static double play_pos, play_dur;
 
+/* pacotes TS perdidos (contador de continuidade): falha do sinal ou do sintonizador, não da CPU */
+static unsigned long ts_lost;
+static uint8_t cc_last[8192];
+
+static void cc_check(const uint8_t *d, int n)
+{
+    for(int i = 0; i + 188 <= n; i += 188) {
+        const uint8_t *p = d + i;
+        if(p[0] != 0x47) return;
+        int pid = (p[1] & 0x1f) << 8 | p[2];
+        if(pid == 0x1fff || !(p[3] & 0x10)) continue;          /* nulo ou sem carga */
+        int c = p[3] & 15, l = cc_last[pid];
+        if(l & 0x80 && c != ((l + 1) & 15) && c != (l & 15)) ts_lost++;
+        cc_last[pid] = (uint8_t)(0x80 | c);
+    }
+}
+
 static void on_data(const hdr_t *h, const uint8_t *d, int n)
 {
     if(h->type == 607 || h->type == 729 || h->type == 693) {
+        cc_check(d, n);
         ring_put(d, n);
         if(rec && n > 0) {
             if(fwrite(d, 1, (size_t)n, rec) != (size_t)n) { fclose(rec); rec = NULL; }   /* cartão cheio */
@@ -117,7 +138,7 @@ static void write_state(const char *st)
     fprintf(f, "state=%s\nfreq=%.3f\n", st, freq_mhz);
     if(last_stats.valid)
         fprintf(f, "locked=%d\nsnr=%d\nrssi=%d\n", last_stats.demod_locked, last_stats.snr, last_stats.rssi);
-    fprintf(f, "ts_kbps=%.0f\ndrops=%lu\nfps=%.1f\nlate=%lu\n", ts_kbps, ts_drops, fps_shown, frames_late);
+    fprintf(f, "ts_kbps=%.0f\nlost=%lu\ndrops=%lu\nfps=%.1f\nlate=%lu\nshown=%lu\nthin=%lu\nskip=%d\nunderruns=%lu\n", ts_kbps, ts_lost, ts_drops, fps_shown, frames_late, frames_shown, frames_thin, ladder, audio_underruns);
     if(rec) fprintf(f, "rec_kb=%lu\nrec_file=%s\n", rec_bytes / 1024, rec_name);
     if(play_path) fprintf(f, "file=%s\npos=%.0f\ndur=%.0f\n", play_path, play_pos, play_dur);
     fclose(f);
@@ -127,8 +148,11 @@ static void write_state(const char *st)
 static void *tuner_thread(void *a)
 {
     (void)a;
+    /* a FIFO do chip transborda se esta thread atrasa (TS perdido = imagem travada) */
+    setpriority(PRIO_PROCESS, 0, -15);
     on_msg = on_data;
     double next_stats = mono() + 1, t_start = mono();
+    int idle_ms = getenv("BFTV_IDLE_MS") ? atoi(getenv("BFTV_IDLE_MS")) : 3;
     unsigned long last_bytes = 0;
     while(!quit) {
         if(rec_toggle) {                                /* gravar / parar (SIGUSR1) */
@@ -149,11 +173,9 @@ static void *tuner_thread(void *a)
         }
         unsigned long before = ts_bytes;
         poll_read();
-        if(ts_bytes == before) msleep(3);           /* nada chegando: não gira à toa */
+        if(ts_bytes == before) msleep(idle_ms);     /* nada chegando: não gira à toa */
         if(mono() >= next_stats) {
-            on_msg = store;
-            stats();
-            on_msg = on_data;
+            stats();                                   /* on_data passa a resposta a store: o TS não para */
             unsigned long b = ts_bytes;                  /* taxa do TS no intervalo */
             ts_kbps = (b - last_bytes) * 8 / 1000.0;   /* por segundo */
             last_bytes = b;
@@ -247,6 +269,27 @@ static void blit(const AVFrame *f)
     if(w > (fb_w - out_x) / 2) w = (fb_w - out_x) / 2 & ~1;  /* nunca fora do retângulo da tela */
     if(h > (fb_h - out_y) / 2) h = (fb_h - out_y) / 2 & ~1;
     if(w <= 0 || h <= 0) return;
+    if(!(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 3)) {
+        /* alinhado: dois pontos por escrita de 32 bits (o framebuffer não tem cache; metade das
+         * escritas no barramento) */
+        for(int y = 0; y < h; y += 2) {
+            const uint8_t *y0 = f->data[0] + y * f->linesize[0], *y1 = y0 + f->linesize[0];
+            const uint8_t *u = f->data[1] + (y / 2) * f->linesize[1], *v = f->data[2] + (y / 2) * f->linesize[2];
+            uint32_t *d0 = (uint32_t *)(fb + (out_y + y * 2) * fb_stride + out_x);
+            uint32_t *d1 = d0 + fb_stride / 2, *d2 = d1 + fb_stride / 2, *d3 = d2 + fb_stride / 2;
+            for(int x = 0; x < w; x += 2) {
+                int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
+                uint32_t a = px(y0[x], rv, g, bu), b = px(y0[x + 1], rv, g, bu);
+                uint32_t c = px(y1[x], rv, g, bu), d = px(y1[x + 1], rv, g, bu);
+                a |= a << 16; b |= b << 16; c |= c << 16; d |= d << 16;
+                d0[x] = d1[x] = a;
+                d0[x + 1] = d1[x + 1] = b;
+                d2[x] = d3[x] = c;
+                d2[x + 1] = d3[x + 1] = d;
+            }
+        }
+        return;
+    }
     for(int y = 0; y < h; y += 2) {
         const uint8_t *y0 = f->data[0] + y * f->linesize[0], *y1 = y0 + f->linesize[0];
         const uint8_t *u = f->data[1] + (y / 2) * f->linesize[1], *v = f->data[2] + (y / 2) * f->linesize[2];
@@ -299,7 +342,11 @@ static int dsp_open(void)
         else break;
     }
     if(dsp < 0) return -1;
+    /* 6 x 2 KB (~190 ms). Medido (24/11/2026, mesmo canal): 12 x 4 KB (~750 ms) mostrou 10 qps
+     * contra 15,6: com o buffer grande o decodificador corre muito à frente do som, a fila de
+     * quadros enche e o relógio (GETODELAY) anda em degraus. BFTV_FRAG=0xNNNNMMMM para testar. */
     int frag = (6 << 16) | 11, fmt = AFMT_S16_LE, ch = 1, sp = 32000;
+    if(getenv("BFTV_FRAG")) frag = (int)strtol(getenv("BFTV_FRAG"), NULL, 0);
     ioctl(dsp, SNDCTL_DSP_SETFRAGMENT, &frag);
     if(ioctl(dsp, SNDCTL_DSP_SETFMT, &fmt) || ioctl(dsp, SNDCTL_DSP_CHANNELS, &ch) || ioctl(dsp, SNDCTL_DSP_SPEED, &sp)) {
         close(dsp);
@@ -329,6 +376,10 @@ static void audio_out(const INT_PCM *pcm, int frames, int chans, double pts)
         out[n++] = (int16_t)((b + 2 * c) / 3);
     }
     if(dsp < 0) return;
+    if(audio_pts >= 0) {                                       /* o buffer secou: o som falhou */
+        int q = 0;
+        if(ioctl(dsp, SNDCTL_DSP_GETODELAY, &q) == 0 && q == 0) audio_underruns++;
+    }
     const uint8_t *p = (const uint8_t *)out;
     size_t left = (size_t)n * 2;
     while(left && !quit) {
@@ -342,13 +393,18 @@ static void audio_out(const INT_PCM *pcm, int frames, int chans, double pts)
 
 /* ------------------------------------------------------------ fila de quadros (mostrar na hora) */
 
-/* 2 s de vídeo: em alguns canais o vídeo vem no fluxo bem à frente do áudio; com fila curta o
- * decodificador parava esperando o mostrador, que esperava o áudio que não chegava */
-#define QN 32
+/* 2 s de vídeo mesmo a 30 qps: em alguns canais o vídeo vem no fluxo bem à frente do áudio; com
+ * fila curta o decodificador parava esperando o mostrador, que esperava o áudio que não chegava;
+ * o mostrador seguia sozinho a 15 qps, o decodificador consumia o TS à metade da velocidade de um
+ * canal de 30 qps e o anel do TS transbordava (drops). 64 quadros 320x180 = 5,5 MB. */
+#define QN 64
 static AVFrame *q[QN];
 static double q_pts[QN];
 static int q_r, q_w;
 static pthread_mutex_t q_mx = PTHREAD_MUTEX_INITIALIZER;
+
+/* último quadro atrasado (o mostrador marca; a escada de decodificação lê) */
+static volatile double late_at = -100;
 
 static void *show_thread(void *a)
 {
@@ -372,8 +428,12 @@ static void *show_thread(void *a)
             ac = -1;
         }
         if(ac >= 0 && pts > ac + 0.02 && pts < ac + 2) { usleep(5000); continue; }   /* cedo: espera */
-        if(ac >= 0 && pts < ac - 0.25) frames_late++;          /* atrasado: descarta */
-        else { blit(f); frames_shown++; }
+        /* atrasado: descarta. No degrau 2 (só I e P, ~5 qps) o decodificador segura os quadros
+         * para reordenar (até ~0,9 s): mostrar com atraso é melhor que não mostrar nenhum */
+        static double last_blit;
+        if(ac >= 0 && pts < ac - (ladder >= 2 ? 1.0 : 0.25)) { frames_late++; late_at = now; }
+        else if(ladder >= 1 && now - last_blit < 0.06) frames_thin++;   /* no aperto, até ~15 qps na tela */
+        else { blit(f); frames_shown++; last_blit = now; }
         pthread_mutex_lock(&q_mx);
         av_frame_unref(f);
         q_r++;
@@ -508,6 +568,54 @@ static int scan(const char *out)
     return 0;
 }
 
+/* Escada de decodificação. Há canais 1seg em H.264 Main com quadros B a 30 qps (SBT: 85 % B,
+ * em pirâmide); o ARM11 não decodifica todos com o som, o sintonizador e o desenho (CPU a 100 %,
+ * o som picota e os quadros chegam atrasados). Medido com 15 s do SBT:
+ *   0 tudo                              456 quadros  100 % do custo
+ *   1 sem os que não são referência      401          76 %
+ *   2 sem os quadros B (só I e P)         69          38 %
+ * Sobe um degrau quando o TS se acumula (> 48 KB, ~1 s atrás do ar, sem diminuir), o som está a ponto de acabar
+ * (< 30 ms no buffer) ou um quadro chegou atrasado no último segundo; desce depois de 8 s sem
+ * aperto, e o dobro (até 64 s) cada vez que precisou subir de novo logo depois de descer. Nos degraus 1 e 2 a tela mostra até
+ * ~15 qps (cada quadro ampliado custa CPU; 15 qps é o padrão do 1seg). Só troca num quadro-chave: pular B
+ * de referência no meio do grupo deixaria os seguintes sem referência (imagem quebrada).
+ * Canais de 15 qps em Baseline (TV Brasil) não têm B: ficam no 0 com folga. */
+static double ladder_ok = -1;
+
+static int audio_buffered_ms(void)
+{
+    int bytes = 0;
+    if(dsp < 0 || ioctl(dsp, SNDCTL_DSP_GETODELAY, &bytes) < 0) return 1000;
+    return bytes / 64;                                         /* 64 bytes por ms */
+}
+
+static void ladder_step(AVCodecContext *vc)
+{
+    static const enum AVDiscard lv[3] = { AVDISCARD_DEFAULT, AVDISCARD_NONREF, AVDISCARD_BIDIR };
+    static double hold = 8, went_down = -100;
+    double now = mono();
+    pthread_mutex_lock(&r_mx);
+    size_t backlog = r_head - r_tail;                          /* TS chegado e ainda não lido */
+    pthread_mutex_unlock(&r_mx);
+    /* ~1 s atrás do ar e sem diminuir (ao abrir há ~2,5 s da análise do fluxo, que se esvaziam) */
+    static size_t prev_backlog;
+    bool behind = backlog > 48 * 1024 && backlog + 4096 >= prev_backlog;
+    prev_backlog = backlog;
+    bool tight = behind || (audio_pts >= 0 && audio_buffered_ms() < 30) || now - late_at < 1;
+    if(ladder_ok < 0) ladder_ok = now;
+    if(tight) {
+        if(ladder < 2) {
+            ladder++;
+            if(now - went_down < 20 && hold < 64) hold *= 2;   /* desceu cedo demais: espera mais */
+        }
+        ladder_ok = now;
+    } else if(ladder > 0 && now - ladder_ok > hold) {
+        ladder--;
+        ladder_ok = went_down = now;
+    }
+    vc->skip_frame = lv[ladder];
+}
+
 /* demux já aberto: decodifica e mostra até o fim ou SIGTERM */
 static void run_player(AVFormatContext *fc, pthread_t *st)
 {
@@ -524,6 +632,13 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
         if(avcodec_open2(vc, c, NULL) < 0) vi = -1;
     }
     HANDLE_AACDECODER aac = ai >= 0 ? aacDecoder_Open(TT_MP4_LOAS, 1) : NULL;
+    if(aac) {
+        /* a saída é mono: a mistura no decodificador pula o estéreo paramétrico (HE-AAC v2);
+         * QMF real (baixo consumo) no SBR; sem o limitador (o volume vem do mixer) */
+        aacDecoder_SetParam(aac, AAC_PCM_MAX_OUTPUT_CHANNELS, 1);
+        aacDecoder_SetParam(aac, AAC_QMF_LOWPOWER, 1);
+        aacDecoder_SetParam(aac, AAC_PCM_LIMITER_ENABLE, 0);
+    }
     if(aac) dsp_open();
     for(int i = 0; i < QN; i++) q[i] = av_frame_alloc();
     pthread_create(st, NULL, show_thread, NULL);
@@ -531,6 +646,7 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
 
     AVPacket *pk = av_packet_alloc();
     AVFrame *fr = av_frame_alloc();
+    int skip_ok = !getenv("BFTV_NOSKIP");
     static INT_PCM pcm[8192];
     while(!quit && av_read_frame(fc, pk) >= 0) {
         AVStream *s = fc->streams[pk->stream_index];
@@ -551,6 +667,7 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
                 }
             }
         } else if(pk->stream_index == vi && vc) {
+            if(skip_ok && (pk->flags & AV_PKT_FLAG_KEY)) ladder_step(vc);
             avcodec_send_packet(vc, pk);
             while(avcodec_receive_frame(vc, fr) == 0) {
                 double fp = fr->best_effort_timestamp == AV_NOPTS_VALUE ? -1 : fr->best_effort_timestamp * av_q2d(s->time_base);
@@ -627,6 +744,9 @@ int main(int argc, char **argv)
     signal(SIGUSR1, on_usr1);
     signal(SIGUSR2, on_usr2);
     signal(SIGWINCH, on_winch);
+    /* acima da interface (nice -5 com o modo performance ou um controle): a TV não perde a CPU
+     * para o shell nem para o Bluetooth; as threads criadas depois herdam */
+    setpriority(PRIO_PROCESS, 0, -10);
     if(!play_path && map()) return 1;
     if(off) { power_off(); return 0; }
     tables();
@@ -634,7 +754,8 @@ int main(int argc, char **argv)
     if(play_path) return play_file();
 
     /* sintonizador: liga e carrega o firmware se ainda não respondeu */
-    clk_div = 7;
+    int play_div = getenv("BFTV_CLKDIV") ? atoi(getenv("BFTV_CLKDIV")) : 7;
+    clk_div = play_div;
     spi_setup();
     on_msg = store;
     if(send_msg(668, 150, NULL, 0) || wait_msg(669, 500)) {
@@ -649,6 +770,10 @@ int main(int argc, char **argv)
             spi_setup();
             if(fw_download(fw_path)) { write_state("erro_firmware"); return 1; }
         }
+        /* o download é em clk 15; tocar nele deixava a leitura do TS (espera ativa no SPI) com o
+         * dobro de CPU na primeira abertura depois de ligar */
+        clk_div = play_div;
+        spi_setup();
     }
     if(scan_out) return scan(scan_out);
     write_state("sintonizando");
