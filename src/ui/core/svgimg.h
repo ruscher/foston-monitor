@@ -18,4 +18,7 @@ void      svg_image_free(lv_image_dsc_t *img);
 /* ícone de app: o desenho cabe em box x box (com margem), só a forma (A8, a opacidade de
  * cada pixel), para ser pintado com image_recolor como os ícones do sistema */
 bool      svg_render_mask(const char *path, int box, lv_image_dsc_t *img);
+/* um SVG em texto (nanosvg altera a cópia) rasterizado com w px de largura, como máscara A8;
+ * a altura segue a proporção do desenho */
+bool      svg_render_mask_str(const char *svg, int w, lv_image_dsc_t *img);
 #endif

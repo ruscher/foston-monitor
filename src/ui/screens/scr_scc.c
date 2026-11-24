@@ -16,6 +16,7 @@
 #include "../core/osd.h"
 #include "../core/settings.h"
 #include "../widgets/page.h"
+#include "../widgets/padview.h"
 #include "../assets/icons/bf_icons.h"
 #include <dirent.h>
 #include <errno.h>
@@ -155,10 +156,63 @@ static void pads_signature(char *o, size_t n)
     }
 }
 
+/* bateria do controle (o hid-playstation a publica em /sys/class/power_supply) */
+static bool pad_battery(const char *addr, int *pct, bool *charging)
+{
+    char low[18], path[160], b[32];
+    if(!addr[0]) return false;
+    for(int i = 0; i < 18; i++) low[i] = (char)(addr[i] >= 'A' && addr[i] <= 'F' ? addr[i] + 32 : addr[i]);
+    snprintf(path, sizeof path, "/sys/class/power_supply/ps-controller-battery-%s/capacity", low);
+    FILE *f = fopen(path, "r");
+    if(!f) return false;
+    bool ok = fgets(b, sizeof b, f) != NULL;
+    fclose(f);
+    if(!ok) return false;
+    *pct = atoi(b);
+    snprintf(path, sizeof path, "/sys/class/power_supply/ps-controller-battery-%s/status", low);
+    *charging = false;
+    if((f = fopen(path, "r"))) {
+        if(fgets(b, sizeof b, f)) *charging = !strncmp(b, "Charging", 8) || !strncmp(b, "Full", 4);
+        fclose(f);
+    }
+    return true;
+}
+
+/* selo pequeno arredondado: símbolo + texto */
+static lv_obj_t *chip_w(lv_obj_t *parent, const char *sym, const char *txt, lv_color_t col, int maxw)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *c = bf_plain(parent);
+    lv_obj_set_size(c, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(c, lv_color_mix(col, p->surface2, 40), 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(c, 10, 0);
+    lv_obj_set_style_pad_ver(c, 4, 0);
+    char t[120];
+    snprintf(t, sizeof t, "%s%s%s", sym ? sym : "", sym ? "  " : "", txt);
+    lv_obj_t *l = bf_label(c, t, BF_FONT_S, col);
+    /* do tamanho do texto; só corta com "…" o que não cabe */
+    if(lv_text_get_width(t, (uint32_t)strlen(t), BF_FONT_S, 0) > maxw) bf_label_ellipsis(l, maxw);
+    return c;
+}
+
+static lv_obj_t *chip(lv_obj_t *parent, const char *sym, const char *txt, lv_color_t col)
+{
+    return chip_w(parent, sym, txt, col, 330);
+}
+
+static const char *battery_sym(int pct)
+{
+    return pct > 80 ? LV_SYMBOL_BATTERY_FULL : pct > 55 ? LV_SYMBOL_BATTERY_3 : pct > 30 ? LV_SYMBOL_BATTERY_2
+         : pct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+}
+
 static void build_pads(void)
 {
     const bf_palette_t *p = pal();
     lv_obj_t *pg = page_create(body);
+    lv_obj_set_style_pad_top(pg, BF_SP_S, 0);
     pads_signature(pads_sig, sizeof pads_sig);
     int shown = 0;
     for(int i = 0; i < GAMEPAD_MAX; i++) {
@@ -169,113 +223,67 @@ static void build_pads(void)
         lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(card, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(card, BF_SP_M, 0);
-        gp_badge(card, 64, C_SCC);
+        lv_obj_set_style_pad_column(card, BF_SP_L, 0);
+        lv_obj_set_style_border_width(card, 1, 0);
+        lv_obj_set_style_border_color(card, lv_color_hex(C_SCC), 0);
+        lv_obj_set_style_border_opa(card, LV_OPA_40, 0);
+        padview_create(card, 160, sony(&g));
         lv_obj_t *col = bf_plain(card);
         lv_obj_set_height(col, LV_SIZE_CONTENT);
         lv_obj_set_flex_grow(col, 1);
         lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_style_pad_row(col, 2, 0);
+        lv_obj_set_style_pad_row(col, 6, 0);
         lv_obj_t *nm = bf_label(col, g.name, BF_FONT_M, p->text);
-        bf_label_ellipsis(nm, 380);
-        char b[200];
-        snprintf(b, sizeof b, "%s %s", g.bt ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_USB,
-                 g.bt ? (g.addr[0] ? g.addr : "Bluetooth") : "USB");
-        bf_label(col, b, BF_FONT_S, p->text_dim);
-        snprintf(b, sizeof b, "%s: %s  ·  %s", tr(S_SCC_MAP), g.map_name, from_text(g.map_from));
-        lv_obj_t *ml = wrap_label(col, b, BF_FONT_S, g.map_from == GPM_DEFAULT ? p->warning : lv_color_hex(0x9f86ff));
-        (void)ml;
+        bf_label_ellipsis(nm, 360);
+        lv_obj_t *chips = bf_plain(col);
+        lv_obj_set_size(chips, LV_PCT(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(chips, LV_FLEX_FLOW_ROW_WRAP);
+        lv_obj_set_style_pad_gap(chips, 6, 0);
+        chip(chips, g.bt ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_USB, g.bt ? (g.addr[0] ? g.addr : "Bluetooth") : "USB",
+             lv_color_hex(0x7fb2ff));
+        int pct;
+        bool chg;
+        if(pad_battery(g.addr, &pct, &chg)) {
+            char b[24];
+            snprintf(b, sizeof b, tr(S_SCC_BATTERY), pct);
+            chip(chips, chg ? LV_SYMBOL_CHARGE : battery_sym(pct), b,
+                 pct <= 15 && !chg ? p->danger : lv_color_hex(0x6fdc8c));
+        }
+        char m[160];
+        snprintf(m, sizeof m, "%s  ·  %s", g.map_name, from_text(g.map_from));
+        chip(chips, LV_SYMBOL_SHUFFLE, m, g.map_from == GPM_DEFAULT ? p->warning : lv_color_hex(0xb9a6ff));
         lv_obj_t *gl = bf_label(col, g.guid, BF_FONT_MONO, p->text_dim);
-        lv_obj_set_style_text_opa(gl, LV_OPA_70, 0);
+        lv_obj_set_style_text_opa(gl, LV_OPA_60, 0);
         lv_obj_t *bc = bf_plain(card);
         lv_obj_set_size(bc, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(bc, LV_FLEX_FLOW_COLUMN);
         lv_obj_set_style_pad_row(bc, BF_SP_S, 0);
         lv_obj_t *bt = bf_button(bc, LV_SYMBOL_EYE_OPEN, tr(S_SCC_TAB_TEST), 1);
-        lv_obj_set_size(bt, 170, 48);
+        lv_obj_set_size(bt, 168, 46);
         lv_obj_add_event_cb(bt, test_click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *br = bf_button(bc, LV_SYMBOL_EDIT, tr(S_SCC_TAB_REG), 0);
-        lv_obj_set_size(br, 170, 48);
+        lv_obj_set_size(br, 168, 46);
         lv_obj_add_event_cb(br, reg_click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
     if(!shown) empty_state(pg);
     int db, user;
     db_counts(&db, &user);
     char b[200];
-    snprintf(b, sizeof b, tr(S_SCC_DB), db, user);
-    lv_obj_t *n = wrap_label(pg, b, BF_FONT_S, p->text_dim);
-    lv_obj_set_style_pad_top(n, BF_SP_S, 0);
+    snprintf(b, sizeof b, tr(S_SCC_DB_SHORT), db, user);
+    lv_obj_t *info = bf_plain(pg);
+    lv_obj_set_size(info, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(info, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_top(info, BF_SP_S, 0);
+    chip_w(info, LV_SYMBOL_LIST, b, p->text_dim, 700);
 }
 
 /* ============================================================== Testar */
 
-typedef struct { lv_obj_t *o; int ctl; uint32_t on; bool was; } part_t;
-static part_t parts[PC__NBTN];
-static int n_parts;
-static lv_obj_t *stick[2], *dot[2], *trig[2], *trig_fill[2], *raw_lbl, *cnt_lbl;
+static lv_obj_t *pv, *raw_lbl, *cnt_lbl, *bat_lbl, *hold_bar, *st_val[2], *tr_bar[2];
 static char raw_txt[96];
 static uint32_t b_since;                /* B segurado desde (sair do testador) */
-static int16_t last_ax[PC__NAXIS] = { 9999 };
-
-static lv_obj_t *blob(lv_obj_t *par, int x, int y, int w, int h, int r)
-{
-    lv_obj_t *o = lv_obj_create(par);
-    lv_obj_remove_style_all(o);
-    lv_obj_set_pos(o, x, y);
-    lv_obj_set_size(o, w, h);
-    lv_obj_set_style_radius(o, r, 0);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-    lv_obj_remove_flag(o, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    return o;
-}
-
-static lv_obj_t *part(lv_obj_t *par, int ctl, int x, int y, int w, int h, int r, uint32_t on, const char *txt)
-{
-    const bf_palette_t *p = pal();
-    lv_obj_t *o = blob(par, x, y, w, h, r);
-    lv_obj_set_style_bg_color(o, p->surface, 0);
-    lv_obj_set_style_border_width(o, 2, 0);
-    lv_obj_set_style_border_color(o, lv_color_hex(on), 0);
-    lv_obj_set_style_border_opa(o, LV_OPA_60, 0);
-    if(txt) {
-        lv_obj_t *l = bf_label(o, txt, BF_FONT_S, lv_color_hex(on));
-        lv_obj_center(l);
-    }
-    if(n_parts < PC__NBTN) parts[n_parts++] = (part_t){ o, ctl, on, false };
-    return o;
-}
-
-/* as formas do PlayStation desenhadas com linhas (a fonte não tem △ ○ ✕ □) */
-static void shape(lv_obj_t *o, int kind, uint32_t col)
-{
-    lv_color_t c = lv_color_hex(col);
-    if(kind == 1) {                                  /* bola */
-        lv_obj_t *r = blob(o, 0, 0, 16, 16, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(r, 2, 0);
-        lv_obj_set_style_border_color(r, c, 0);
-        lv_obj_center(r);
-        return;
-    }
-    if(kind == 3) {                                  /* quadrado */
-        lv_obj_t *r = blob(o, 0, 0, 15, 15, 1);
-        lv_obj_set_style_bg_opa(r, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(r, 2, 0);
-        lv_obj_set_style_border_color(r, c, 0);
-        lv_obj_center(r);
-        return;
-    }
-    static lv_point_precise_t cross1[2] = { { 0, 0 }, { 14, 14 } }, cross2[2] = { { 14, 0 }, { 0, 14 } };
-    static lv_point_precise_t tri[4] = { { 8, 0 }, { 16, 14 }, { 0, 14 }, { 8, 0 } };
-    for(int k = 0; k < (kind == 0 ? 2 : 1); k++) {
-        lv_obj_t *l = lv_line_create(o);
-        lv_line_set_points(l, kind == 2 ? tri : k ? cross2 : cross1, kind == 2 ? 4 : 2);
-        lv_obj_set_style_line_width(l, 2, 0);
-        lv_obj_set_style_line_color(l, c, 0);
-        lv_obj_set_style_line_rounded(l, true, 0);
-        lv_obj_center(l);
-    }
-}
+static int16_t last_ax[PC__NAXIS];
 
 static void test_obs(int slot, uint16_t type, uint16_t code, int32_t value)
 {
@@ -285,7 +293,42 @@ static void test_obs(int slot, uint16_t type, uint16_t code, int32_t value)
     if(b && type == EV_KEY && pm_button_index(b, code) >= 0) snprintf(src, sizeof src, "b%d", pm_button_index(b, code));
     else if(b && type == EV_ABS && pm_hat_index(b, code) >= 0) snprintf(src, sizeof src, "h%d", pm_hat_index(b, code));
     else if(b && type == EV_ABS && pm_axis_index(b, code) >= 0) snprintf(src, sizeof src, "a%d", pm_axis_index(b, code));
-    snprintf(raw_txt, sizeof raw_txt, "%s 0x%03x (%s) = %d", type == EV_KEY ? "EV_KEY" : "EV_ABS", code, src, (int)value);
+    snprintf(raw_txt, sizeof raw_txt, "%s 0x%03x %s = %d", type == EV_KEY ? "KEY" : "ABS", code, src, (int)value);
+}
+
+/* cartão lateral: uma linha "título ... valor" */
+static lv_obj_t *side_row(lv_obj_t *parent, const char *title, lv_obj_t **val)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *r = bf_plain(parent);
+    lv_obj_set_size(r, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(r, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(r, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    bf_label(r, title, BF_FONT_S, p->text_dim);
+    if(val) *val = bf_label(r, "", BF_FONT_MONO, p->text);
+    return r;
+}
+
+static lv_obj_t *mini_bar(lv_obj_t *parent)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *b = lv_bar_create(parent);
+    lv_obj_set_size(b, 96, 10);
+    lv_bar_set_range(b, 0, 1000);
+    lv_obj_set_style_bg_color(b, p->surface2, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(b, 5, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x9f86ff), LV_PART_INDICATOR);
+    lv_obj_set_style_radius(b, 5, LV_PART_INDICATOR);
+    return b;
+}
+
+/* o maior controle que cabe na altura do conteúdo (e na largura dada) */
+static int pad_width(int maxw)
+{
+    lv_obj_update_layout(body);
+    int w = (lv_obj_get_height(body) - 16) * 400 / 250;
+    return w > maxw ? maxw : w < 200 ? 200 : w;
 }
 
 static void build_test(void)
@@ -295,147 +338,96 @@ static void build_test(void)
     if(s < 0) { lv_obj_t *pg = page_create(body); empty_state(pg); return; }
     gp_info_t g;
     gamepad_info(s, &g);
-    bool ps = sony(&g);
-    n_parts = 0;
-    memset(last_ax, 0x7f, sizeof last_ax);
     raw_txt[0] = 0;
     b_since = 0;
+    memset(last_ax, 0x7f, sizeof last_ax);
     gamepad_capture(true, test_obs);
 
-    lv_obj_t *pad = bf_plain(body);
-    lv_obj_set_size(pad, 640, 236);
-    lv_obj_align(pad, LV_ALIGN_TOP_MID, 0, -6);
-    lv_color_t shell = lv_color_mix(p->surface2, p->text_dim, 220);
-    /* silhueta: corpo e as duas pegadas */
-    for(int k = 0; k < 2; k++) {
-        lv_obj_t *gr = blob(pad, k ? 418 : 102, 92, 120, 136, 60);
-        lv_obj_set_style_bg_color(gr, shell, 0);
-        lv_obj_set_style_transform_pivot_x(gr, 60, 0);
-        lv_obj_set_style_transform_pivot_y(gr, 68, 0);
-        lv_obj_set_style_transform_rotation(gr, k ? -200 : 200, 0);
-    }
-    lv_obj_t *bd = blob(pad, 82, 34, 476, 150, 74);
-    lv_obj_set_style_bg_color(bd, shell, 0);
-    lv_obj_set_style_shadow_width(bd, 24, 0);
-    lv_obj_set_style_shadow_color(bd, lv_color_black(), 0);
-    lv_obj_set_style_shadow_opa(bd, LV_OPA_30, 0);
+    /* o controle à esquerda, centrado na altura que sobra */
+    lv_obj_t *left = bf_plain(body);
+    lv_obj_set_size(left, 470, LV_PCT(100));
+    lv_obj_align(left, LV_ALIGN_LEFT_MID, 0, 0);
+    pv = padview_create(left, pad_width(450), sony(&g));
+    lv_obj_center(pv);
 
-    uint32_t acc = 0x9f86ff;
-    /* ombros */
-    part(pad, PC_LSHOULDER, 120, 4, 112, 26, 13, acc, ps ? "L1" : "LB");
-    part(pad, PC_RSHOULDER, 408, 4, 112, 26, 13, acc, ps ? "R1" : "RB");
-    /* gatilhos: barras que enchem */
-    for(int k = 0; k < 2; k++) {
-        trig[k] = blob(pad, k ? 600 : 18, 40, 22, 130, 11);
-        lv_obj_set_style_bg_color(trig[k], p->surface, 0);
-        lv_obj_set_style_border_width(trig[k], 2, 0);
-        lv_obj_set_style_border_color(trig[k], lv_color_hex(acc), 0);
-        lv_obj_set_style_border_opa(trig[k], LV_OPA_60, 0);
-        lv_obj_set_style_clip_corner(trig[k], true, 0);
-        trig_fill[k] = blob(trig[k], 0, 0, 22, 0, 0);
-        lv_obj_set_style_bg_color(trig_fill[k], lv_color_hex(acc), 0);
-        lv_obj_align(trig_fill[k], LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_t *tl = bf_label(pad, ps ? (k ? "R2" : "L2") : (k ? "RT" : "LT"), BF_FONT_S, p->text_dim);
-        lv_obj_set_pos(tl, k ? 600 : 18, 174);
-    }
-    /* direcional */
-    static const int dp[4][2] = { { 0, -30 }, { 0, 30 }, { -30, 0 }, { 30, 0 } };
-    static const char *const arrows[4] = { LV_SYMBOL_UP, LV_SYMBOL_DOWN, LV_SYMBOL_LEFT, LV_SYMBOL_RIGHT };
-    for(int d = 0; d < 4; d++) part(pad, PC_DPUP + d, 170 + dp[d][0] - 14, 92 + dp[d][1] - 14, 28, 28, 6, 0xdfe3ea, arrows[d]);
-    /* botões de frente: Y em cima, A embaixo, X à esquerda, B à direita */
-    static const int fb[4][3] = { { PC_Y, 0, -32 }, { PC_A, 0, 32 }, { PC_X, -32, 0 }, { PC_B, 32, 0 } };
-    static const uint32_t pscol[4] = { 0x40e2a0, 0x7cb2e8, 0xff69f8, 0xff6666 };   /* △ ✕ □ ○ */
-    static const uint32_t xcol[4] = { 0xf4c430, 0x6fcf4a, 0x4aa3ff, 0xff5a52 };    /* Y A X B */
-    static const char *const xl[4] = { "Y", "A", "X", "B" };
-    static const int pskind[4] = { 2, 0, 3, 1 };
-    for(int k = 0; k < 4; k++) {
-        lv_obj_t *o = part(pad, fb[k][0], 470 + fb[k][1] - 17, 92 + fb[k][2] - 17, 34, 34, LV_RADIUS_CIRCLE,
-                           ps ? pscol[k] : xcol[k], ps ? NULL : xl[k]);
-        if(ps) shape(o, pskind[k], pscol[k]);
-    }
-    /* centro: Back, Guia, Start (e o touchpad no PlayStation) */
-    if(ps) part(pad, PC_TOUCHPAD, 262, 44, 116, 52, 10, 0xdfe3ea, NULL);
-    part(pad, PC_BACK, ps ? 226 : 262, ps ? 48 : 70, 30, 18, 9, 0xdfe3ea, NULL);
-    part(pad, PC_START, ps ? 384 : 348, ps ? 48 : 70, 30, 18, 9, 0xdfe3ea, NULL);
-    part(pad, PC_GUIDE, 302, ps ? 104 : 100, 36, 36, LV_RADIUS_CIRCLE, 0xdfe3ea, ps ? "PS" : NULL);
-    /* analógicos: anel e o ponto que anda; o anel acende ao afundar (L3/R3) */
-    for(int k = 0; k < 2; k++) {
-        stick[k] = part(pad, k ? PC_RSTICK : PC_LSTICK, (k ? 400 : 240) - 38, 152 - 38, 76, 76, LV_RADIUS_CIRCLE,
-                        acc, NULL);
-        dot[k] = blob(stick[k], 0, 0, 30, 30, LV_RADIUS_CIRCLE);
-        lv_obj_set_style_bg_color(dot[k], lv_color_hex(0xdfe3ea), 0);
-        lv_obj_set_style_shadow_width(dot[k], 10, 0);
-        lv_obj_set_style_shadow_opa(dot[k], LV_OPA_50, 0);
-        lv_obj_center(dot[k]);
-    }
-
-    lv_obj_t *info = bf_plain(body);
-    lv_obj_set_size(info, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_align(info, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_flex_flow(info, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(info, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    raw_lbl = bf_label(info, "", BF_FONT_MONO, p->text);
-    cnt_lbl = bf_label(info, tr(S_SCC_TEST_HINT), BF_FONT_S, p->text_dim);
-    lv_obj_set_width(cnt_lbl, LV_PCT(100));
-    lv_label_set_long_mode(cnt_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(cnt_lbl, LV_TEXT_ALIGN_CENTER, 0);
-}
-
-/* o que está desenhado dentro da peça (rótulo, forma) contrasta com o fundo aceso */
-static void part_ink(lv_obj_t *o, bool on, uint32_t col)
-{
-    lv_color_t c = lv_color_hex(col);
-    bool light = (((col >> 16) & 0xff) * 3 + ((col >> 8) & 0xff) * 6 + (col & 0xff)) / 10 > 170;
-    lv_color_t ink = on ? (light ? lv_color_hex(0x1a1d26) : lv_color_white()) : c;
-    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
-        lv_obj_t *ch = lv_obj_get_child(o, (int32_t)i);
-        if(ch == dot[0] || ch == dot[1]) continue;
-        if(lv_obj_check_type(ch, &lv_line_class)) lv_obj_set_style_line_color(ch, ink, 0);
-        else if(lv_obj_check_type(ch, &lv_label_class)) lv_obj_set_style_text_color(ch, ink, 0);
-        else lv_obj_set_style_border_color(ch, ink, 0);
-    }
+    /* leituras à direita */
+    lv_obj_t *card = bf_card(body);
+    lv_obj_set_size(card, 300, LV_SIZE_CONTENT);
+    lv_obj_align(card, LV_ALIGN_RIGHT_MID, -BF_SP_M, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(card, 8, 0);
+    lv_obj_t *head = bf_plain(card);
+    lv_obj_set_size(head, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(head, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *nm = bf_label(head, g.name, BF_FONT_M, p->text);
+    bf_label_ellipsis(nm, 190);
+    bat_lbl = bf_label(head, "", BF_FONT_S, lv_color_hex(0x6fdc8c));
+    side_row(card, tr(S_SCC_LSTICK), &st_val[0]);
+    side_row(card, tr(S_SCC_RSTICK), &st_val[1]);
+    lv_obj_t *trow = side_row(card, tr(S_SCC_TRIGGERS), NULL);
+    lv_obj_t *bars = bf_plain(trow);
+    lv_obj_set_size(bars, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(bars, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(bars, 6, 0);
+    tr_bar[0] = mini_bar(bars);
+    tr_bar[1] = mini_bar(bars);
+    lv_obj_set_size(tr_bar[0], 64, 10);
+    lv_obj_set_size(tr_bar[1], 64, 10);
+    lv_obj_t *sep = bf_plain(card);
+    lv_obj_set_size(sep, LV_PCT(100), 1);
+    lv_obj_set_style_bg_color(sep, p->border, 0);
+    lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
+    bf_label(card, tr(S_SCC_LAST), BF_FONT_S, p->text_dim);
+    raw_lbl = bf_label(card, "-", BF_FONT_MONO, p->text);
+    cnt_lbl = bf_label(card, "", BF_FONT_S, p->text_dim);
+    lv_obj_t *hint = bf_label(card, tr(S_SCC_HOLD_B), BF_FONT_S, p->text_dim);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    hold_bar = mini_bar(card);
+    lv_obj_set_size(hold_bar, LV_PCT(100), 6);
+    lv_bar_set_range(hold_bar, 0, 2000);
+    lv_obj_set_style_bg_color(hold_bar, lv_color_hex(0xff6666), LV_PART_INDICATOR);
 }
 
 static void tick_test(void)
 {
     gp_info_t g;
     if(!gamepad_info(sel, &g)) { show_tab(TAB_TEST); return; }   /* saiu: mostra como parear */
-    const bf_palette_t *p = pal();
-    for(int i = 0; i < n_parts; i++) {
-        bool on = g.btn[parts[i].ctl];
-        if(on == parts[i].was) continue;
-        parts[i].was = on;
-        lv_obj_set_style_bg_color(parts[i].o, on ? lv_color_hex(parts[i].on) : p->surface, 0);
-        lv_obj_set_style_border_opa(parts[i].o, on ? LV_OPA_COVER : LV_OPA_60, 0);
-        lv_obj_set_style_shadow_width(parts[i].o, on ? 16 : 0, 0);
-        lv_obj_set_style_shadow_color(parts[i].o, lv_color_hex(parts[i].on), 0);
-        lv_obj_set_style_shadow_opa(parts[i].o, LV_OPA_70, 0);
-        part_ink(parts[i].o, on, parts[i].on);
-    }
+    padview_state(pv, g.btn, g.ax);
+    char b[96];
     for(int k = 0; k < 2; k++) {
-        int16_t x = g.ax[(k ? PC_RIGHTX : PC_LEFTX) - PC__NBTN], y = g.ax[(k ? PC_RIGHTY : PC_LEFTY) - PC__NBTN];
-        int ix = (k ? PC_RIGHTX : PC_LEFTX) - PC__NBTN, iy = ix + 1;
-        if(x != last_ax[ix] || y != last_ax[iy]) {
-            last_ax[ix] = x;
-            last_ax[iy] = y;
-            lv_obj_align(dot[k], LV_ALIGN_CENTER, x * 23 / 1000, y * 23 / 1000);
+        int ix = (k ? PC_RIGHTX : PC_LEFTX) - PC__NBTN;
+        if(g.ax[ix] != last_ax[ix] || g.ax[ix + 1] != last_ax[ix + 1]) {
+            last_ax[ix] = g.ax[ix];
+            last_ax[ix + 1] = g.ax[ix + 1];
+            snprintf(b, sizeof b, "%+5d %+5d", g.ax[ix] / 10, g.ax[ix + 1] / 10);
+            lv_label_set_text(st_val[k], b);
         }
         int it = (k ? PC_RTRIGGER : PC_LTRIGGER) - PC__NBTN;
         if(g.ax[it] != last_ax[it]) {
             last_ax[it] = g.ax[it];
-            lv_obj_set_height(trig_fill[k], 126 * g.ax[it] / 1000);
-            lv_obj_align(trig_fill[k], LV_ALIGN_BOTTOM_MID, 0, 0);
+            lv_bar_set_value(tr_bar[k], g.ax[it], LV_ANIM_OFF);
         }
     }
-    char c[200], ev[48];
-    snprintf(ev, sizeof ev, tr(S_SCC_EVENTS), (unsigned)g.events);
-    snprintf(c, sizeof c, "%s  ·  %s", raw_txt[0] ? raw_txt : "-", ev);
-    if(strcmp(lv_label_get_text(raw_lbl), c)) lv_label_set_text(raw_lbl, c);
-    /* B segurado 2 s: sai do testador */
+    if(strcmp(lv_label_get_text(raw_lbl), raw_txt[0] ? raw_txt : "-")) lv_label_set_text(raw_lbl, raw_txt[0] ? raw_txt : "-");
+    snprintf(b, sizeof b, tr(S_SCC_EVENTS), (unsigned)g.events);
+    if(strcmp(lv_label_get_text(cnt_lbl), b)) lv_label_set_text(cnt_lbl, b);
+    int pct;
+    bool chg;
+    b[0] = 0;
+    if(pad_battery(g.addr, &pct, &chg)) {
+        char n[16];
+        snprintf(n, sizeof n, tr(S_SCC_BATTERY), pct);
+        snprintf(b, sizeof b, "%s %s", chg ? LV_SYMBOL_CHARGE : battery_sym(pct), n);
+    }
+    if(strcmp(lv_label_get_text(bat_lbl), b)) lv_label_set_text(bat_lbl, b);
+    /* B segurado 2 s: sai do testador (a barra mostra o tempo) */
     uint32_t now = lv_tick_get();
     if(!g.btn[PC_B]) b_since = 0;
     else if(!b_since) b_since = now ? now : 1;
-    else if(now - b_since > 2000) show_tab(TAB_PADS);
+    lv_bar_set_value(hold_bar, b_since ? (int32_t)(now - b_since) : 0, LV_ANIM_OFF);
+    if(b_since && now - b_since > 2000) show_tab(TAB_PADS);
 }
 
 /* ============================================================== Registrar */
@@ -633,65 +625,99 @@ static void reg_forget(lv_event_t *e)
     show_tab(TAB_PADS);
 }
 
+static void reg_side_buttons(lv_obj_t *card, bool back, bool skip)
+{
+    lv_obj_t *br = bf_plain(card);
+    lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(br, BF_SP_S, 0);
+    if(back) {
+        lv_obj_t *bk = bf_button(br, LV_SYMBOL_LEFT, tr(S_SCC_REG_BACK), 0);
+        lv_obj_set_size(bk, 140, 48);
+        lv_obj_add_event_cb(bk, reg_back, LV_EVENT_CLICKED, NULL);
+        if(step <= 0) lv_obj_add_state(bk, LV_STATE_DISABLED);
+    }
+    if(skip) {
+        lv_obj_t *sk = bf_button(br, LV_SYMBOL_NEXT, tr(S_SCC_REG_SKIP), 0);
+        lv_obj_set_size(sk, 140, 48);
+        lv_obj_add_event_cb(sk, reg_skip, LV_EVENT_CLICKED, NULL);
+    }
+}
+
 static void reg_show(void)
 {
     const bf_palette_t *p = pal();
     lv_obj_clean(body);
+    pv = NULL;
     reg_prompt = reg_status = reg_bar = reg_count = NULL;
-    lv_obj_t *pg = page_create(body);
     gp_info_t g;
-    if(!gamepad_info(sel, &g)) { empty_state(pg); return; }
-    lv_obj_t *card = bf_card(pg);
-    lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);
+    if(!gamepad_info(sel, &g)) { lv_obj_t *pg = page_create(body); empty_state(pg); return; }
+
+    /* o desenho com o botão da vez piscando e o que já foi ensinado em verde */
+    lv_obj_t *left = bf_plain(body);
+    lv_obj_set_size(left, 430, LV_PCT(100));
+    lv_obj_align(left, LV_ALIGN_LEFT_MID, 0, 0);
+    pv = padview_create(left, pad_width(410), sony(&g));
+    lv_obj_center(pv);
+    for(int k = 0; k < N_STEPS && step >= 0; k++)
+        padview_done(pv, steps[k].ctl, k < step && reg.src[steps[k].ctl].kind != PS_NONE);
+    if(step >= 0 && step < N_STEPS) padview_focus(pv, steps[step].ctl);
+
+    lv_obj_t *card = bf_card(body);
+    lv_obj_set_size(card, 340, LV_SIZE_CONTENT);
+    lv_obj_align(card, LV_ALIGN_RIGHT_MID, -BF_SP_M, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(card, BF_SP_S, 0);
-    lv_obj_t *row = bf_plain(card);
-    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_t *nm = bf_label(row, g.name, BF_FONT_M, p->text);
-    bf_label_ellipsis(nm, 520);
+    lv_obj_set_style_pad_row(card, 10, 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(C_SCC), 0);
+    lv_obj_set_style_border_opa(card, LV_OPA_40, 0);
+    char t[80];
+
     if(step < 0) {                                   /* introdução */
+        gamepad_capture(false, NULL);
+        bf_label(card, tr(S_SCC_REG_TITLE), BF_FONT_M, p->text);
+        lv_obj_t *nm = bf_label(card, g.name, BF_FONT_S, lv_color_hex(0xb9a6ff));
+        bf_label_ellipsis(nm, 300);
         wrap_label(card, tr(S_SCC_REG_INTRO), BF_FONT_S, p->text_dim);
-        lv_obj_t *br = bf_plain(card);
-        lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
-        lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
-        lv_obj_set_style_pad_column(br, BF_SP_S, 0);
-        lv_obj_t *b = bf_button(br, LV_SYMBOL_PLAY, tr(S_SCC_REG_START), 1);
-        lv_obj_set_size(b, 220, 52);
+        lv_obj_t *b = bf_button(card, LV_SYMBOL_PLAY, tr(S_SCC_REG_START), 1);
+        lv_obj_set_size(b, LV_PCT(100), 50);
         lv_obj_add_event_cb(b, reg_begin, LV_EVENT_CLICKED, NULL);
         if(g.map_from == GPM_USER) {
-            lv_obj_t *f = bf_button(br, LV_SYMBOL_TRASH, tr(S_SCC_REG_FORGET), 2);
-            lv_obj_set_size(f, 260, 52);
+            lv_obj_t *f = bf_button(card, LV_SYMBOL_TRASH, tr(S_SCC_REG_FORGET), 2);
+            lv_obj_set_size(f, LV_PCT(100), 46);
             lv_obj_add_event_cb(f, reg_forget, LV_EVENT_CLICKED, NULL);
         }
-        gamepad_capture(false, NULL);
         return;
     }
     gamepad_capture(true, reg_obs);
-    char t[80];
     if(step >= N_STEPS) {                            /* fim */
         int n = 0;
         for(int c = 0; c < PC__N; c++) n += reg.src[c].kind != PS_NONE;
+        lv_obj_t *ok = bf_label(card, LV_SYMBOL_OK, BF_FONT_L, p->success);
+        (void)ok;
         snprintf(t, sizeof t, tr(S_SCC_REG_DONE), n);
-        bf_label(card, LV_SYMBOL_OK, BF_FONT_L, p->success);
-        bf_label(card, t, BF_FONT_L, p->text);
-        lv_obj_t *br = bf_plain(card);
+        wrap_label(card, t, BF_FONT_M, p->text);
+        lv_obj_t *br = bf_plain(card);                    /* Voltar e Salvar na mesma linha */
         lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
         lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
         lv_obj_set_style_pad_column(br, BF_SP_S, 0);
         lv_obj_t *bk = bf_button(br, LV_SYMBOL_LEFT, tr(S_SCC_REG_BACK), 0);
-        lv_obj_set_size(bk, 180, 52);
+        lv_obj_set_size(bk, 120, 50);
         lv_obj_add_event_cb(bk, reg_back, LV_EVENT_CLICKED, NULL);
         lv_obj_t *sv = bf_button(br, LV_SYMBOL_SAVE, tr(S_SCC_REG_SAVE), 1);
-        lv_obj_set_size(sv, 220, 52);
+        lv_obj_set_height(sv, 50);
+        lv_obj_set_flex_grow(sv, 1);
         lv_obj_add_event_cb(sv, reg_save, LV_EVENT_CLICKED, NULL);
         reg_status = bf_label(card, "", BF_FONT_S, p->warning);
         return;
     }
+    lv_obj_t *row = bf_plain(card);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    bf_label(row, tr(S_SCC_REG_TITLE), BF_FONT_S, p->text_dim);
     snprintf(t, sizeof t, tr(S_SCC_REG_STEP), step + 1, N_STEPS);
-    reg_count = bf_label(row, t, BF_FONT_S, p->text_dim);
+    reg_count = bf_label(row, t, BF_FONT_S, lv_color_hex(0xb9a6ff));
     reg_bar = lv_bar_create(card);
     lv_obj_set_size(reg_bar, LV_PCT(100), 8);
     lv_bar_set_range(reg_bar, 0, N_STEPS);
@@ -702,20 +728,11 @@ static void reg_show(void)
     lv_obj_set_style_bg_color(reg_bar, lv_color_hex(C_SCC), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(reg_bar, LV_OPA_COVER, LV_PART_INDICATOR);
     lv_obj_set_style_radius(reg_bar, 4, LV_PART_INDICATOR);
-    reg_prompt = bf_label(card, tr(steps[step].prompt), BF_FONT_L, p->text);
-    lv_obj_set_style_pad_ver(reg_prompt, BF_SP_S, 0);
+    reg_prompt = wrap_label(card, tr(steps[step].prompt), BF_FONT_L, p->text);
     reg_status = bf_label(card, waiting_rest ? tr(S_SCC_REG_RELEASE) : "", BF_FONT_S, p->text_dim);
-    lv_obj_t *br = bf_plain(card);
-    lv_obj_set_size(br, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(br, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(br, BF_SP_S, 0);
-    lv_obj_t *bk = bf_button(br, LV_SYMBOL_LEFT, tr(S_SCC_REG_BACK), 0);
-    lv_obj_set_size(bk, 180, 52);
-    lv_obj_add_event_cb(bk, reg_back, LV_EVENT_CLICKED, NULL);
-    if(!step) lv_obj_add_state(bk, LV_STATE_DISABLED);
-    lv_obj_t *sk = bf_button(br, LV_SYMBOL_NEXT, tr(S_SCC_REG_SKIP), 0);
-    lv_obj_set_size(sk, 180, 52);
-    lv_obj_add_event_cb(sk, reg_skip, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *h = wrap_label(card, tr(S_SCC_REG_HINT), BF_FONT_S, p->text_dim);
+    lv_obj_set_style_text_opa(h, LV_OPA_80, 0);
+    reg_side_buttons(card, true, true);
     /* já parado? (o observador só roda com eventos) */
     if(waiting_rest && at_rest()) {
         waiting_rest = false;
@@ -735,11 +752,11 @@ static void show_tab(int t)
     gamepad_capture(false, NULL);
     for(int i = 0; i < 3; i++) {
         bool on = i == t;
-        lv_obj_set_style_bg_color(tabs[i], on ? lv_color_hex(C_SCC) : p->surface, 0);
-        lv_obj_set_style_text_color(lv_obj_get_child(tabs[i], 0), on ? lv_color_white() : p->text, 0);
+        lv_obj_set_style_bg_opa(tabs[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(tabs[i], 0), on ? lv_color_white() : p->text_dim, 0);
     }
     lv_obj_clean(body);
-    raw_lbl = cnt_lbl = NULL;
+    pv = raw_lbl = cnt_lbl = bat_lbl = hold_bar = NULL;
     /* 30 quadros/s só no testador; nas outras abas basta notar um controle chegando */
     if(tmr) lv_timer_set_period(tmr, t == TAB_TEST ? 33 : 400);
     if(t == TAB_PADS) build_pads();
@@ -767,28 +784,44 @@ static void create(lv_obj_t *parent, int arg)
     const bf_palette_t *p = pal();
     root = bf_plain(parent);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
-    lv_obj_t *bar = bf_plain(root);
-    lv_obj_set_size(bar, LV_PCT(100), 56);
-    lv_obj_set_style_pad_top(bar, 6, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(bar, BF_SP_S, 0);
+    /* abas em cima e o conteúdo no resto: a altura real (360, ou 432 no Foston Glass) */
+    lv_obj_set_flex_flow(root, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(root, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_top(root, 10, 0);
+    lv_obj_set_style_pad_row(root, 8, 0);
+    /* abas: controle segmentado em pílula, com folga em cima (nada encosta na barra) */
+    lv_obj_t *seg = bf_plain(root);
+    lv_obj_set_size(seg, 600, 46);
+    lv_obj_set_style_bg_color(seg, p->surface, 0);
+    lv_obj_set_style_bg_opa(seg, LV_OPA_80, 0);
+    lv_obj_set_style_radius(seg, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(seg, 1, 0);
+    lv_obj_set_style_border_color(seg, p->border, 0);
+    lv_obj_set_style_pad_all(seg, 4, 0);
+    lv_obj_set_flex_flow(seg, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(seg, 4, 0);
     static const bf_str_t names[3] = { S_SCC_TAB_PADS, S_SCC_TAB_TEST, S_SCC_TAB_REG };
     static const char *const sym[3] = { LV_SYMBOL_LIST, LV_SYMBOL_EYE_OPEN, LV_SYMBOL_EDIT };
     for(int i = 0; i < 3; i++) {
-        tabs[i] = bf_button(bar, NULL, "", 0);
-        lv_obj_set_size(tabs[i], 220, 44);
-        lv_obj_set_style_radius(tabs[i], 22, 0);
-        lv_obj_t *l = lv_obj_get_child(tabs[i], 0);
+        tabs[i] = lv_button_create(seg);
+        lv_obj_remove_style_all(tabs[i]);
+        lv_obj_set_height(tabs[i], LV_PCT(100));
+        lv_obj_set_flex_grow(tabs[i], 1);
+        lv_obj_set_style_radius(tabs[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(tabs[i], lv_color_hex(C_SCC), 0);
+        lv_obj_set_style_bg_grad_color(tabs[i], lv_color_hex(0x9b6ef3), 0);
+        lv_obj_set_style_bg_grad_dir(tabs[i], LV_GRAD_DIR_HOR, 0);
+        lv_obj_set_style_bg_opa(tabs[i], LV_OPA_30, LV_STATE_PRESSED);
         char t[64];
         snprintf(t, sizeof t, "%s  %s", sym[i], tr(names[i]));
-        lv_label_set_text(l, t);
+        lv_obj_t *l = bf_label(tabs[i], t, BF_FONT_M, p->text_dim);
+        lv_obj_center(l);
         lv_obj_add_event_cb(tabs[i], tab_click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
-    (void)p;
     body = bf_plain(root);
-    lv_obj_set_size(body, LV_PCT(100), BF_CONTENT_H - 60);
-    lv_obj_align(body, LV_ALIGN_TOP_MID, 0, 58);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_update_layout(root);
     sel = 0;
     tmr = lv_timer_create(tick, 400, NULL);
     show_tab(TAB_PADS);
@@ -798,7 +831,7 @@ static void destroy(void)
 {
     gamepad_capture(false, NULL);
     if(tmr) { lv_timer_delete(tmr); tmr = NULL; }
-    root = body = raw_lbl = cnt_lbl = NULL;
+    root = body = pv = raw_lbl = cnt_lbl = bat_lbl = hold_bar = NULL;
     reg_prompt = reg_status = reg_bar = reg_count = NULL;
 }
 

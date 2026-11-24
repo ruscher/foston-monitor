@@ -377,6 +377,7 @@ static void tick(lv_timer_t *t)
     last_st = st;
     bool brief = perfui_why() == PERF_WHY_PAD && st == PM_ON && lv_tick_elaps(on_since) > 6000;
     bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
+                nav_current().scr != SCR_SCC &&
                 (st == PM_ON || st == PM_ENTERING) && !brief;
     if(show) {
         lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);

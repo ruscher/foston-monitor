@@ -2,11 +2,35 @@
 
 Grupo Jogos, pacote `sc-controller.bfapp` (15,8 KB; 203 KB instalado). A tela é
 `src/ui/screens/scr_scc.c`, aberta pelo `.desktop` com `X-BigFoston-Screen=sc-controller`.
-Tem três abas, em botões arredondados no alto.
+
+As três abas ficam num seletor em pílula no alto, com folga em cima; a aba escolhida tem o
+degradê roxo. O conteúdo ocupa a altura real da tela: 360 px com a barra inferior, 432 px no
+Foston Glass. O controle desenhado cresce até onde cabe (`pad_width`).
+
+## O desenho do controle (`src/ui/widgets/padview.c`)
+
+O mesmo desenho serve às três abas:
+- **silhueta:** um SVG em texto (corpo e pegadas, como um DualShock visto de frente, 400×250)
+  rasterizado uma vez por tamanho como máscara A8 (`svg_render_mask_str`); fica guardado;
+- **acabamento:** sombra deslocada, corpo cinza-azulado e contorno roxo;
+- **peças por cima,** nas proporções de um DualShock: gatilhos como barras que enchem, ombros
+  L1/R1 (LB/RB), direcional, botões de frente (△ ○ ✕ □ desenhados com linhas no PlayStation;
+  A B X Y nas cores do Xbox nos outros), touchpad, Share/Options, PS/Guia e analógicos com o
+  ponto que anda;
+- `padview_state` acende as peças: cor cheia, brilho e o traço que contrasta;
+- `padview_focus` faz um anel amarelo pulsar em volta do controle da vez (no analógico, também
+  uma seta: → para a direita, ↓ para baixo);
+- `padview_done` deixa em verde o que já foi ensinado.
+
+Medido no aparelho: a primeira abertura rasteriza a silhueta (uma vez por tamanho); depois
+abrir as abas é imediato.
 
 ## Controles
 
-Um cartão por controle conectado, com:
+Um cartão por controle conectado, com a miniatura do controle (`padview` de 160 px), o nome e
+selos arredondados: Bluetooth com o endereço, **bateria** (lida de
+`/sys/class/power_supply/ps-controller-battery-<endereço>`, com o ícone do nível; o
+`hid-playstation` a publica) e o mapa. Também:
 - o nome;
 - Bluetooth (endereço) ou USB;
 - o **mapa** e de onde veio: "banco do SC Controller", "embutido no BigFoston", "registrado por
@@ -22,7 +46,15 @@ A lista se refaz sozinha quando um controle chega ou sai: o timer confere a cada
 
 ## Testar
 
-Um controle desenhado com objetos do LVGL:
+À esquerda, o controle desenhado e centralizado; à direita, um cartão de leituras:
+- o nome e a bateria;
+- os dois analógicos em números;
+- os gatilhos em barras;
+- o último evento cru;
+- a contagem de eventos;
+- uma barra que enche enquanto B está segurado (2 s para sair).
+
+O desenho antigo era feito só de objetos do LVGL:
 - **silhueta**: o corpo e as duas pegadas;
 - **botões que acendem**: ombros L1/R1 (LB/RB), direcional, Back/Start, Guia (PS) e, no
   PlayStation, o touchpad;
@@ -43,6 +75,11 @@ o B não volta e o cursor some. Para sair pelo controle, segure **B por 2 s**. O
 30 quadros/s só nesta aba.
 
 ## Registrar (o "Device registration" do sc-controller)
+
+À esquerda, o controle com o botão da vez pulsando e o que já foi ensinado em verde; à
+direita, o cartão com a etapa ("3 de 21" e a barra), a instrução em letra grande, "Solte tudo"
+ou o aviso de botão repetido, e Voltar / Pular. No fim, ✓, "Pronto: N controles ensinados" e
+Voltar / Salvar na mesma linha, com o controle todo em verde.
 
 Para controle sem mapa ou com botão trocado.
 
