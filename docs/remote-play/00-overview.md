@@ -18,14 +18,15 @@ Estados usados aqui:
 | Encontrar o computador pelo USB (192.168.7.1), estado e versão do Sunshine | **FUNCIONANDO NO APARELHO** | [05](05-client-architecture.md) |
 | Pareamento por PIN (o FOSTON mostra, o computador aprova) | **FUNCIONANDO NO APARELHO** (depois da correção do endereço na pilha) | [24](24-security.md) |
 | Lista de jogos e apps do computador | **FUNCIONANDO NO APARELHO**: Desktop Low, Desktop, 01/02/03 - Monitor | [05](05-client-architecture.md) |
-| **Com imagem**: o vídeo do computador no FOSTON | **FUNCIONANDO NO APARELHO**: 22–29 qps em 320×180, 0 erros | [06](06-video-decoding.md) |
+| **Com imagem**: o vídeo do computador no FOSTON, qualidade Alta/Média/Baixa | **FUNCIONANDO NO APARELHO**: Baixa ~19 qps em tela cheia, 15 na janela; Alta ~5; 0 erros | [06](06-video-decoding.md) |
+| Tela cheia com a barra que sobe ao tocar | **FUNCIONANDO NO APARELHO** | [06](06-video-decoding.md) |
 | Mouse pela imagem (toque = ponteiro e clique, botão direito, arrastar, rolar) | **FUNCIONANDO NO APARELHO** (ponteiro e clique conferidos na imagem) | [19](19-mouse-touchpad.md) |
 | Modo **Somente Controle** (sessão sem decodificar vídeo) | IMPLEMENTADO, NÃO TESTADO no PC | [22](22-controller-only-mode.md) |
 | Controle virtual de toque único com botões travados | **FUNCIONANDO NO SIMULADOR**; no aparelho falta a sessão pareada | [14](14-virtual-button-engine.md) |
 | Analógico virtual com zona morta e trava | **FUNCIONANDO NO SIMULADOR** | [14](14-virtual-button-engine.md) |
 | Controle Bluetooth físico repassado ao PC (somado ao virtual) | IMPLEMENTADO, NÃO TESTADO | [14](14-virtual-button-engine.md) |
 | Multitouch verdadeiro no painel original | **INVIÁVEL** | [11](11-touchscreen-analysis.md) |
-| Áudio, teclado, troca de monitor no app, combos, layouts, tela cheia | PENDENTE | [31](31-known-limitations.md) |
+| Áudio, teclado, troca de monitor no app, combos, layouts | PENDENTE | [31](31-known-limitations.md) |
 
 ## Telas
 

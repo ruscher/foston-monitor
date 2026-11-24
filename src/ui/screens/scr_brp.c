@@ -35,7 +35,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #define C_BRP     0x6a3df0
@@ -51,17 +53,18 @@ enum { F_UP = 0x0001, F_DOWN = 0x0002, F_LEFT = 0x0004, F_RIGHT = 0x0008, F_STAR
 enum { V_HOME, V_PIN, V_PLAY, V_VIDEO };
 
 /* qualidade da imagem: o que o FOSTON decodifica de verdade (medido em 24/11/2026 pelo USB, H.264
- * do Sunshine, ampliado para 640x360): 320x180 ~28 qps (35 ms/quadro), 480x270 ~10 qps (100 ms),
- * 640x360 ~6 qps (170 ms) */
+ * do Sunshine com o filtro de desblocagem, ampliado suave para 800x450): 320x180 ~19 qps
+ * (52 ms/quadro), 480x270 ~9 qps (105 ms), 640x360 ~5 qps (200 ms) */
 static const struct { int w, h, fps, kbps; bf_str_t name, sub; } qual[] = {
-    { 320, 180, 30, 1000, S_BRP_Q_FLUID, S_BRP_Q_FLUID_SUB },
-    { 480, 270, 20, 1500, S_BRP_Q_SHARP, S_BRP_Q_SHARP_SUB },
-    { 640, 360, 15, 2000, S_BRP_Q_MAX, S_BRP_Q_MAX_SUB },
+    { 320, 180, 30, 1000, S_BRP_Q_FLUID, S_BRP_Q_FLUID_SUB },      /* baixa: ~19 qps em tela cheia */
+    { 480, 270, 20, 2000, S_BRP_Q_SHARP, S_BRP_Q_SHARP_SUB },      /* média: ~9 qps */
+    { 640, 360, 15, 3000, S_BRP_Q_MAX, S_BRP_Q_MAX_SUB },          /* alta: ~5 qps */
 };
 #define NQUAL (int)(sizeof qual / sizeof qual[0])
 static int quality;
 static bool session_video;                     /* a sessão atual tem imagem */
 static lv_obj_t *video_box;
+static lv_area_t vr;                             /* área do vídeo na tela (janela ou tela cheia) */
 
 static lv_obj_t *root, *body, *st_lbl, *pin_lbl;
 static int view;
@@ -116,6 +119,9 @@ static bool eng_start(char *err, size_t errn)
         char dbg[300];
         snprintf(dbg, sizeof dbg, "%s/debug", keys);
         if(!access(dbg, F_OK)) setenv("BFRP_DEBUG", "1", 1);
+        /* a interface primeiro: decodificando, o motor ocupa a CPU e, com a mesma prioridade,
+         * o toque e a barra da tela cheia chegavam segundos atrasados (medido 24/11/2026) */
+        setpriority(PRIO_PROCESS, 0, 5);
         char *av[] = { bin, "--keys", keys, NULL };
         execv(bin, av);
         _exit(127);
@@ -253,11 +259,8 @@ static void start_app(int id, bool video)
         return;
     }
     show(V_VIDEO);                                       /* a caixa preta onde o motor desenha */
-    lv_area_t a;
-    lv_obj_update_layout(video_box);
-    lv_obj_get_coords(video_box, &a);
-    eng_send("START %d %d %d %d %d 1 %d %d %d %d", id, qual[quality].w, qual[quality].h, qual[quality].fps,
-             qual[quality].kbps, a.x1, a.y1, a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
+    eng_send("START %d %d %d %d %d 1 %d %d %d %d 1", id, qual[quality].w, qual[quality].h, qual[quality].fps,
+             qual[quality].kbps, vr.x1, vr.y1, vr.x2 - vr.x1 + 1, vr.y2 - vr.y1 + 1);   /* 1: desblocagem */
 }
 
 static void on_app(lv_event_t *e) { start_app((int)(intptr_t)lv_event_get_user_data(e), false); }
@@ -346,8 +349,11 @@ static void build_home(void)
         }
         lv_obj_t *qt = bf_label(pg, tr(S_BRP_Q_TITLE), BF_FONT_S, p->text_dim);
         lv_obj_set_style_pad_top(qt, BF_SP_M, 0);
-        for(int i = 0; i < NQUAL; i++)
+        for(int i = NQUAL - 1; i >= 0; i--)              /* alta, média, baixa */
             page_choice(pg, NULL, tr(qual[i].name), tr(qual[i].sub), i == quality, on_quality, (void *)(intptr_t)i);
+        lv_obj_t *tip = bf_label(pg, tr(S_BRP_Q_TIP), BF_FONT_S, p->text_dim);
+        lv_obj_set_width(tip, LV_PCT(100));
+        lv_label_set_long_mode(tip, LV_LABEL_LONG_WRAP);
     }
 }
 
@@ -561,19 +567,31 @@ static void build_play(void)
     stick_paint();
 }
 
-/* ---- imagem do computador com o mouse ---- */
+/* ---- imagem do computador com o mouse ----
+ * Janela: o vídeo em 16:9 o maior possível e, embaixo, uma barra pequena com as ações.
+ * Tela cheia: o vídeo em 800x450 numa camada por cima de tudo; tocar na imagem clica no PC e faz a
+ * barra subir de baixo por 4 s. Como na TV, a interface não se redesenha por baixo do vídeo
+ * (lv_display_enable_invalidation); só enquanto a barra está à mostra, e o motor não pinta as
+ * linhas que ela cobre (CLIP). */
+#define BAR_H 48
 
 static bool right_next, drag_mode, pressing;
 static lv_point_t press_pt;
 static uint32_t press_t;
 static int moved;
-static lv_obj_t *rclick_btn, *drag_btn;
+static lv_obj_t *rclick_btn, *drag_btn, *fs_btn_lbl;
+static bool fs_on, bar_up;
+static lv_obj_t *fs_ov, *fs_bar;
+static lv_timer_t *bar_t;
+
+static void send_rect(void)
+{
+    eng_send("RECT %d %d %d %d", vr.x1, vr.y1, vr.x2 - vr.x1 + 1, vr.y2 - vr.y1 + 1);
+}
 
 static void mouse_to(lv_point_t pt)
 {
-    lv_area_t a;
-    lv_obj_get_coords(video_box, &a);
-    eng_send("MABS %d %d %d %d", (int)(pt.x - a.x1), (int)(pt.y - a.y1), a.x2 - a.x1 + 1, a.y2 - a.y1 + 1);
+    eng_send("MABS %d %d %d %d", (int)(pt.x - vr.x1), (int)(pt.y - vr.y1), vr.x2 - vr.x1 + 1, vr.y2 - vr.y1 + 1);
 }
 
 static void side_paint(void)
@@ -582,6 +600,8 @@ static void side_paint(void)
     if(rclick_btn) lv_obj_set_style_bg_color(rclick_btn, right_next ? p->warning : p->surface2, 0);
     if(drag_btn) lv_obj_set_style_bg_color(drag_btn, drag_mode ? p->warning : p->surface2, 0);
 }
+
+static void bar_show(void);
 
 /* tocar: o ponteiro vai até lá; toque curto clica (esquerdo, ou direito se armado), toque longo
  * parado é clique direito; com Arrastar, o botão esquerdo fica apertado enquanto o dedo anda */
@@ -597,6 +617,7 @@ static void on_video_touch(lv_event_t *e)
         moved = 0;
         mouse_to(pt);
         if(drag_mode) eng_send("MBTN 1 1");
+        if(fs_on) bar_show();
     } else if(code == LV_EVENT_PRESSING && pressing) {
         int d = abs(pt.x - press_pt.x) + abs(pt.y - press_pt.y);
         if(d > moved) moved = d;
@@ -612,46 +633,179 @@ static void on_video_touch(lv_event_t *e)
     }
 }
 
-static void on_rclick(lv_event_t *e) { (void)e; right_next = !right_next; side_paint(); }
-static void on_drag(lv_event_t *e) { (void)e; drag_mode = !drag_mode; if(!drag_mode) eng_send("MBTN 1 0"); side_paint(); }
-static void on_scroll(lv_event_t *e) { eng_send("SCROLL %d", (int)(intptr_t)lv_event_get_user_data(e)); }
-static void on_to_pad(lv_event_t *e) { (void)e; show(V_PLAY); }
-static void on_to_video(lv_event_t *e) { (void)e; show(V_VIDEO); }
+static void bar_touched(void) { if(bar_t) lv_timer_reset(bar_t); }   /* mexeu na barra: fica mais */
 
-static lv_obj_t *side_btn(lv_obj_t *par, const char *sym, const char *txt, int kind, lv_event_cb_t cb, void *ud)
+static void on_rclick(lv_event_t *e) { (void)e; right_next = !right_next; side_paint(); bar_touched(); }
+static void on_drag(lv_event_t *e) { (void)e; drag_mode = !drag_mode; if(!drag_mode) eng_send("MBTN 1 0"); side_paint(); bar_touched(); }
+static void on_scroll(lv_event_t *e) { eng_send("SCROLL %d", (int)(intptr_t)lv_event_get_user_data(e)); bar_touched(); }
+static void on_release_bar(lv_event_t *e) { on_release(e); bar_touched(); }
+static void fs_exit(void);
+static void on_to_pad(lv_event_t *e) { (void)e; fs_exit(); show(V_PLAY); }
+static void on_to_video(lv_event_t *e) { (void)e; show(V_VIDEO); }
+static void on_end_video(lv_event_t *e) { fs_exit(); on_end(e); }
+
+static lv_obj_t *bar_btn(lv_obj_t *par, const char *sym, bf_str_t txt, int kind, lv_event_cb_t cb, void *ud)
 {
-    lv_obj_t *b = bf_button(par, sym, NULL, kind);
-    lv_obj_set_size(b, LV_PCT(100), LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(b, 6, 0);
-    lv_obj_set_style_pad_hor(b, 2, 0);
-    lv_obj_t *l = bf_label(b, txt, BF_FONT_S, pal()->text);
-    lv_obj_set_width(l, LV_PCT(100));
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);     /* "Botão direito" em duas linhas */
-    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_t *b = bf_button(par, NULL, NULL, kind);
+    lv_obj_set_height(b, BAR_H - 8);
+    lv_obj_set_style_pad_hor(b, 8, 0);
+    lv_obj_set_style_pad_ver(b, 0, 0);
+    char t[64];
+    snprintf(t, sizeof t, "%s%s%s", sym ? sym : "", sym && txt ? " " : "", txt ? tr(txt) : "");
+    lv_obj_t *l = bf_label(b, t, BF_FONT_S, pal()->text);
+    lv_obj_center(l);
     lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    if(txt == S_BRP_FULL || txt == S_BRP_WINDOW) fs_btn_lbl = l;
     return b;
 }
 
-static lv_obj_t *side_col(lv_obj_t *par, int x, int w, int h)
+static void on_fullscreen(lv_event_t *e);
+
+/* a barra: igual na janela e na tela cheia */
+static lv_obj_t *make_bar(lv_obj_t *par, int y, int w)
 {
-    lv_obj_t *c = bf_plain(par);
-    lv_obj_set_pos(c, x, 0);
-    lv_obj_set_size(c, w, h);
-    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(c, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_all(c, 4, 0);
-    lv_obj_remove_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-    return c;
+    lv_obj_t *bar = bf_plain(par);
+    lv_obj_set_pos(bar, 0, y);
+    lv_obj_set_size(bar, w, BAR_H);
+    lv_obj_set_style_bg_color(bar, pal()->surface, 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_hor(bar, 4, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    bar_btn(bar, BF_SYMBOL_EXPAND, fs_on ? S_BRP_WINDOW : S_BRP_FULL, 1, on_fullscreen, NULL);
+    rclick_btn = bar_btn(bar, NULL, S_BRP_RCLICK, 0, on_rclick, NULL);
+    drag_btn = bar_btn(bar, NULL, S_BRP_DRAG, 0, on_drag, NULL);
+    bar_btn(bar, LV_SYMBOL_UP, 0, 0, on_scroll, (void *)(intptr_t)2);
+    bar_btn(bar, LV_SYMBOL_DOWN, 0, 0, on_scroll, (void *)(intptr_t)-2);
+    bar_btn(bar, LV_SYMBOL_SHUFFLE, S_BRP_PAD, 0, on_to_pad, NULL);
+    bar_btn(bar, LV_SYMBOL_REFRESH, S_BRP_RELEASE_SHORT, 0, on_release_bar, NULL);
+    bar_btn(bar, LV_SYMBOL_STOP, S_BRP_END, 2, on_end_video, NULL);
+    st_lbl = bf_label(bar, starting ? "..." : "", BF_FONT_S, pal()->text_dim);
+    side_paint();
+    return bar;
+}
+
+/* ---- tela cheia ---- */
+
+/* o redesenho da interface por baixo do vídeo: o LVGL conta liga/desliga (inv_en_cnt); aqui
+ * cada lado é chamado uma vez só, para o contador nunca passar de "desligado uma vez" */
+static bool inv_off;
+
+static void ui_draw(bool on)
+{
+    /* no aparelho, religar o redesenho não trazia a barra de volta (no simulador, sim); a camada
+     * preta da tela cheia já cobre a interface, então o redesenho fica sempre ligado: no máximo
+     * o relógio do alto, uma vez por minuto, pisca um pedaço preto até o quadro seguinte */
+    (void)on;
+    inv_off = false;
+}
+
+static void bar_y_anim(void *o, int32_t v) { lv_obj_set_style_translate_y(o, v, 0); }
+
+static int bar_overlap(void)                     /* linhas do vídeo cobertas pela barra */
+{
+    int over = vr.y2 + 1 - (BF_SCREEN_H - BAR_H);
+    return over > 0 ? over : 0;
+}
+
+static void bar_hidden(lv_anim_t *a)
+{
+    (void)a;
+    if(!fs_bar) return;
+    lv_obj_add_flag(fs_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_refr_now(NULL);                            /* preto embaixo antes de parar de desenhar */
+    ui_draw(false);
+    eng_send("CLIP 0");
+    bar_up = false;
+}
+
+static void bar_hide(lv_timer_t *t)
+{
+    (void)t;
+    if(bar_t) { lv_timer_delete(bar_t); bar_t = NULL; }
+    if(!fs_bar || !bar_up) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, fs_bar);
+    lv_anim_set_exec_cb(&a, bar_y_anim);
+    lv_anim_set_values(&a, 0, BAR_H);
+    lv_anim_set_duration(&a, 180);
+    lv_anim_set_completed_cb(&a, bar_hidden);
+    lv_anim_start(&a);
+}
+
+static void bar_show(void)
+{
+    if(!fs_on || !fs_bar) return;
+    if(bar_t) lv_timer_reset(bar_t);
+    else bar_t = lv_timer_create(bar_hide, 4000, NULL);
+    if(bar_up) return;
+    bar_up = true;
+    eng_send("CLIP %d", bar_overlap());           /* o motor não pinta onde a barra fica */
+    ui_draw(true);
+    lv_anim_delete(fs_bar, bar_y_anim);
+    lv_obj_remove_flag(fs_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_anim_t a;                                  /* sobe de baixo para cima */
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, fs_bar);
+    lv_anim_set_exec_cb(&a, bar_y_anim);
+    lv_anim_set_values(&a, BAR_H, 0);
+    lv_anim_set_duration(&a, 200);
+    lv_anim_start(&a);
+}
+
+static void fs_exit(void)
+{
+    if(!fs_on) return;
+    fs_on = bar_up = false;
+    if(bar_t) { lv_timer_delete(bar_t); bar_t = NULL; }
+    eng_send("CLIP 0");
+    ui_draw(true);
+    if(fs_bar) { lv_anim_delete(fs_bar, bar_y_anim); lv_obj_delete(fs_bar); }
+    if(fs_ov) lv_obj_delete(fs_ov);
+    fs_ov = fs_bar = NULL;
+    lv_obj_invalidate(lv_screen_active());
+}
+
+static void build_video(void);
+
+static void on_fullscreen(lv_event_t *e)
+{
+    (void)e;
+    if(fs_on) {                                   /* volta à janela */
+        fs_exit();
+        build();
+        return;
+    }
+    fs_on = true;
+    fs_ov = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(fs_ov);
+    lv_obj_set_size(fs_ov, BF_SCREEN_W, BF_SCREEN_H);
+    lv_obj_set_style_bg_color(fs_ov, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(fs_ov, LV_OPA_COVER, 0);
+    lv_obj_add_flag(fs_ov, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(fs_ov, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
+    lv_obj_add_event_cb(fs_ov, on_video_touch, LV_EVENT_ALL, NULL);
+    int vh = BF_SCREEN_W * 9 / 16;                /* 800x450 */
+    vr.x1 = 0; vr.x2 = BF_SCREEN_W - 1;
+    vr.y1 = (BF_SCREEN_H - vh) / 2; vr.y2 = vr.y1 + vh - 1;
+    /* a barra direto na camada de cima (irmã da camada preta), como o botão da tela cheia do
+     * Internet: filha da camada preta ela não voltava a aparecer no aparelho durante a sessão */
+    fs_bar = make_bar(lv_layer_top(), BF_SCREEN_H - BAR_H, BF_SCREEN_W);
+    lv_obj_add_flag(fs_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_translate_y(fs_bar, BAR_H, 0);
+    send_rect();
+    lv_refr_now(NULL);
+    ui_draw(false);
 }
 
 static void build_video(void)
 {
     int W = lv_obj_get_width(body), H = lv_obj_get_height(body);
-    int vw = 640, vh = 360;
-    if(vh > H) { vh = H & ~1; vw = vh * 16 / 9 & ~1; }
-    int side = (W - vw) / 2;
+    int ah = H - BAR_H;                           /* área do vídeo acima da barra */
+    int vw = W & ~1, vh = vw * 9 / 16 & ~1;
+    if(vh > ah) { vh = ah & ~1; vw = vh * 16 / 9 & ~3; }
     lv_obj_t *pane = bf_plain(body);
     lv_obj_set_size(pane, W, H);
     lv_obj_remove_flag(pane, LV_OBJ_FLAG_SCROLLABLE);
@@ -660,37 +814,25 @@ static void build_video(void)
 
     video_box = lv_obj_create(pane);
     lv_obj_remove_style_all(video_box);
-    lv_obj_set_pos(video_box, side, (H - vh) / 2);
+    lv_obj_set_pos(video_box, (W - vw) / 2 & ~1, (ah - vh) / 2);
     lv_obj_set_size(video_box, vw, vh);
     lv_obj_set_style_bg_color(video_box, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(video_box, LV_OPA_COVER, 0);
     lv_obj_add_flag(video_box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(video_box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_GESTURE_BUBBLE);
     lv_obj_add_event_cb(video_box, on_video_touch, LV_EVENT_ALL, NULL);
-
-    lv_obj_t *l = side_col(pane, 0, side, H);
-    rclick_btn = side_btn(l, LV_SYMBOL_EDIT, tr(S_BRP_RCLICK), 0, on_rclick, NULL);
-    drag_btn = side_btn(l, LV_SYMBOL_SHUFFLE, tr(S_BRP_DRAG), 0, on_drag, NULL);
-    side_btn(l, LV_SYMBOL_UP, tr(S_BRP_SCROLL), 0, on_scroll, (void *)(intptr_t)2);
-    side_btn(l, LV_SYMBOL_DOWN, tr(S_BRP_SCROLL), 0, on_scroll, (void *)(intptr_t)-2);
-    /* Encerrar no alto: no canto de baixo à direita o toque resistivo erra mais (medido: o
-     * botão embaixo não respondia; o mesmo x mais acima, sim) */
-    lv_obj_t *r = side_col(pane, W - side, side, H);
-    side_btn(r, LV_SYMBOL_STOP, tr(S_BRP_END), 2, on_end, NULL);
-    side_btn(r, LV_SYMBOL_SHUFFLE, tr(S_BRP_PAD), 0, on_to_pad, NULL);
-    side_btn(r, LV_SYMBOL_REFRESH, tr(S_BRP_RELEASE), 0, on_release, NULL);
-    st_lbl = bf_label(r, starting ? tr(S_BRP_STARTING) : "", BF_FONT_S, pal()->text_dim);
-    lv_obj_set_width(st_lbl, LV_PCT(100));
-    lv_label_set_long_mode(st_lbl, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(st_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    side_paint();
+    make_bar(pane, H - BAR_H, W);
+    lv_obj_update_layout(pane);
+    lv_obj_get_coords(video_box, &vr);
+    if(streaming) send_rect();                    /* voltou da tela cheia ou do controle */
 }
 
 static void build(void)
 {
     if(!body) return;
     lv_obj_clean(body);
-    st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = video_box = rclick_btn = drag_btn = NULL;
+    if(view != V_VIDEO) fs_exit();
+    st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = video_box = rclick_btn = drag_btn = fs_btn_lbl = NULL;
     nvb = 0;
     pressing = false;
     /* na sessão o controle físico vai ao PC; o vídeo só é desenhado na vista dele */
@@ -825,8 +967,10 @@ static void pad_tick(lv_timer_t *t)
         static int shown = -1;
         lv_obj_t *top = lv_layer_top();
         int busy = 0;
-        for(uint32_t i = 0; i < lv_obj_get_child_count(top); i++)
-            if(!lv_obj_has_flag(lv_obj_get_child(top, (int32_t)i), LV_OBJ_FLAG_HIDDEN)) busy = 1;
+        for(uint32_t i = 0; i < lv_obj_get_child_count(top); i++) {
+            lv_obj_t *c = lv_obj_get_child(top, (int32_t)i);
+            if(c != fs_ov && c != fs_bar && !lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) busy = 1;
+        }
         if(busy == shown) { /* igual */ }
         else { shown = busy; eng_send("SHOW %d", !busy); if(!busy && video_box) lv_obj_invalidate(video_box); }
     }
@@ -845,6 +989,9 @@ void scr_brp_demo(const char *line)
 {
     if(!body) return;
     if(!strcmp(line, "+video")) { session_video = true; view = V_VIDEO; streaming = true; starting = false; build(); on_line((char[]){"VSTATS 27.5 0 36"}); return; }
+    if(!strcmp(line, "+full")) { on_fullscreen(NULL); return; }
+    if(!strcmp(line, "+bar")) { bar_show(); return; }
+    if(!strcmp(line, "+window")) { fs_exit(); build(); return; }
     if(!strcmp(line, "+play")) { view = V_PLAY; streaming = true; starting = false; build(); set_status(tr(S_BRP_CONNECTED)); return; }
     if(!strcmp(line, "+lock")) { lock_mode = true; v_lock = F_RIGHT | F_A; stick_x = 20000; stick_y = 12000; stick_locked = true; vb_paint(); stick_paint(); return; }
     char b[256];
@@ -880,6 +1027,7 @@ static void destroy(void)
     if(io_t) { lv_timer_delete(io_t); io_t = NULL; }
     if(pad_t) { lv_timer_delete(pad_t); pad_t = NULL; }
     gamepad_capture(false, NULL);
+    fs_exit();
     streaming = starting = false;
     eng_stop();                                          /* RELEASE + STOP + EOF: nada preso no PC */
     root = body = st_lbl = pin_lbl = lock_btn = stick_area = stick_knob = video_box = rclick_btn = drag_btn = NULL;

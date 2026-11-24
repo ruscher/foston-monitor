@@ -140,13 +140,108 @@ static void blit_scaled(const AVFrame *f)
     }
 }
 
+/* Ampliação suave e barata (24/11/2026: a bilinear por ponto custava ~85 ms por quadro 800x450 no
+ * ARM11 e derrubava 28 qps para 7):
+ *  1. a cor é convertida uma vez por ponto de ORIGEM (320x180 = 57 mil, não 360 mil);
+ *  2. cada linha de origem é ampliada na horizontal uma vez (as duas últimas ficam guardadas);
+ *  3. o meio-termo entre dois pontos é a média no próprio RGB565 ((a & 0xF7DE) + (b & 0xF7DE)) >> 1,
+ *     sem multiplicação: posições a 1/4..3/4 entre dois pontos de origem viram a média, as outras
+ *     o mais próximo;
+ *  4. as linhas de saída vão ao framebuffer (sem cache) dois pontos por escrita de 32 bits. */
+#define AVG16(a, b) (uint16_t)((((a) & 0xF7DEu) >> 1) + (((b) & 0xF7DEu) >> 1))
+#define AVG32(a, b) ((((a) & 0xF7DEF7DEu) >> 1) + (((b) & 0xF7DEF7DEu) >> 1))
+
+static int sm_w, sm_W, sm_h, sm_H;                    /* tabelas feitas para este tamanho */
+static int16_t hx0[1024];                              /* ponto de origem de cada x de saída */
+static uint8_t hmode[1024];                            /* 0: o ponto hx0; 1: média com o seguinte */
+static uint32_t hl[2][512];                            /* duas linhas já ampliadas (pares de pontos) */
+static int hl_row[2] = { -1, -1 };
+
+static void sm_tables(int w, int W, int h, int H)
+{
+    for(int x = 0; x < W; x++) {
+        int sx = (int)(((long)x * 2 + 1) * w * 128 / W) - 128;   /* em 1/256 de ponto */
+        if(sx < 0) sx = 0;
+        int x0 = sx >> 8, fr = sx & 255;
+        if(x0 >= w - 1) { x0 = w - 1; fr = 0; }
+        if(fr >= 192) { x0++; fr = 0; }
+        hx0[x] = (int16_t)x0;
+        hmode[x] = fr >= 64;
+    }
+    sm_w = w; sm_W = W; sm_h = h; sm_H = H;
+    hl_row[0] = hl_row[1] = -1;
+}
+
+static const uint32_t *hline(const AVFrame *f, int sy, int slot)
+{
+    if(hl_row[slot] == sy) return hl[slot];
+    if(hl_row[slot ^ 1] == sy) return hl[slot ^ 1];
+    static uint16_t src[1024];
+    int w = f->width;
+    const uint8_t *yy = f->data[0] + sy * f->linesize[0];
+    const uint8_t *u = f->data[1] + (sy / 2) * f->linesize[1], *v = f->data[2] + (sy / 2) * f->linesize[2];
+    for(int x = 0; x + 1 < w; x += 2) {
+        int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
+        src[x] = px(yy[x], rv, g, bu);
+        src[x + 1] = px(yy[x + 1], rv, g, bu);
+    }
+    src[w] = src[w - 1];
+    uint16_t *o = (uint16_t *)hl[slot];
+    for(int x = 0; x < sm_W; x++) {
+        int x0 = hx0[x];
+        o[x] = hmode[x] ? AVG16(src[x0], src[x0 + 1]) : src[x0];
+    }
+    hl_row[slot] = sy;
+    return hl[slot];
+}
+
+static void blit_smooth(const AVFrame *f)
+{
+    int w = f->width, h = f->height, W = out_w & ~1, H = out_h;
+    if(w > 1022 || W > 1024 || w < 2 || h < 2) return;
+    if(w != sm_w || W != sm_W || h != sm_h || H != sm_H) sm_tables(w, W, h, H);
+    hl_row[0] = hl_row[1] = -1;                          /* quadro novo */
+    int words = W / 2;
+    for(int y = 0; y < H; y++) {
+        int sy = (int)(((long)y * 2 + 1) * h * 128 / H) - 128;
+        if(sy < 0) sy = 0;
+        int y0 = sy >> 8, fr = sy & 255;
+        if(y0 >= h - 1) { y0 = h - 1; fr = 0; }
+        if(fr >= 192) { y0++; fr = 0; }
+        uint32_t *d = (uint32_t *)(fb + (out_y + y) * fb_stride + out_x);
+        const uint32_t *a = hline(f, y0, y0 & 1);
+        if(fr >= 64) {
+            const uint32_t *b = hline(f, y0 + 1, (y0 + 1) & 1);
+            for(int i = 0; i < words; i++) d[i] = AVG32(a[i], b[i]);
+        } else {
+            for(int i = 0; i < words; i++) d[i] = a[i];
+        }
+    }
+}
+
+static atomic_int smooth = 1;
+static atomic_int clip_rows;                         /* linhas de baixo que não são desenhadas (barra) */
+
+void video_smooth(int on) { atomic_store(&smooth, on); }
+void video_clip(int rows) { atomic_store(&clip_rows, rows < 0 ? 0 : rows); }
+
 static void blit(const AVFrame *f)
 {
     if(!fb || !atomic_load(&show) || f->format != AV_PIX_FMT_YUV420P && f->format != AV_PIX_FMT_YUVJ420P) return;
+    int full_h = out_h, c = atomic_load(&clip_rows);
+    if(c > 0 && c < out_h) out_h -= c;                  /* a barra do rodapé por cima: não pinta ali */
     bool aligned = !(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 3);
-    if(aligned && f->width * 2 == out_w && f->height * 2 == out_h) blit2x(f);
-    else blit_scaled(f);
+    if(atomic_load(&smooth) && aligned) blit_smooth(f);
+    else {
+        if(aligned && f->width * 2 == out_w && f->height * 2 == full_h && !c) blit2x(f);
+        else blit_scaled(f);
+    }
+    out_h = full_h;
 }
+
+static int want_lf;
+
+void video_loop_filter(int on) { want_lf = on; }
 
 int video_setup(int w, int h)
 {
@@ -156,8 +251,9 @@ int video_setup(int w, int h)
     vc = avcodec_alloc_context3(c);
     if(!vc) return -1;
     vc->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    vc->flags2 |= AV_CODEC_FLAG2_FAST;
-    vc->skip_loop_filter = AVDISCARD_ALL;
+    /* filtro de desblocagem: −20..25 % de quadros/s no ARM11 (medido), mas sem ele os blocos do
+     * H.264 aparecem; ligado nas qualidades média e alta */
+    if(!want_lf) { vc->flags2 |= AV_CODEC_FLAG2_FAST; vc->skip_loop_filter = AVDISCARD_ALL; }
     vc->thread_count = 1;
     if(avcodec_open2(vc, c, NULL) < 0) return -1;
     pk = av_packet_alloc();

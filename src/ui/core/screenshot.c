@@ -575,6 +575,9 @@ int screenshot_run(const char *dir)
     scr_brp_demo("+play");          pump(100); shot("40d-brp-controle");
     scr_brp_demo("+lock");          pump(100); shot("40e-brp-travado");
     scr_brp_demo("+video");         pump(100); shot("40f-brp-imagem");
+    scr_brp_demo("+full");          pump(400);
+    scr_brp_demo("+bar");           pump(400); shot("40g-brp-tela-cheia-barra");
+    scr_brp_demo("+window");        pump(100);
     go(SCR_POWER, 0);               shot("17-potencia");
     scroll_content_end();           shot("17b-potencia-plano");
     go(SCR_PERF, 0);                shot("17c-desempenho");

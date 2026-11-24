@@ -10,5 +10,8 @@ int  video_setup(int w, int h);                 /* abre o decodificador H.264 */
 int  video_submit(PDECODE_UNIT du);             /* DR_OK ou DR_NEED_IDR */
 void video_show(int on);                        /* 0: não desenha (um diálogo por cima) */
 void video_stats(unsigned long *frames, unsigned long *errors, unsigned long long *us);
+void video_loop_filter(int on);                 /* antes do video_setup */
+void video_smooth(int on);                      /* ampliação suave (padrão) ou em blocos */
+void video_clip(int rows);                      /* não pinta as últimas linhas (barra por cima) */
 void video_close(void);
 #endif

@@ -81,6 +81,9 @@ static void command(char *l)
         if(o) lv_obj_scroll_by(o, 0, -atoi(l + 7), LV_ANIM_OFF);
     }
     else if(!strcmp(l, "app home") || !strcmp(l, "home")) nav_home();
+    else if(!strncmp(l, "brp ", 4)) {                  /* testes do Big Remote Play (scr_brp_demo) */
+        if(nav_current().scr == SCR_BRP) scr_brp_demo(l + 4);
+    }
     else if(!strncmp(l, "web ", 4)) {
         if(nav_current().scr == SCR_WEB) scr_web_demo(l + 4);
     }

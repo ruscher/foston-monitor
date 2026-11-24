@@ -15,6 +15,7 @@
  *   MREL dx dy / MBTN botão 1|0 / SCROLL n      mouse
  *   MABS x y largura altura                     ponteiro do mouse na posição (toque na imagem)
  *   SHOW 1|0                                    desenha ou não o vídeo (algo por cima dele)
+ *   RECT x y l a / CLIP n                       nova área (tela cheia) / n linhas de baixo cobertas
  *   RELEASE                                     solta tudo (botões, eixos, teclas, mouse)
  *   START ... video x y l a                     com vídeo: o retângulo da tela -> VSTATS qps erros ms
  *
@@ -271,8 +272,9 @@ static void command(char *l)
     else if(!strcmp(l, "UNPAIR")) { if(have_server) gs_unpair(&server); server.paired = false; out("UNPAIR ok"); }
     else if(!strcmp(l, "APPS")) cmd_apps();
     else if(!strcmp(l, "START")) {
-        int app = 0, w = 640, h = 360, fps = 30, kbps = 1000, video = 0, vx = 80, vy = 48, vw = 640, vh = 360;
-        sscanf(a, "%d %d %d %d %d %d %d %d %d %d", &app, &w, &h, &fps, &kbps, &video, &vx, &vy, &vw, &vh);
+        int app = 0, w = 640, h = 360, fps = 30, kbps = 1000, video = 0, vx = 80, vy = 48, vw = 640, vh = 360, lf = 0;
+        sscanf(a, "%d %d %d %d %d %d %d %d %d %d %d", &app, &w, &h, &fps, &kbps, &video, &vx, &vy, &vw, &vh, &lf);
+        video_loop_filter(lf);
         cmd_start(app, w, h, fps, kbps, video, vx, vy, vw, vh);
     }
     else if(!strcmp(l, "STOP")) cmd_stop();
@@ -314,6 +316,11 @@ static void command(char *l)
             LiSendMousePositionEvent((short)clamp(x, 0, w - 1), (short)clamp(y, 0, h - 1), (short)w, (short)h);
     }
     else if(!strcmp(l, "SHOW")) video_show(atoi(a));
+    else if(!strcmp(l, "RECT")) {                         /* "RECT x y l a": a área do vídeo mudou (tela cheia) */
+        int x, y, w, h;
+        if(sscanf(a, "%d %d %d %d", &x, &y, &w, &h) == 4) video_open(x, y, w, h);
+    }
+    else if(!strcmp(l, "CLIP")) video_clip(atoi(a));     /* linhas de baixo cobertas pela barra */
     else if(!strcmp(l, "RELEASE")) release_all();
     else out("ERR comando");
 }
