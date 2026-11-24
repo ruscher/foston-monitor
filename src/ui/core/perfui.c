@@ -11,6 +11,8 @@
 #include "i18n.h"
 #include "hwkbd.h"
 #include "gamepad.h"
+#include "btstat.h"
+#include "app.h"
 #include <sys/resource.h>
 #include "../widgets/dialog.h"
 #include <stdio.h>
@@ -20,6 +22,7 @@
 
 static bool manual, video, suppressed;   /* suppressed: desligado pelo usuário com o vídeo tocando */
 static bool pad, pad_suppressed;         /* controle de jogo conectado; desligado à mão com ele */
+static bool tv, tv_suppressed;           /* app TV aberto; desligado à mão com ela */
 static bool on;                          /* o que foi pedido ao perfmode */
 static lv_timer_t *delay_t, *tick_t;
 static lv_obj_t *tag, *tag_lbl;
@@ -121,9 +124,21 @@ static void pm_open(void)
 
 /* ---------------------------------------------------------------- ligar e desligar */
 
-static bool wanted(void)
+/* um motivo "forte": vídeo, TV, controle ou o botão (pausa tudo o que está marcado) */
+static bool strong(void)
 {
-    return manual || (video && !suppressed && settings()->perf_auto) || (pad && !pad_suppressed && settings()->perf_pad);
+    return manual || (video && !suppressed && settings()->perf_auto) || (pad && !pad_suppressed && settings()->perf_pad) ||
+           (tv && !tv_suppressed && settings()->perf_tv);
+}
+
+static bool wanted(void) { return strong() || settings()->perf_always; }
+
+/* o que pausar: só pelo plano de energia, GPS e tarefas (Bluetooth e telefone continuam: o
+ * celular precisa conectar e as chamadas, chegar) */
+static unsigned svc_now(void)
+{
+    unsigned s = settings()->perf_svc;
+    return strong() ? s : s & (PM_SVC_GPS | PM_SVC_CRON);
 }
 
 static void apply(void)
@@ -134,16 +149,15 @@ static void apply(void)
     if(w) {
         if(settings()->perf_quiet) fx_quiet(true);
         /* o Bluetooth de teclado/controle e o app aberto: perfmode_hold (tick) */
-        perfmode_enter(settings()->perf_svc, false);
+        perfmode_enter(svc_now(), false);
     }
     else {
         fx_quiet(false);
         perfmode_leave();
     }
-    /* ligado ou desligado só pelo controle: sem a janela que segura os toques (a pessoa vai
-     * jogar agora); a etiqueta avisa */
-    bool pad_only = !manual && !(video && !suppressed && settings()->perf_auto);
-    if(!pad_only) pm_open();
+    /* a janela que segura os toques só para o vídeo e o botão: com o controle a pessoa vai
+     * jogar agora, e a TV já mostra "sintonizando"; a etiqueta avisa */
+    if(manual || (video && !suppressed && settings()->perf_auto)) pm_open();
 }
 
 static void delay_done(lv_timer_t *t)
@@ -184,6 +198,7 @@ void perfui_manual(bool m)
     manual = m;
     if(!m && video) suppressed = true;           /* desligou à mão: não volta neste vídeo */
     if(!m && pad) pad_suppressed = true;         /* nem com este controle */
+    if(!m && tv) tv_suppressed = true;           /* nem com a TV aberta agora */
     schedule(0);
 }
 
@@ -192,7 +207,17 @@ void perfui_disable(void)
     manual = false;
     if(video) suppressed = true;
     if(pad) pad_suppressed = true;
+    if(tv) tv_suppressed = true;
     schedule(0);
+}
+
+void perfui_tv(bool open)
+{
+    if(open == tv) return;
+    tv = open;
+    if(!open) tv_suppressed = false;
+    if(manual) return;
+    schedule(0);                                 /* abre: já; fecha: sai já (o app saiu) */
 }
 
 void perfui_settings_changed(void)
@@ -208,7 +233,10 @@ perf_why_t perfui_why(void)
 {
     if(perfmode_state() == PM_OFF && !on) return PERF_WHY_NONE;
     if(manual) return PERF_WHY_MANUAL;
-    return video && !suppressed && settings()->perf_auto ? PERF_WHY_VIDEO : pad ? PERF_WHY_PAD : PERF_WHY_VIDEO;
+    if(video && !suppressed && settings()->perf_auto) return PERF_WHY_VIDEO;
+    if(tv && !tv_suppressed && settings()->perf_tv) return PERF_WHY_TV;
+    if(pad && !pad_suppressed && settings()->perf_pad) return PERF_WHY_PAD;
+    return settings()->perf_always ? PERF_WHY_PLAN : PERF_WHY_VIDEO;
 }
 
 bool perfui_video_playing(void) { return video; }
@@ -238,6 +266,7 @@ void perfui_dialog(void)
     char body[300];
     perf_why_t w = perfui_why();
     snprintf(body, sizeof body, "%s\n%s", tr(w == PERF_WHY_MANUAL ? S_PERFM_WHY_MANUAL : w == PERF_WHY_PAD ? S_PERFM_WHY_PAD
+                                              : w == PERF_WHY_TV ? S_PERFM_WHY_TV : w == PERF_WHY_PLAN ? S_PERFM_WHY_PLAN
                                               : S_PERFM_WHY_VIDEO), tr(S_PERFM_TAG_BODY));
     static const char *b[3];
     b[0] = tr(S_PERFM_DISABLE);
@@ -303,10 +332,26 @@ static uint32_t hold_drop_at;
 static bool prio_now, bt_boosted;
 static uint32_t boost_at;
 
+/* algum aparelho Bluetooth conectado (celular, fone, teclado, controle)? Lido a cada 1 s */
+static bool bt_in_use(void)
+{
+    static uint32_t at;
+    static bool used;
+    if(lv_tick_elaps(at) < 1000) return used;
+    at = lv_tick_get();
+    static bt_info_t b;
+    bt_read(&b);
+    used = false;
+    for(int i = 0; i < b.ndev; i++) if(b.dev[i].connected) used = true;
+    return used;
+}
+
 static void holds_update(void)
 {
     unsigned need = app_needs(nav_current().scr);
-    if(hwkbd_bt_connected()) need |= PM_SVC_BT;  /* teclado ou controle Bluetooth continua */
+    /* com um aparelho Bluetooth conectado o Bluetooth nunca pausa: pausar derrubava o celular
+     * (e a internet e o som dele) a cada vídeo, e o teclado/controle */
+    if(hwkbd_bt_connected() || bt_in_use()) need |= PM_SVC_BT;
     unsigned add = need & ~hold_now, drop = hold_now & ~need;
     if(add) {                                    /* o app está esperando: já */
         hold_now |= add;
@@ -350,7 +395,8 @@ static void pad_update(void)
     pad = now;
     if(!pad) pad_suppressed = false;             /* o próximo controle pode ligar de novo */
     if(manual || (video && !suppressed && settings()->perf_auto)) return;   /* outro motivo segura */
-    schedule(pad ? PAD_ENTER_MS : (uint32_t)settings()->perf_exit_s * 1000u);
+    /* o controle saiu: desliga já (esperar perf_exit_s só pausava e religava serviços à toa) */
+    schedule(pad ? PAD_ENTER_MS : 0);
 }
 
 static void tick(lv_timer_t *t)
@@ -359,6 +405,13 @@ static void tick(lv_timer_t *t)
     pad_update();
     holds_update();
     prio_update();
+    /* fundo liso enquanto ligado: o papel de parede sai do que é redesenhado */
+    static bool plain;
+    pm_state_t ps = perfmode_state();
+    bool want_plain = settings()->fx_level == BF_FX_MIN ||
+                      (settings()->perf_wall && strong() && (ps == PM_ON || ps == PM_ENTERING));
+    if(on) perfmode_enter(svc_now(), false);       /* o motivo mudou (o vídeo começou com o plano) */
+    if(want_plain != plain) { plain = want_plain; app_wallpaper_plain(plain); }
     pm_update();
     if(!tag) tag_make();
     pm_state_t st = perfmode_state();
@@ -375,9 +428,11 @@ static void tick(lv_timer_t *t)
     static uint32_t on_since;
     if(st == PM_ON && last_st != PM_ON) on_since = lv_tick_get();
     last_st = st;
-    bool brief = perfui_why() == PERF_WHY_PAD && st == PM_ON && lv_tick_elaps(on_since) > 6000;
+    bool brief = (perfui_why() == PERF_WHY_PAD || perfui_why() == PERF_WHY_TV) && st == PM_ON &&
+                 lv_tick_elaps(on_since) > 6000;
     bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
-                nav_current().scr != SCR_SCC &&
+                perfui_why() != PERF_WHY_PLAN &&
+                nav_current().scr != SCR_SCC && nav_current().scr != SCR_TV &&
                 (st == PM_ON || st == PM_ENTERING) && !brief;
     if(show) {
         lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);

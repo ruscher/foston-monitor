@@ -19,7 +19,7 @@ static lv_obj_t *sw, *st_lbl, *btn_vis, *btn_scan, *lbl_vis, *lbl_scan, *pl_card
                 *pl_play, *list, *msg;
 static lv_timer_t *tick;
 static bt_info_t cur;
-static char list_sig[BT_MAXDEV * 24 + 64];
+static char list_sig[BT_MAXDEV * 56 + 64];
 static char busy_addr[18];                /* aparelho com comando em andamento */
 static time_t switched_at;                /* quando o usuário ligou */
 static char forget_addr[18];
@@ -75,6 +75,10 @@ static void on_dev_action(lv_event_t *e)
         dialog_open(LV_SYMBOL_TRASH, pal()->danger, t, tr(S_BT_FORGET_BODY), btns, 2, -1, 1, forget_answer, NULL);
         return;
     }
+    if(!strcmp(what, "internet")) {                  /* liga/desliga a internet por este celular */
+        bt_cmd("internet %s %d", d->addr, d->inet_want ? 0 : 1);
+        return;
+    }
     if(bt_cmd("%s %s", what, d->addr)) snprintf(busy_addr, sizeof busy_addr, "%s", d->addr);
 }
 
@@ -120,7 +124,17 @@ static void build_list(void)
         const char *st = busy ? tr(S_BT_BUSY) : d->connected ? tr(S_BT_CONNECTED) : d->paired ? tr(S_BT_PAIRED)
                                                                                            : tr(S_BT_FOUND);
         bf_label(col, st, BF_FONT_S, d->connected ? lv_color_hex(C_BT) : p->text_dim);
+        if(d->nap && d->paired && d->connected) {      /* internet pelo celular (PAN) */
+            char it[120];
+            if(!d->inet_want) snprintf(it, sizeof it, "%s", tr(S_BT_INET_OFF));
+            else if(d->inet_on && d->inet_ip[0]) snprintf(it, sizeof it, tr(S_BT_INET_ON), d->inet_ip);
+            else snprintf(it, sizeof it, "%s", tr(d->inet_on ? S_BT_INET_DHCP : S_BT_INET_WAIT));
+            lv_obj_t *il = bf_label(col, it, BF_FONT_S, d->inet_on && d->inet_ip[0] ? p->success : p->text_dim);
+            bf_label_ellipsis(il, 300);
+        }
         lv_obj_t *b;
+        if(d->nap && d->paired && d->connected)
+            small_button(row, BF_SYMBOL_GLOBE, NULL, d->inet_want ? 1 : 0, "internet", i);
         if(!d->paired) b = small_button(row, NULL, tr(S_BT_PAIR), 1, "pair", i);
         else if(d->connected) b = small_button(row, NULL, tr(S_BT_DISCONNECT), 0, "disconnect", i);
         else b = small_button(row, NULL, tr(S_BT_CONNECT), 1, "connect", i);
@@ -176,8 +190,9 @@ static void refresh(void)
     char sig[sizeof list_sig];
     int k = snprintf(sig, sizeof sig, "%d%s;", cur.powered, busy_addr);
     for(int i = 0; i < cur.ndev && k < (int)sizeof sig - 32; i++)
-        k += snprintf(sig + k, sizeof sig - (size_t)k, "%s%d%d%.8s;", cur.dev[i].addr, cur.dev[i].paired,
-                      cur.dev[i].connected, cur.dev[i].name);
+        k += snprintf(sig + k, sizeof sig - (size_t)k, "%s%d%d%.8s%d%d%.15s;", cur.dev[i].addr, cur.dev[i].paired,
+                      cur.dev[i].connected, cur.dev[i].name, cur.dev[i].inet_want, cur.dev[i].inet_on,
+                      cur.dev[i].inet_ip);
     if(strcmp(sig, list_sig)) {
         snprintf(list_sig, sizeof list_sig, "%s", sig);
         build_list();

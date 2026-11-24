@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #endif
 #include "screens.h"
+#include "../core/perfui.h"
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../widgets/glass.h"
@@ -944,6 +945,7 @@ static void create(lv_obj_t *parent, int arg)
 {
     (void)arg;
     app_wallpaper_visible(false);                        /* TV: tudo preto */
+    perfui_tv(true);                                     /* modo performance (perf_tv) */
     root = bf_plain(parent);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(root, lv_color_black(), 0);
@@ -994,6 +996,7 @@ static void destroy(void)
         if(tv_pid > 0) { waitpid(tv_pid, NULL, 0); tv_pid = 0; }
     }
     app_wallpaper_visible(true);
+    perfui_tv(false);
     root = col = video = panel = foot = ft_info = ft_name = ft_sub = ft_bars = vol_row = vol_sl = vol_pct = NULL;
     play_btn = stop_btn = rec_btn = rec_dot = rec_txt = chdn = chup = list_btn = fs_btn = volup = voldn = NULL;
     memset(src_btn, 0, sizeof src_btn);

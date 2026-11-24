@@ -55,6 +55,18 @@ void bt_read(bt_info_t *b)
             s = field(s, t, sizeof t); d->rssi = atoi(t);
             s = field(s, d->icon, sizeof d->icon);
             field(s, d->name, sizeof d->name);
+        } else if(!strcmp(line, "pan")) {             /* endereço|quer|conectado|ip (depois dos dev=) */
+            char addr[18], w[4], c[4];
+            const char *x = field(v, addr, sizeof addr);
+            x = field(x, w, sizeof w);
+            x = field(x, c, sizeof c);
+            for(int i = 0; i < b->ndev; i++)
+                if(!strcmp(b->dev[i].addr, addr)) {
+                    b->dev[i].nap = true;
+                    b->dev[i].inet_want = atoi(w);
+                    b->dev[i].inet_on = atoi(c);
+                    field(x, b->dev[i].inet_ip, sizeof b->dev[i].inet_ip);
+                }
         } else if(!strcmp(line, "req")) {
             b->req = true;
             const char *s = field(v, b->req_kind, sizeof b->req_kind);

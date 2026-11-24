@@ -177,3 +177,37 @@ lv_obj_t *page_slider_card(lv_obj_t *parent, const char *label, const char *sym_
     }
     return sl;
 }
+
+lv_obj_t *page_choice(lv_obj_t *parent, const char *symbol, const char *title, const char *sub, bool selected,
+                      lv_event_cb_t cb, void *ud)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *b = lv_button_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_add_style(b, &bf_st_card, 0);
+    lv_obj_set_size(b, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(b, p->surface2, LV_STATE_PRESSED);
+    if(selected) {
+        lv_obj_set_style_border_color(b, p->primary, 0);
+        lv_obj_set_style_border_width(b, 2, 0);
+        lv_obj_set_style_border_opa(b, LV_OPA_COVER, 0);
+    }
+    lv_obj_set_flex_flow(b, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(b, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(b, BF_SP_L, 0);
+    if(symbol) page_round_icon(b, symbol, selected ? p->primary : p->text_dim, 44);
+    lv_obj_t *col = bf_plain(b);
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_height(col, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_t *t = bf_label(col, title, BF_FONT_M, p->text);
+    lv_obj_set_width(t, LV_PCT(100));
+    if(sub) {
+        lv_obj_t *s = bf_label(col, sub, BF_FONT_S, p->text_dim);
+        lv_obj_set_width(s, LV_PCT(100));
+        lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
+    }
+    if(selected) bf_label(b, LV_SYMBOL_OK, BF_FONT_M, p->primary);
+    if(cb) lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, ud);
+    return b;
+}

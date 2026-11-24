@@ -566,6 +566,11 @@ int screenshot_run(const char *dir)
     go(SCR_DATE, 1);                shot("16c-data-ajustar");
     go(SCR_DATE, 2);                shot("16d-data-fuso");
     go(SCR_POWER, 0);               shot("17-potencia");
+    scroll_content_end();           shot("17b-potencia-plano");
+    go(SCR_PERF, 0);                shot("17c-desempenho");
+    scroll_content_end();           shot("17d-desempenho-fim");
+    go(SCR_PERFMODE, 0);            shot("17e-modo-performance");
+    scroll_content_end();           shot("17f-modo-performance-fim");
     go(SCR_RESET, 0);               shot("18-reset-settings");
     go(SCR_SSH, 0);                 shot("19-ssh");
     go(SCR_ADVANCED, 0);            shot("20-avancado");

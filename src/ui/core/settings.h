@@ -52,6 +52,11 @@ typedef struct {
     bool perf_tag;      /* etiqueta flutuante "Performance" no canto */
     bool perf_modal;    /* janela com barra de progresso ao ligar e desligar */
     bool perf_pad;      /* liga sozinho com um controle de jogo conectado */
+    bool perf_tv;       /* liga sozinho com a TV aberta */
+    bool perf_wall;     /* sem papel de parede enquanto ligado (fundo liso: menos a desenhar) */
+    bool perf_always;   /* o plano de energia mantém o modo ligado (pausa só GPS e tarefas) */
+    int  power_plan;    /* BF_PLAN_*: Ajustes > Potência (core/powerplan.c) */
+    int  fx_level;      /* BF_FX_*: efeitos visuais do sistema (Ajustes > Desempenho) */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */
@@ -63,6 +68,8 @@ typedef struct {
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
+enum { BF_PLAN_ECO, BF_PLAN_BAL, BF_PLAN_PERF, BF_PLAN__N };
+enum { BF_FX_FULL, BF_FX_REDUCED, BF_FX_MIN, BF_FX__N };
 /* detalhe do mapa: automático escolhe pela situação e pelo tempo de cada quadro */
 enum { BF_DETAIL_AUTO, BF_DETAIL_ECONOMIC, BF_DETAIL_BALANCED, BF_DETAIL_DETAILED, BF_DETAIL__N };
 enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME_GLASS, BF_HOME__N };   /* só cresce no fim */

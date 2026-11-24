@@ -26,7 +26,8 @@ static void state_update(lv_timer_t *t)
     pm_state_t s = perfmode_state();
     bf_str_t txt = s == PM_ENTERING ? S_PERFM_ENTERING : s == PM_LEAVING ? S_PERFM_LEAVING
                  : s == PM_OFF ? S_PERFM_OFF : perfui_why() == PERF_WHY_MANUAL ? S_PERFM_ON_MANUAL
-                 : perfui_why() == PERF_WHY_PAD ? S_PERFM_ON_PAD : S_PERFM_ON_VIDEO;
+                 : perfui_why() == PERF_WHY_PAD ? S_PERFM_ON_PAD : perfui_why() == PERF_WHY_TV ? S_PERFM_ON_TV
+                 : perfui_why() == PERF_WHY_PLAN ? S_PERFM_ON_PLAN : S_PERFM_ON_VIDEO;
     const char *now = tr(txt);
     if(strcmp(lv_label_get_text(st_lbl), now)) lv_label_set_text(st_lbl, now);
     lv_obj_set_style_text_color(st_lbl, s == PM_OFF ? pal()->text_dim : lv_color_hex(C_PERF), 0);
@@ -47,7 +48,7 @@ static void now_click(lv_event_t *e)
 
 /* ---------------------------------------------------------------- opções */
 
-enum { O_AUTO, O_QUIET, O_PRIO, O_TAG, O_MODAL, O_SHARP, O_PAD, O_SVC = 16 };
+enum { O_AUTO, O_QUIET, O_PRIO, O_TAG, O_MODAL, O_SHARP, O_PAD, O_TV, O_WALL, O_SVC = 16 };
 
 static void opt_toggle(lv_event_t *e)
 {
@@ -65,6 +66,8 @@ static void opt_toggle(lv_event_t *e)
     else if(w == O_MODAL) s->perf_modal = on;
     else if(w == O_SHARP) s->web_fs_sharp = on;
     else if(w == O_PAD) s->perf_pad = on;
+    else if(w == O_TV) s->perf_tv = on;
+    else if(w == O_WALL) s->perf_wall = on;
     settings_save();
     perfui_settings_changed();
 }
@@ -166,6 +169,7 @@ static void build(lv_obj_t *parent)
     section(pg, S_PERFM_SEC_AUTO);
     page_switch_row(pg, tr(S_PERFM_AUTO), s->perf_auto, opt_toggle, (void *)O_AUTO);
     page_switch_row(pg, tr(S_PERFM_PAD), s->perf_pad, opt_toggle, (void *)O_PAD);
+    page_switch_row(pg, tr(S_PERFM_TV), s->perf_tv, opt_toggle, (void *)O_TV);
     choice_row(pg, tr(S_PERFM_ENTER_DELAY), &s->perf_enter_s, enter_vals, enter_store, 4);
     choice_row(pg, tr(S_PERFM_EXIT_DELAY), &s->perf_exit_s, exit_vals, exit_store, 4);
 
@@ -180,6 +184,7 @@ static void build(lv_obj_t *parent)
 
     section(pg, S_PERFM_SEC_UI);
     page_switch_row(pg, tr(S_PERFM_QUIET), s->perf_quiet, opt_toggle, (void *)O_QUIET);
+    page_switch_row(pg, tr(S_PERFM_WALL), s->perf_wall, opt_toggle, (void *)O_WALL);
     page_switch_row(pg, tr(S_PERFM_PRIO), s->perf_prio, opt_toggle, (void *)O_PRIO);
     page_switch_row(pg, tr(S_PERFM_TAGSW), s->perf_tag, opt_toggle, (void *)O_TAG);
     page_switch_row(pg, tr(S_PERFM_MODAL), s->perf_modal, opt_toggle, (void *)O_MODAL);

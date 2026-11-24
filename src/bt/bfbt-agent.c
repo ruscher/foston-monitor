@@ -19,6 +19,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <dbus/dbus.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <strings.h>
+#include <sys/wait.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -47,9 +52,15 @@
 typedef struct {
     char path[96], addr[18], name[64], icon[32];
     int paired, connected, trusted, rssi, has_rssi, resolved;
+    int has_nap, pan_on;                  /* compartilha internet (NAP); Network1 conectado */
+    char iface[16];                       /* Network1.Interface (bnep0) */
 } dev_t_;
 
 static DBusConnection *bus;
+/* internet pelo celular (pan_tick) */
+#define INET_OFF "/data/bigfoston/bt-internet-desligada"
+#define MAXPAN 4
+static struct { char addr[18]; long next_try; int pending; pid_t dhcp; char iface[16]; } pan[MAXPAN];
 static volatile sig_atomic_t quit;
 static int dirty = 1, agent_ok, reconnect_done;   /* reconnect_done: tentativas feitas */
 static long save_soon;                              /* salvar os pareamentos (mono_ms) */
@@ -208,6 +219,10 @@ static void clean(char *dst, size_t n, const char *src)
 /* --------------------------------------------------- chamadas assíncronas */
 
 static void req_clear(void);
+static int inet_off(const char *addr);
+static void inet_set(const char *addr, int on);
+static int pan_slot(const char *addr, int make);
+static void iface_ip(const char *ifc, char *out, size_t n);
 static unsigned dev_class(const char *path);
 static void call_async(const char *path, const char *iface, const char *method, const char *what, int timeout_ms,
                        int first_type, ...);
@@ -544,8 +559,9 @@ static void var_bool(DBusMessageIter *var, int *out)
 static void read_iface(state_t *s, const char *path, const char *iface, DBusMessageIter *props)
 {
     int is_ad = !strcmp(iface, "org.bluez.Adapter1"), is_dev = !strcmp(iface, "org.bluez.Device1"),
-        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1");
-    if(!is_ad && !is_dev && !is_pl && !is_tr) return;
+        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1"),
+        is_net = !strcmp(iface, "org.bluez.Network1");
+    if(!is_ad && !is_dev && !is_pl && !is_tr && !is_net) return;
     dev_t_ *d = NULL;
     if(is_ad) {
         if(adapter[0] && strcmp(adapter, path)) return;
@@ -553,11 +569,14 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
         snprintf(adapter, sizeof adapter, "%s", path);
     }
     if(is_pl) { snprintf(s->pl_path, sizeof s->pl_path, "%s", path); s->pl_pos_at = mono_ms(); }
-    if(is_dev) {
-        if(s->ndev >= MAXDEV) return;
-        d = &s->dev[s->ndev++];
-        memset(d, 0, sizeof *d);
-        snprintf(d->path, sizeof d->path, "%s", path);
+    if(is_dev || is_net) {                     /* Device1 e Network1 no mesmo objeto, em qualquer ordem */
+        for(int i = 0; i < s->ndev && !d; i++) if(!strcmp(s->dev[i].path, path)) d = &s->dev[i];
+        if(!d) {
+            if(s->ndev >= MAXDEV) return;
+            d = &s->dev[s->ndev++];
+            memset(d, 0, sizeof *d);
+            snprintf(d->path, sizeof d->path, "%s", path);
+        }
     }
     DBusMessageIter e;
     dbus_message_iter_recurse(props, &e);
@@ -573,8 +592,20 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
             else if(!strcmp(k, "Discoverable")) var_bool(&var, &s->discoverable);
             else if(!strcmp(k, "Discovering")) var_bool(&var, &s->discovering);
             else if(!strcmp(k, "Alias")) var_str(&var, s->name, sizeof s->name);
+        } else if(is_net) {
+            if(!strcmp(k, "Connected")) var_bool(&var, &d->pan_on);
+            else if(!strcmp(k, "Interface")) var_str(&var, d->iface, sizeof d->iface);
         } else if(is_dev) {
-            if(!strcmp(k, "Address")) var_str(&var, d->addr, sizeof d->addr);
+            if(!strcmp(k, "UUIDs") && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
+                DBusMessageIter ue;
+                dbus_message_iter_recurse(&var, &ue);
+                for(; dbus_message_iter_get_arg_type(&ue) == DBUS_TYPE_STRING; dbus_message_iter_next(&ue)) {
+                    const char *u;
+                    dbus_message_iter_get_basic(&ue, &u);
+                    if(!strncasecmp(u, "00001116-", 9)) d->has_nap = 1;     /* NAP: compartilha a rede */
+                }
+            }
+            else if(!strcmp(k, "Address")) var_str(&var, d->addr, sizeof d->addr);
             else if(!strcmp(k, "Alias")) var_str(&var, d->name, sizeof d->name);
             else if(!strcmp(k, "Icon")) var_str(&var, d->icon, sizeof d->icon);
             else if(!strcmp(k, "Paired")) var_bool(&var, &d->paired);
@@ -681,6 +712,12 @@ static void write_state(const state_t *s)
     for(int i = 0; i < s->ndev; i++)
         fprintf(f, "dev=%s|%d|%d|%d|%d|%s|%s\n", d[i].addr, d[i].paired, d[i].connected, d[i].trusted,
                 d[i].has_rssi ? d[i].rssi : 0, d[i].icon, d[i].name[0] ? d[i].name : d[i].addr);
+    for(int i = 0; i < s->ndev; i++) {               /* "pan=endereço|quer|conectado|ip" */
+        if(!s->dev[i].has_nap || !s->dev[i].paired) continue;
+        char ip[24] = "";
+        if(s->dev[i].pan_on && s->dev[i].iface[0]) iface_ip(s->dev[i].iface, ip, sizeof ip);
+        fprintf(f, "pan=%s|%d|%d|%s\n", s->dev[i].addr, !inet_off(s->dev[i].addr), s->dev[i].pan_on, ip);
+    }
     if(req_msg || req_display) {
         const char *name = "", *addr = "";
         for(int i = 0; i < s->ndev; i++)
@@ -760,6 +797,14 @@ static void command(char *line)
             call_async(player_path, "org.bluez.MediaPlayer1",
                        !strcmp(line, "play") ? "Play" : !strcmp(line, "pause") ? "Pause" :
                        !strcmp(line, "next") ? "Next" : "Previous", "player", 5000, DBUS_TYPE_INVALID);
+    } else if(!strcmp(line, "internet")) {            /* "internet ENDEREÇO 1|0" */
+        char a[18] = "";
+        int on = 1;
+        if(sscanf(arg, "%17s %d", a, &on) >= 1 && valid_addr(a)) {
+            inet_set(a, on);
+            int k = pan_slot(a, 0);
+            if(k >= 0) pan[k].next_try = 0;             /* tenta já */
+        }
     } else if((!strcmp(line, "repeat") || !strcmp(line, "shuffle")) && player_path[0]) {
         /* AVRCP: repeat off|singletrack|alltracks, shuffle off|alltracks */
         static const char *ok[] = { "off", "singletrack", "alltracks", "group", NULL };
@@ -987,6 +1032,168 @@ static void role_switch_tick(const state_t *st, long now)
     }
 }
 
+/* ------------------------------------------------ internet pelo celular (Bluetooth PAN)
+ * Celular com o "Tethering Bluetooth" ligado oferece o NAP: Network1.Connect("nap") cria a
+ * bnep0 e o udhcpc pega endereço, rota (métrica 0: ganha da rota do PC, 200) e DNS (o
+ * default.script marca as linhas "# bnep0" e as tira ao desconectar). Ligado por padrão para
+ * todo aparelho pareado e conectado que anuncia NAP; desligado à mão fica em INET_OFF.
+ * Tenta de novo a cada 30 s enquanto o aparelho está conectado (o tethering pode ser ligado
+ * depois). Antes ninguém chamava o Network1: o celular conectava e a internet não vinha. */
+
+static int inet_off(const char *addr)
+{
+    FILE *f = fopen(INET_OFF, "r");
+    if(!f) return 0;
+    char l[64];
+    int off = 0;
+    while(!off && fgets(l, sizeof l, f)) if(!strncmp(l, addr, 17)) off = 1;
+    fclose(f);
+    return off;
+}
+
+static void inet_set(const char *addr, int on)
+{
+    char tmp[300];
+    snprintf(tmp, sizeof tmp, "%s.novo", INET_OFF);
+    FILE *in = fopen(INET_OFF, "r"), *out = fopen(tmp, "w");
+    if(!out) { if(in) fclose(in); return; }
+    char l[64];
+    while(in && fgets(l, sizeof l, in)) if(strncmp(l, addr, 17)) fputs(l, out);
+    if(in) fclose(in);
+    if(!on) fprintf(out, "%s\n", addr);
+    if(fclose(out) == 0) rename(tmp, INET_OFF);
+}
+
+static int pan_slot(const char *addr, int make)
+{
+    int fr = -1;
+    for(int k = 0; k < MAXPAN; k++) {
+        if(!strcmp(pan[k].addr, addr)) return k;
+        if(!pan[k].addr[0] && fr < 0) fr = k;
+    }
+    if(!make || fr < 0) return -1;
+    memset(&pan[fr], 0, sizeof pan[fr]);
+    snprintf(pan[fr].addr, sizeof pan[fr].addr, "%s", addr);
+    return fr;
+}
+
+static void pan_done(DBusPendingCall *pc, void *ud)
+{
+    int k = (int)(intptr_t)ud;
+    DBusMessage *r = dbus_pending_call_steal_reply(pc);
+    pan[k].pending = 0;
+    if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
+        const char *msg = NULL;
+        dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
+        syslog(LOG_INFO, "internet pelo celular: %s %s (o tethering Bluetooth está ligado no celular?)",
+               dbus_message_get_error_name(r), msg ? msg : "");
+    } else if(r) {
+        const char *ifc = NULL;
+        if(dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &ifc, DBUS_TYPE_INVALID) && ifc)
+            snprintf(pan[k].iface, sizeof pan[k].iface, "%s", ifc);
+        syslog(LOG_INFO, "internet pelo celular: %s conectada", pan[k].iface);
+    }
+    if(r) dbus_message_unref(r);
+    dbus_pending_call_unref(pc);
+    dirty = 1;
+}
+
+static void pan_dhcp_stop(int k)
+{
+    if(pan[k].dhcp > 0) {
+        kill(pan[k].dhcp, SIGTERM);                       /* -R: devolve o endereço e o script limpa */
+        pan[k].dhcp = 0;
+    }
+}
+
+static void pan_tick(const state_t *st, long now)
+{
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->addr[0] || !d->has_nap) continue;
+        int want = d->paired && d->connected && !inet_off(d->addr);
+        int k = pan_slot(d->addr, want || d->pan_on);
+        if(k < 0) continue;
+        if(d->pan_on && d->iface[0]) snprintf(pan[k].iface, sizeof pan[k].iface, "%s", d->iface);
+        if(want && !d->pan_on && !pan[k].pending && now >= pan[k].next_try) {
+            DBusMessage *m = dbus_message_new_method_call(BLUEZ, d->path, "org.bluez.Network1", "Connect");
+            const char *nap = "nap";
+            DBusPendingCall *pc = NULL;
+            if(m) {
+                dbus_message_append_args(m, DBUS_TYPE_STRING, &nap, DBUS_TYPE_INVALID);
+                if(dbus_connection_send_with_reply(bus, m, &pc, 20000) && pc) {
+                    dbus_pending_call_set_notify(pc, pan_done, (void *)(intptr_t)k, NULL);
+                    pan[k].pending = 1;
+                }
+                dbus_message_unref(m);
+            }
+            pan[k].next_try = now + 30000;
+        }
+        if(d->pan_on && want && pan[k].iface[0] && pan[k].dhcp <= 0) {
+            pid_t p = fork();
+            if(p == 0) {
+                setsid();
+                int nul = open("/dev/null", O_RDWR);
+                if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
+                execl("/sbin/udhcpc", "udhcpc", "-i", pan[k].iface, "-f", "-R", "-t", "8", "-T", "3", "-A", "10",
+                      (char *)NULL);
+                _exit(127);
+            }
+            if(p > 0) {
+                pan[k].dhcp = p;
+                syslog(LOG_INFO, "internet pelo celular: pedindo endereço na %s", pan[k].iface);
+            }
+        }
+        if((!d->pan_on || !want) && pan[k].dhcp > 0) pan_dhcp_stop(k);
+        if(!want && d->pan_on)                          /* desligado à mão: solta a rede */
+            call_async(d->path, "org.bluez.Network1", "Disconnect", "reconnect", 10000, DBUS_TYPE_INVALID);
+        if(!want && !d->pan_on && !pan[k].pending) pan[k].addr[0] = 0;
+    }
+}
+
+/* o endereço IPv4 da interface ("" se não há) */
+static void iface_ip(const char *ifc, char *out, size_t n)
+{
+    out[0] = 0;
+    int s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if(s < 0) return;
+    struct ifreq r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.ifr_name, sizeof r.ifr_name, "%s", ifc);
+    if(ioctl(s, SIOCGIFADDR, &r) == 0)
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&r.ifr_addr)->sin_addr, out, (socklen_t)n);
+    close(s);
+}
+
+/* pareamentos novos ou trocados (inclusive os que o celular começa) vão para o cartão: a
+ * chave nova só existia na RAM até o próximo "desligar o Bluetooth" e, se o aparelho fosse
+ * desligado sem isso, voltava a antiga do cartão e o celular pedia o código de novo */
+static long newest_info(void)
+{
+    long newest = 0;
+    DIR *ad = opendir("/var/lib/bluetooth");
+    if(!ad) return 0;
+    struct dirent *a;
+    while((a = readdir(ad))) {
+        if(a->d_name[0] == '.') continue;
+        char dp[300];
+        snprintf(dp, sizeof dp, "/var/lib/bluetooth/%s", a->d_name);
+        DIR *dd = opendir(dp);
+        if(!dd) continue;
+        struct dirent *e;
+        while((e = readdir(dd))) {
+            if(e->d_name[0] == '.' || strlen(e->d_name) != 17) continue;
+            char ip[400];
+            struct stat sb;
+            snprintf(ip, sizeof ip, "%s/%s/info", dp, e->d_name);
+            if(!stat(ip, &sb) && sb.st_mtime > newest) newest = sb.st_mtime;
+        }
+        closedir(dd);
+    }
+    closedir(ad);
+    return newest;
+}
+
 static void on_sig(int s) { (void)s; quit = 1; }
 
 int main(int argc, char **argv)
@@ -1041,6 +1248,12 @@ int main(int argc, char **argv)
             write_state(&st);
             role_switch_tick(&st, now);
             hid_link_tick(&st, now);
+            pan_tick(&st, now);
+            /* chave de pareamento nova ou trocada: para o cartão (a primeira leitura só marca) */
+            static long info_seen = -1;
+            long ni = newest_info();
+            if(info_seen >= 0 && ni > info_seen && !save_soon) save_soon = now + 2000;
+            if(ni > info_seen) info_seen = ni;
             if(!st.powered) powered_at = 0;
             else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
             /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,

@@ -4,6 +4,7 @@
 #include "hwkbd.h"
 #include "perfui.h"
 #include "apps.h"
+#include "powerplan.h"
 #include "perf.h"
 #include "../screens/screens.h"
 #include "lvgl.h"
@@ -39,6 +40,15 @@ static void command(char *l)
     else if(!strncmp(l, "app webapp ", 11)) nav_go(SCR_WEB, WEB_ARG_APP0 + atoi(l + 11));
     else if(!strncmp(l, "page ", 5)) scr_home_show_page(atoi(l + 5));
     else if(!strcmp(l, "app perfmode")) nav_go(SCR_PERFMODE, 0);
+    else if(!strcmp(l, "app perf")) nav_go(SCR_PERF, 0);
+    else if(!strcmp(l, "app power")) nav_go(SCR_POWER, 0);
+    else if(!strcmp(l, "app tv")) nav_go(SCR_TV, 0);
+    else if(!strncmp(l, "plan ", 5) || !strncmp(l, "fx ", 3)) {   /* plano 0 economia, 1 equilibrado, 2 desempenho */
+        if(l[0] == 'p') powerplan_apply(atoi(l + 5));
+        else fx_level_apply(atoi(l + 3));
+        bf_screen_t c = nav_current().scr;
+        if(c == SCR_POWER || c == SCR_PERF || c == SCR_PERFMODE) nav_show_now();   /* o ✓ no lugar */
+    }
     else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
     else if(!strncmp(l, "group ", 6)) nav_go(SCR_APPGROUP, atoi(l + 6));
     else if(!strcmp(l, "app sc-controller")) nav_go(SCR_SCC, 0);

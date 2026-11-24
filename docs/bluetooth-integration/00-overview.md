@@ -15,7 +15,10 @@ HARDWARE**, PARCIAL, NÃO IMPLEMENTADO, BLOQUEADO POR DEPENDÊNCIA.
 | Capa do álbum (AVRCP BIP) | BLOQUEADO: exige o obexd (+~1 MB), sem espaço na memória interna | [25](25-known-limitations.md) |
 | Espectro com o áudio do celular | FUNCIONANDO NO SIMULADOR; no aparelho o anel anda a 44,1 kHz | [05](05-a2dp-multimedia.md) |
 | Voz do Big GPS por cima da música do celular | PARCIAL: mecanismo testado (o PCM solta e volta); sem teste com navegação real | [05](05-a2dp-multimedia.md) |
-| Joystick, internet PAN, telefone (HFP/PBAP), microfone | NÃO IMPLEMENTADO (próximas fases) | [25](25-known-limitations.md) |
+| Internet pelo celular (PAN/BNEP, DHCP, DNS) | **FUNCIONANDO NO HARDWARE** (POCO X4, 24/11/2026) | [../energia-e-desempenho/04](../energia-e-desempenho/04-internet-pelo-celular.md) |
+| Teclado e controle de jogo (HID) | **FUNCIONANDO NO HARDWARE** | [../jogos-e-pacotes/07](../jogos-e-pacotes/07-latencia-e-modo-performance.md) |
+| Pareamento iniciado pelo celular | PARCIAL: chaves gravadas no cartão na hora; captura HCI em análise | [../energia-e-desempenho/05](../energia-e-desempenho/05-pareamento-celular.md) |
+| Telefone (HFP/PBAP), microfone | NÃO IMPLEMENTADO (próximas fases) | [25](25-known-limitations.md) |
 
 Ferramentas: `bfsnoop` (captura HCI em btsnoop, `btmon -r` no PC), `bfhci` (estado, `lp`),
 `tools/bigfoston/bf-audio-profiler` (UART, cortes do PCM, CPU por processo),
