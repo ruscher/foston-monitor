@@ -22,12 +22,13 @@
 #define BF_PERFUI_H
 #include <stdbool.h>
 
-typedef enum { PERF_WHY_NONE, PERF_WHY_VIDEO, PERF_WHY_MANUAL, PERF_WHY_PAD, PERF_WHY_TV, PERF_WHY_PLAN } perf_why_t;
+typedef enum { PERF_WHY_NONE, PERF_WHY_VIDEO, PERF_WHY_MANUAL, PERF_WHY_PAD, PERF_WHY_TV, PERF_WHY_PLAN, PERF_WHY_STREAM } perf_why_t;
 
 void       perfui_init(void);
 void       perfui_video(bool playing);   /* VIDEO 1/0 do app Internet */
 void       perfui_video_gone(void);      /* saiu do Internet: o vídeo acabou já */
 void       perfui_tv(bool open);         /* app TV aberto / fechado (perf_tv) */
+void       perfui_stream(bool on);       /* imagem do Big Remote Play (perf_stream) */
 void       perfui_manual(bool on);       /* Ajustes: Ativar/Desativar agora */
 void       perfui_disable(void);         /* desliga já (manual e o vídeo atual) */
 perf_why_t perfui_why(void);

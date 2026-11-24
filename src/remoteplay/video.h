@@ -13,5 +13,8 @@ void video_stats(unsigned long *frames, unsigned long *errors, unsigned long lon
 void video_loop_filter(int on);                 /* antes do video_setup */
 void video_smooth(int on);                      /* ampliação suave (padrão) ou em blocos */
 void video_clip(int rows);                      /* não pinta as últimas linhas (barra por cima) */
+void video_zoom(int pct);                       /* 100..400 % */
+void video_pan(int dx, int dy, int aw, int ah); /* arrastar com zoom (pontos da área l x a) */
+int  video_map(int ax, int ay, int aw, int ah, int *fx, int *fy, int *fw, int *fh);   /* toque -> quadro */
 void video_close(void);
 #endif

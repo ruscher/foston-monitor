@@ -572,8 +572,6 @@ int screenshot_run(const char *dir)
     scr_brp_demo("HOST 192.168.7.1|1|0|0|7.1.431.-1");
     scr_brp_demo("APP 1|01 - Monitor"); scr_brp_demo("APP 2|Desktop"); scr_brp_demo("APP 3|Desktop Low");
     scr_brp_demo("APP 4|Steam Big Picture"); scr_brp_demo("APPS fim"); pump(100); shot("40c-brp-apps");
-    scr_brp_demo("+play");          pump(100); shot("40d-brp-controle");
-    scr_brp_demo("+lock");          pump(100); shot("40e-brp-travado");
     scr_brp_demo("+video");         pump(100); shot("40f-brp-imagem");
     scr_brp_demo("+full");          pump(400);
     scr_brp_demo("+bar");           pump(400); shot("40g-brp-tela-cheia-barra");

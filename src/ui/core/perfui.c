@@ -23,6 +23,7 @@
 static bool manual, video, suppressed;   /* suppressed: desligado pelo usuário com o vídeo tocando */
 static bool pad, pad_suppressed;         /* controle de jogo conectado; desligado à mão com ele */
 static bool tv, tv_suppressed;           /* app TV aberto; desligado à mão com ela */
+static bool stream, stream_suppressed;   /* sessão com imagem do Big Remote Play */
 static bool on;                          /* o que foi pedido ao perfmode */
 static lv_timer_t *delay_t, *tick_t;
 static lv_obj_t *tag, *tag_lbl;
@@ -128,7 +129,7 @@ static void pm_open(void)
 static bool strong(void)
 {
     return manual || (video && !suppressed && settings()->perf_auto) || (pad && !pad_suppressed && settings()->perf_pad) ||
-           (tv && !tv_suppressed && settings()->perf_tv);
+           (tv && !tv_suppressed && settings()->perf_tv) || (stream && !stream_suppressed && settings()->perf_stream);
 }
 
 static bool wanted(void) { return strong() || settings()->perf_always; }
@@ -199,6 +200,7 @@ void perfui_manual(bool m)
     if(!m && video) suppressed = true;           /* desligou à mão: não volta neste vídeo */
     if(!m && pad) pad_suppressed = true;         /* nem com este controle */
     if(!m && tv) tv_suppressed = true;           /* nem com a TV aberta agora */
+    if(!m && stream) stream_suppressed = true;
     schedule(0);
 }
 
@@ -208,6 +210,7 @@ void perfui_disable(void)
     if(video) suppressed = true;
     if(pad) pad_suppressed = true;
     if(tv) tv_suppressed = true;
+    if(stream) stream_suppressed = true;
     schedule(0);
 }
 
@@ -218,6 +221,15 @@ void perfui_tv(bool open)
     if(!open) tv_suppressed = false;
     if(manual) return;
     schedule(0);                                 /* abre: já; fecha: sai já (o app saiu) */
+}
+
+void perfui_stream(bool o)
+{
+    if(o == stream) return;
+    stream = o;
+    if(!o) stream_suppressed = false;
+    if(manual) return;
+    schedule(0);
 }
 
 void perfui_settings_changed(void)
@@ -235,6 +247,7 @@ perf_why_t perfui_why(void)
     if(manual) return PERF_WHY_MANUAL;
     if(video && !suppressed && settings()->perf_auto) return PERF_WHY_VIDEO;
     if(tv && !tv_suppressed && settings()->perf_tv) return PERF_WHY_TV;
+    if(stream && !stream_suppressed && settings()->perf_stream) return PERF_WHY_STREAM;
     if(pad && !pad_suppressed && settings()->perf_pad) return PERF_WHY_PAD;
     return settings()->perf_always ? PERF_WHY_PLAN : PERF_WHY_VIDEO;
 }
@@ -266,7 +279,7 @@ void perfui_dialog(void)
     char body[300];
     perf_why_t w = perfui_why();
     snprintf(body, sizeof body, "%s\n%s", tr(w == PERF_WHY_MANUAL ? S_PERFM_WHY_MANUAL : w == PERF_WHY_PAD ? S_PERFM_WHY_PAD
-                                              : w == PERF_WHY_TV ? S_PERFM_WHY_TV : w == PERF_WHY_PLAN ? S_PERFM_WHY_PLAN
+                                              : w == PERF_WHY_TV ? S_PERFM_WHY_TV : w == PERF_WHY_STREAM ? S_PERFM_WHY_STREAM : w == PERF_WHY_PLAN ? S_PERFM_WHY_PLAN
                                               : S_PERFM_WHY_VIDEO), tr(S_PERFM_TAG_BODY));
     static const char *b[3];
     b[0] = tr(S_PERFM_DISABLE);
@@ -428,7 +441,7 @@ static void tick(lv_timer_t *t)
     static uint32_t on_since;
     if(st == PM_ON && last_st != PM_ON) on_since = lv_tick_get();
     last_st = st;
-    bool brief = (perfui_why() == PERF_WHY_PAD || perfui_why() == PERF_WHY_TV) && st == PM_ON &&
+    bool brief = (perfui_why() == PERF_WHY_PAD || perfui_why() == PERF_WHY_TV || perfui_why() == PERF_WHY_STREAM) && st == PM_ON &&
                  lv_tick_elaps(on_since) > 6000;
     bool show = settings()->perf_tag && !tag_hidden && !pm_box && !dlg_bd && nav_current().scr != SCR_PERFMODE &&
                 perfui_why() != PERF_WHY_PLAN &&

@@ -1,5 +1,9 @@
 # Modo Somente Controle
 
+> **Removido em 24/11/2026, a pedido:** o app ficou só com a imagem. Este documento registra o que
+> existiu.
+
+
 O FOSTON vira o controle de um jogo que aparece no monitor ou na TV ligados ao computador.
 
 ## Como funciona

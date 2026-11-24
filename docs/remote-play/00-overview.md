@@ -21,10 +21,11 @@ Estados usados aqui:
 | **Com imagem**: o vídeo do computador no FOSTON, qualidade Alta/Média/Baixa | **FUNCIONANDO NO APARELHO**: Baixa ~19 qps em tela cheia, 15 na janela; Alta ~5; 0 erros | [06](06-video-decoding.md) |
 | Tela cheia com a barra que sobe ao tocar | **FUNCIONANDO NO APARELHO** | [06](06-video-decoding.md) |
 | Mouse pela imagem (toque = ponteiro e clique, botão direito, arrastar, rolar) | **FUNCIONANDO NO APARELHO** (ponteiro e clique conferidos na imagem) | [19](19-mouse-touchpad.md) |
-| Modo **Somente Controle** (sessão sem decodificar vídeo) | IMPLEMENTADO, NÃO TESTADO no PC | [22](22-controller-only-mode.md) |
-| Controle virtual de toque único com botões travados | **FUNCIONANDO NO SIMULADOR**; no aparelho falta a sessão pareada | [14](14-virtual-button-engine.md) |
-| Analógico virtual com zona morta e trava | **FUNCIONANDO NO SIMULADOR** | [14](14-virtual-button-engine.md) |
-| Controle Bluetooth físico repassado ao PC (somado ao virtual) | IMPLEMENTADO, NÃO TESTADO | [14](14-virtual-button-engine.md) |
+| Imagem sem faixas pretas (corte automático + cobrir sem esticar) e lupa −/+ (100–400 %) | **FUNCIONANDO NO APARELHO** | [06](06-video-decoding.md) |
+| Som do computador (Opus em ponto fixo, mono 24 kHz, 15 % de CPU) | **FUNCIONANDO NO APARELHO** (placa tocando; ouvir é com você) | [10](10-audio.md) |
+| Modo performance durante a sessão ("Ligar sozinho na imagem do Big Remote Play") | **FUNCIONANDO NO APARELHO**: GPS e tarefas pausados, interface com prioridade | — |
+| Controle Bluetooth físico repassado ao PC | IMPLEMENTADO, NÃO TESTADO | — |
+| Controle na tela e "Somente controle" | **REMOVIDOS** a pedido (24/11/2026); o histórico está em [14](14-virtual-button-engine.md) e [22](22-controller-only-mode.md) | — |
 | Multitouch verdadeiro no painel original | **INVIÁVEL** | [11](11-touchscreen-analysis.md) |
 | Áudio, teclado, troca de monitor no app, combos, layouts | PENDENTE | [31](31-known-limitations.md) |
 

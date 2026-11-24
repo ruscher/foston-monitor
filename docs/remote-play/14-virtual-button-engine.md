@@ -1,5 +1,9 @@
 # Controle virtual de toque único (Virtual Multi-Button State Engine)
 
+> **Removido em 24/11/2026, a pedido:** o app ficou só com a imagem. Este documento registra o que
+> existiu. O controle Bluetooth físico continua sendo repassado ao computador durante a sessão.
+
+
 `src/ui/screens/scr_brp.c`, vista da sessão.
 
 ## Estados

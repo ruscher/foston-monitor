@@ -16,6 +16,8 @@
  *   MABS x y largura altura                     ponteiro do mouse na posição (toque na imagem)
  *   SHOW 1|0                                    desenha ou não o vídeo (algo por cima dele)
  *   RECT x y l a / CLIP n                       nova área (tela cheia) / n linhas de baixo cobertas
+ *   ZOOM pct / PAN dx dy l a                    zoom 100..400 % / arrastar a imagem com zoom
+ *   (MABS usa o recorte mostrado: sem as faixas pretas do vídeo, coberto, com zoom)
  *   RELEASE                                     solta tudo (botões, eixos, teclas, mouse)
  *   START ... video x y l a                     com vídeo: o retângulo da tela -> VSTATS qps erros ms
  *
@@ -45,6 +47,7 @@
 #include "client.h"
 #include "errors.h"
 #include "video.h"
+#include "audio.h"
 #include <poll.h>
 
 static SERVER_DATA server;
@@ -121,11 +124,15 @@ static int dr_submit(PDECODE_UNIT du)
 
 static int ar_init(int cfg, const POPUS_MULTISTREAM_CONFIGURATION oc, void *ctx, int flags)
 {
-    (void)cfg; (void)oc; (void)ctx; (void)flags;
-    return 0;
+    (void)ctx; (void)flags;
+    if(!want_video) return 0;                            /* Somente Controle: sem som */
+    int r = audio_init(cfg, oc);
+    out("AUDIO %s %d ch %d Hz", r == 0 ? "ok" : r > 0 ? "ocupado" : "erro", oc->channelCount, oc->sampleRate);
+    return r < 0 ? -1 : 0;                               /* alto-falante ocupado: segue sem som */
 }
 
-static void ar_sample(char *d, int n) { (void)d; (void)n; }    /* som: fase seguinte (Opus) */
+static void ar_sample(char *d, int n) { if(want_video) audio_sample(d, n); }
+static void ar_cleanup(void) { audio_close(); }
 
 static void cl_stage_starting(int s) { out("STAGE %s", LiGetStageName(s)); }
 static void cl_stage_failed(int s, int err) { out("FAILED %s %d", LiGetStageName(s), err); }
@@ -242,6 +249,8 @@ static void cmd_start(int app, int w, int h, int fps, int kbps, int video, int v
     LiInitializeAudioCallbacks(&ar);
     ar.init = ar_init;
     ar.decodeAndPlaySample = ar_sample;
+    ar.cleanup = ar_cleanup;
+    ar.capabilities = CAPABILITY_SLOW_OPUS_DECODER;      /* pacotes maiores: menos trabalho no ARM11 */
     LiInitializeConnectionCallbacks(&cl);
     cl.stageStarting = cl_stage_starting;
     cl.stageFailed = cl_stage_failed;
@@ -311,9 +320,19 @@ static void command(char *l)
         if(sscanf(a, "%d", &n) == 1 && streaming) LiSendScrollEvent((signed char)clamp(n, -10, 10));
     }
     else if(!strcmp(l, "MABS")) {                         /* ponteiro na posição (x, y) de uma área l x a */
-        int x, y, w, h;
-        if(sscanf(a, "%d %d %d %d", &x, &y, &w, &h) == 4 && w > 0 && h > 0 && streaming)
-            LiSendMousePositionEvent((short)clamp(x, 0, w - 1), (short)clamp(y, 0, h - 1), (short)w, (short)h);
+        int x, y, w, h, fx, fy, fw, fh;
+        if(sscanf(a, "%d %d %d %d", &x, &y, &w, &h) == 4 && w > 0 && h > 0 && streaming) {
+            if(want_video && video_map(clamp(x, 0, w - 1), clamp(y, 0, h - 1), w, h, &fx, &fy, &fw, &fh))
+                LiSendMousePositionEvent((short)clamp(fx, 0, fw - 1), (short)clamp(fy, 0, fh - 1), (short)fw, (short)fh);
+            else
+                LiSendMousePositionEvent((short)clamp(x, 0, w - 1), (short)clamp(y, 0, h - 1), (short)w, (short)h);
+        }
+    }
+    else if(!strcmp(l, "ZOOM")) video_zoom(atoi(a));    /* 100..400 % */
+    else if(!strcmp(l, "MUTE")) audio_mute(atoi(a));
+    else if(!strcmp(l, "PAN")) {                          /* "PAN dx dy l a": arrastar a imagem com zoom */
+        int dx, dy, w, h;
+        if(sscanf(a, "%d %d %d %d", &dx, &dy, &w, &h) == 4) video_pan(dx, dy, w, h);
     }
     else if(!strcmp(l, "SHOW")) video_show(atoi(a));
     else if(!strcmp(l, "RECT")) {                         /* "RECT x y l a": a área do vídeo mudou (tela cheia) */
@@ -362,6 +381,9 @@ int main(int argc, char **argv)
                 unsigned long long us;
                 video_stats(&f, &e, &us);
                 out("VSTATS %.1f %lu %llu", last ? f / (double)(t - last) : 0.0, e, f ? us / f / 1000 : 0);
+                unsigned long ap, al, au;
+                audio_stats(&ap, &al, &au);
+                out("ASTATS %lu %lu %lu %d", ap, al, au, audio_ok());   /* pacotes, perdidos, som secou, alto-falante */
                 last = t;
             }
         }

@@ -53,6 +53,7 @@ typedef struct {
     bool perf_modal;    /* janela com barra de progresso ao ligar e desligar */
     bool perf_pad;      /* liga sozinho com um controle de jogo conectado */
     bool perf_tv;       /* liga sozinho com a TV aberta */
+    bool perf_stream;   /* liga sozinho com a imagem do Big Remote Play */
     bool perf_wall;     /* sem papel de parede enquanto ligado (fundo liso: menos a desenhar) */
     bool perf_always;   /* o plano de energia mantém o modo ligado (pausa só GPS e tarefas) */
     int  power_plan;    /* BF_PLAN_*: Ajustes > Potência (core/powerplan.c) */

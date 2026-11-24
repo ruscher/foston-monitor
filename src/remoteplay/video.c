@@ -10,6 +10,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 #include <fcntl.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <linux/fb.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -29,6 +31,7 @@
 static uint16_t *fb;
 static int fb_stride = 800, fb_w = 800, fb_h = 480;
 static int out_x, out_y, out_w, out_h;
+static int full_out_h;                                  /* altura da área (sem o CLIP) */
 static atomic_int show = 1;
 static AVCodecContext *vc;
 static AVPacket *pk;
@@ -140,9 +143,103 @@ static void blit_scaled(const AVFrame *f)
     }
 }
 
+/* ---- área de visão: sem faixas pretas, sem esticar, com zoom ----
+ * O Sunshine põe faixas pretas DENTRO do vídeo quando a tela do computador não tem a proporção
+ * pedida (o desktop com dois monitores, por exemplo). A cada 15 quadros as bordas são varridas e
+ * as linhas/colunas pretas (brilho <= 24 em toda a amostra) ficam de fora. O que sobra é ampliado
+ * COBRINDO a área de exibição (sem esticar: o excesso das bordas fica de fora), com zoom
+ * (100..400 %) e centro móvel. O mesmo recorte converte o toque em posição no vídeo (video_map). */
+static pthread_mutex_t vp_mx = PTHREAD_MUTEX_INITIALIZER;
+static int fr_w, fr_h;                                 /* tamanho do quadro */
+static int ct_x, ct_y, ct_w, ct_h;                     /* conteúdo, sem as faixas pretas */
+static double vp_x, vp_y, vp_w, vp_h;                  /* recorte mostrado, em pontos do quadro */
+static int zoom_pct = 100;
+static double cen_x = -1, cen_y = -1;                  /* centro pedido (-1: o do conteúdo) */
+
+static bool black_row(const AVFrame *f, int y, int x0, int x1)
+{
+    const uint8_t *r = f->data[0] + y * f->linesize[0];
+    for(int x = x0; x < x1; x += 4) if(r[x] > 24) return false;
+    return true;
+}
+
+static bool black_col(const AVFrame *f, int x, int y0, int y1)
+{
+    for(int y = y0; y < y1; y += 4) if(f->data[0][y * f->linesize[0] + x] > 24) return false;
+    return true;
+}
+
+static void autocrop(const AVFrame *f)
+{
+    int w = f->width, h = f->height, t = 0, b = h - 1, l = 0, r = w - 1;
+    while(t < h / 4 && black_row(f, t, 0, w)) t++;
+    while(b > h * 3 / 4 && black_row(f, b, 0, w)) b--;
+    while(l < w / 4 && black_col(f, l, t, b)) l++;
+    while(r > w * 3 / 4 && black_col(f, r, t, b)) r--;
+    if(t >= h / 4 && b <= h * 3 / 4) { t = 0; b = h - 1; }   /* quadro todo escuro: não corta */
+    pthread_mutex_lock(&vp_mx);
+    ct_x = l & ~1; ct_y = t & ~1; ct_w = (r - ct_x + 1) & ~1; ct_h = (b - ct_y + 1) & ~1;
+    pthread_mutex_unlock(&vp_mx);
+}
+
+/* com vp_mx: o recorte para a área W x H */
+static void viewport(int W, int H)
+{
+    if(ct_w <= 0 || ct_h <= 0) { ct_x = ct_y = 0; ct_w = fr_w; ct_h = fr_h; }
+    double vw = ct_w, vh = vw * H / W;                   /* cobre: corta o lado que sobra */
+    if(vh > ct_h) { vh = ct_h; vw = vh * W / H; }
+    vw = vw * 100 / zoom_pct;
+    vh = vh * 100 / zoom_pct;
+    double cx = cen_x < 0 ? ct_x + ct_w / 2.0 : cen_x, cy = cen_y < 0 ? ct_y + ct_h / 2.0 : cen_y;
+    double x = cx - vw / 2, y = cy - vh / 2;
+    if(x < ct_x) x = ct_x;
+    if(y < ct_y) y = ct_y;
+    if(x + vw > ct_x + ct_w) x = ct_x + ct_w - vw;
+    if(y + vh > ct_y + ct_h) y = ct_y + ct_h - vh;
+    if(cen_x >= 0) { cen_x = x + vw / 2; cen_y = y + vh / 2; }   /* o centro fica onde coube */
+    vp_x = x; vp_y = y; vp_w = vw; vp_h = vh;
+}
+
+void video_zoom(int pct)
+{
+    pthread_mutex_lock(&vp_mx);
+    if(pct < 100) pct = 100;
+    if(pct > 400) pct = 400;
+    if(pct == 100) cen_x = cen_y = -1;
+    else if(cen_x < 0) { cen_x = vp_x + vp_w / 2; cen_y = vp_y + vp_h / 2; }
+    zoom_pct = pct;
+    pthread_mutex_unlock(&vp_mx);
+}
+
+/* arrastar com zoom: a imagem acompanha o dedo (dx, dy em pontos da área l x a) */
+void video_pan(int dx, int dy, int aw, int ah)
+{
+    pthread_mutex_lock(&vp_mx);
+    if(zoom_pct > 100 && aw > 0 && ah > 0) {
+        if(cen_x < 0) { cen_x = vp_x + vp_w / 2; cen_y = vp_y + vp_h / 2; }
+        cen_x -= dx * vp_w / aw;
+        cen_y -= dy * vp_h / ah;
+    }
+    pthread_mutex_unlock(&vp_mx);
+}
+
+/* um ponto da área (ax, ay em l x a) em pontos do quadro; 0 sem quadro ainda */
+int video_map(int ax, int ay, int aw, int ah, int *fx, int *fy, int *fw, int *fh)
+{
+    pthread_mutex_lock(&vp_mx);
+    int ok = fr_w > 0 && aw > 0 && ah > 0;
+    if(ok) {
+        *fx = (int)(vp_x + (ax + 0.5) * vp_w / aw);
+        *fy = (int)(vp_y + (ay + 0.5) * vp_h / ah);
+        *fw = fr_w; *fh = fr_h;
+    }
+    pthread_mutex_unlock(&vp_mx);
+    return ok;
+}
+
 /* Ampliação suave e barata (24/11/2026: a bilinear por ponto custava ~85 ms por quadro 800x450 no
  * ARM11 e derrubava 28 qps para 7):
- *  1. a cor é convertida uma vez por ponto de ORIGEM (320x180 = 57 mil, não 360 mil);
+ *  1. a cor é convertida uma vez por ponto de ORIGEM, só no trecho do recorte;
  *  2. cada linha de origem é ampliada na horizontal uma vez (as duas últimas ficam guardadas);
  *  3. o meio-termo entre dois pontos é a média no próprio RGB565 ((a & 0xF7DE) + (b & 0xF7DE)) >> 1,
  *     sem multiplicação: posições a 1/4..3/4 entre dois pontos de origem viram a média, as outras
@@ -151,43 +248,51 @@ static void blit_scaled(const AVFrame *f)
 #define AVG16(a, b) (uint16_t)((((a) & 0xF7DEu) >> 1) + (((b) & 0xF7DEu) >> 1))
 #define AVG32(a, b) ((((a) & 0xF7DEF7DEu) >> 1) + (((b) & 0xF7DEF7DEu) >> 1))
 
-static int sm_w, sm_W, sm_h, sm_H;                    /* tabelas feitas para este tamanho */
 static int16_t hx0[1024];                              /* ponto de origem de cada x de saída */
 static uint8_t hmode[1024];                            /* 0: o ponto hx0; 1: média com o seguinte */
+static int hsx0, hsx1;                                 /* trecho de origem usado */
 static uint32_t hl[2][512];                            /* duas linhas já ampliadas (pares de pontos) */
 static int hl_row[2] = { -1, -1 };
 
-static void sm_tables(int w, int W, int h, int H)
+/* posição de origem (em 1/256) da saída i de n, num trecho [o, o + len) */
+static int src_pos(int i, int n, double o, double len)
 {
+    return (int)((o + (i + 0.5) * len / n - 0.5) * 256);
+}
+
+static void sm_tables(int w, int W, double sx, double sw)
+{
+    hsx0 = w; hsx1 = 0;
     for(int x = 0; x < W; x++) {
-        int sx = (int)(((long)x * 2 + 1) * w * 128 / W) - 128;   /* em 1/256 de ponto */
-        if(sx < 0) sx = 0;
-        int x0 = sx >> 8, fr = sx & 255;
+        int p = src_pos(x, W, sx, sw);
+        if(p < 0) p = 0;
+        int x0 = p >> 8, fr = p & 255;
         if(x0 >= w - 1) { x0 = w - 1; fr = 0; }
         if(fr >= 192) { x0++; fr = 0; }
         hx0[x] = (int16_t)x0;
         hmode[x] = fr >= 64;
+        if(x0 < hsx0) hsx0 = x0;
+        if(x0 + 1 > hsx1) hsx1 = x0 + 1;
     }
-    sm_w = w; sm_W = W; sm_h = h; sm_H = H;
-    hl_row[0] = hl_row[1] = -1;
+    hsx0 &= ~1;
+    if(hsx1 > w - 1) hsx1 = w - 1;
 }
 
-static const uint32_t *hline(const AVFrame *f, int sy, int slot)
+static const uint32_t *hline(const AVFrame *f, int sy, int slot, int W)
 {
     if(hl_row[slot] == sy) return hl[slot];
     if(hl_row[slot ^ 1] == sy) return hl[slot ^ 1];
-    static uint16_t src[1024];
-    int w = f->width;
+    static uint16_t src[1032];
     const uint8_t *yy = f->data[0] + sy * f->linesize[0];
     const uint8_t *u = f->data[1] + (sy / 2) * f->linesize[1], *v = f->data[2] + (sy / 2) * f->linesize[2];
-    for(int x = 0; x + 1 < w; x += 2) {
+    for(int x = hsx0; x <= hsx1; x += 2) {
         int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
         src[x] = px(yy[x], rv, g, bu);
         src[x + 1] = px(yy[x + 1], rv, g, bu);
     }
-    src[w] = src[w - 1];
+    src[hsx1 + 1] = src[hsx1];
     uint16_t *o = (uint16_t *)hl[slot];
-    for(int x = 0; x < sm_W; x++) {
+    for(int x = 0; x < W; x++) {
         int x0 = hx0[x];
         o[x] = hmode[x] ? AVG16(src[x0], src[x0 + 1]) : src[x0];
     }
@@ -197,21 +302,30 @@ static const uint32_t *hline(const AVFrame *f, int sy, int slot)
 
 static void blit_smooth(const AVFrame *f)
 {
+    static unsigned long n;
     int w = f->width, h = f->height, W = out_w & ~1, H = out_h;
     if(w > 1022 || W > 1024 || w < 2 || h < 2) return;
-    if(w != sm_w || W != sm_W || h != sm_h || H != sm_H) sm_tables(w, W, h, H);
-    hl_row[0] = hl_row[1] = -1;                          /* quadro novo */
+    if(n++ % 15 == 0 || w != fr_w || h != fr_h) {
+        if(w != fr_w || h != fr_h) { pthread_mutex_lock(&vp_mx); fr_w = w; fr_h = h; ct_w = 0; pthread_mutex_unlock(&vp_mx); }
+        autocrop(f);
+    }
+    pthread_mutex_lock(&vp_mx);
+    viewport(W, full_out_h);                            /* a proporção da área inteira, não a cortada */
+    double sx = vp_x, sy0 = vp_y, sw = vp_w, sh = vp_h;
+    pthread_mutex_unlock(&vp_mx);
+    sm_tables(w, W, sx, sw);
+    hl_row[0] = hl_row[1] = -1;
     int words = W / 2;
     for(int y = 0; y < H; y++) {
-        int sy = (int)(((long)y * 2 + 1) * h * 128 / H) - 128;
-        if(sy < 0) sy = 0;
-        int y0 = sy >> 8, fr = sy & 255;
+        int p = src_pos(y, full_out_h, sy0, sh);
+        if(p < 0) p = 0;
+        int y0 = p >> 8, fr = p & 255;
         if(y0 >= h - 1) { y0 = h - 1; fr = 0; }
         if(fr >= 192) { y0++; fr = 0; }
         uint32_t *d = (uint32_t *)(fb + (out_y + y) * fb_stride + out_x);
-        const uint32_t *a = hline(f, y0, y0 & 1);
+        const uint32_t *a = hline(f, y0, y0 & 1, W);
         if(fr >= 64) {
-            const uint32_t *b = hline(f, y0 + 1, (y0 + 1) & 1);
+            const uint32_t *b = hline(f, y0 + 1, (y0 + 1) & 1, W);
             for(int i = 0; i < words; i++) d[i] = AVG32(a[i], b[i]);
         } else {
             for(int i = 0; i < words; i++) d[i] = a[i];
@@ -229,6 +343,7 @@ static void blit(const AVFrame *f)
 {
     if(!fb || !atomic_load(&show) || f->format != AV_PIX_FMT_YUV420P && f->format != AV_PIX_FMT_YUVJ420P) return;
     int full_h = out_h, c = atomic_load(&clip_rows);
+    full_out_h = full_h;
     if(c > 0 && c < out_h) out_h -= c;                  /* a barra do rodapé por cima: não pinta ali */
     bool aligned = !(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 3);
     if(atomic_load(&smooth) && aligned) blit_smooth(f);

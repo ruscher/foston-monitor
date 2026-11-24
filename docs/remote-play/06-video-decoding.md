@@ -53,6 +53,21 @@ filtro de desblocagem e a ampliação suave.
 Para ler textos, prefira uma entrada de um monitor só ("01 - Monitor"): a "Desktop Low" junta os
 dois monitores numa imagem só e cada ponto do FOSTON cobre muitos pontos do desktop.
 
+## Sem faixas pretas, sem esticar, com zoom
+
+- **Faixas pretas de dentro do vídeo:** o Sunshine as põe quando a tela do computador não tem a
+  proporção pedida (o desktop com dois monitores, por exemplo). A cada 15 quadros o motor varre
+  as bordas e deixa de fora as linhas e colunas pretas (brilho ≤ 24 em toda a amostra).
+- **Cobrir a área:** o que sobra é ampliado **cobrindo** a área de exibição, sem deformar. O excesso
+  das bordas fica de fora, e a janela usa a largura toda.
+- **Lupa − / +:** zoom de 100, 150, 200, 300 e 400 %. Com zoom, arrastar o dedo **move a imagem**
+  (`PAN`) e o toque curto continua clicando.
+- **Toque:** o motor converte cada toque em posição no vídeo pelo mesmo recorte (`video_map`), então
+  o clique cai no lugar certo com corte e com zoom.
+
+Conferido no aparelho: a janela ficou sem faixas, e em 200 % o arrasto levou a vista para outra
+parte do desktop.
+
 ## Tela cheia
 
 - **Área:** o vídeo em 800×450 numa camada por cima de tudo.
