@@ -117,6 +117,9 @@ static void clean(char *dst, size_t n, const char *src)
 /* --------------------------------------------------- chamadas assíncronas */
 
 static void req_clear(void);
+static unsigned dev_class(const char *path);
+static void call_async(const char *path, const char *iface, const char *method, const char *what, int timeout_ms,
+                       int first_type, ...);
 static void set_bool(const char *path, const char *iface, const char *prop, int v);
 
 static void call_done(DBusPendingCall *pc, void *ud)
@@ -134,6 +137,12 @@ static void call_done(DBusPendingCall *pc, void *ud)
         if(!strcmp(what, "pair") && !failed && pair_path[0]) {
             /* pareado pelo usuário: confiável (reconecta e é autorizado sem perguntar) */
             set_bool(pair_path, "org.bluez.Device1", "Trusted", 1);
+            /* periférico (teclado, mouse, controle de jogo): o Pair só cria o vínculo; o
+             * canal HID abre com o Connect. O controle do PlayStation espera o computador
+             * conectar logo depois de parear e, se ninguém conecta, desliga ("Pareado",
+             * nunca "Conectado"). Teclado que já conectou sozinho: AlreadyConnected, sem efeito */
+            if(((dev_class(pair_path) >> 8) & 0x1f) == 0x05)
+                call_async(pair_path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
         }
         if(!failed) save_soon = mono_ms() + 1500;     /* pareamentos para o cartão */
         if(req_display) req_clear();                   /* o código já não vale */
@@ -245,7 +254,6 @@ static void req_set(DBusMessage *msg, const char *kind, const char *dev, unsigne
 }
 
 static int dev_bool(const char *path, const char *prop);
-static unsigned dev_class(const char *path);
 
 /* mostra um código para digitar no aparelho (teclado); a resposta ao BlueZ já foi */
 static void disp_set(const char *dev, unsigned pass)
@@ -614,7 +622,7 @@ static void trust_inputs(const state_t *s)
         }
         if(seen) continue;
         if(free_ >= 0) snprintf(trusted_done[free_], sizeof trusted_done[free_], "%s", d->path);
-        syslog(LOG_INFO, "teclado/mouse pareado marcado como confiável");
+        syslog(LOG_INFO, "teclado/mouse/controle pareado marcado como confiável");
         set_bool(d->path, "org.bluez.Device1", "Trusted", 1);
         save_soon = mono_ms() + 1500;
         dirty = 1;
@@ -792,6 +800,9 @@ static void role_switch_tick(const state_t *st, long now)
     for(int i = 0; i < st->ndev; i++) {
         const dev_t_ *d = &st->dev[i];
         if(!d->connected || !d->resolved) continue;
+        /* teclado, mouse e controle: o FOSTON segue mestre. A troca serve ao áudio (AFH); com
+         * vários aparelhos de entrada mestres o FOSTON viraria escravo de várias piconets */
+        if(!strncmp(d->icon, "input-", 6)) continue;
         int k, freek = -1;
         for(k = 0; k < MAXRS && strcmp(rs[k].addr, d->addr); k++)
             if(!rs[k].addr[0] && freek < 0) freek = k;

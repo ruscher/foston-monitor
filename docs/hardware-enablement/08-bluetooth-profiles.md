@@ -92,6 +92,13 @@ O shell é estático e não fala D-Bus; o `bfbt-agent` (libdbus, 0,9 MB de RAM) 
   (eles mesmos reconectam ao apertar uma tecla; a tentativa só atrasaria o celular ~5 s).
   O kernel cria o `/dev/input/eventN` pelo `uhid`; o shell lê (ver
   [Interface: teclado físico](../09-interface-ux-ui.md#teclado-físico)).
+- **Periféricos** (classe 0x05: teclado, mouse, controle de jogo): depois do `Pair` o agente
+  chama `Connect`. O `Pair` só cria o vínculo; o canal HID abre com o `Connect`, e o
+  DualShock 4 espera o computador conectar logo depois de parear: sem isso ficava
+  "Pareado" e desligava (24/11/2026). Para teclados que já conectaram sozinhos o `Connect`
+  não faz nada. A troca de papel do enlace (o celular mestre, para o AFH do áudio) não é
+  pedida para eles: o FOSTON segue mestre, sem virar escravo de várias piconets. Controles
+  em [Interface: controle de jogo](../09-interface-ux-ui.md#controle-de-jogo).
 - **Estado** em `/run/bigfoston-bt` (`chave=valor`; `dev=endereço|pareado|conectado|confiável|rssi|ícone|nome`,
   `req=`, `player=estado|título|artista|aparelho`, `result=operação|ok/erro/andamento|erro`).
 - **Comandos** no FIFO `/run/bigfoston-bt.cmd`: `on`, `off`, `visible 0|1`, `scan 0|1`,
@@ -113,5 +120,7 @@ o teste no aparelho com o dedo está pendente.
 - Teste do app no aparelho (pareamento novo pela tela, música pelos botões).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
   (mpg123), precisa de uma rota para o BlueALSA.
-- Viva-voz (HFP/SCO) e microfone; HID além do teclado (mouse, controle).
+- Viva-voz (HFP/SCO) e microfone; mouse Bluetooth (o cursor do controle já existe).
+- `hid-playstation` no kernel (luz, vibração e bateria do DualShock/DualSense): falta
+  espaço na `\ResidentFlash` para o zImage maior.
 - Decidir se o firmware oficial passa para bibliotecas compartilhadas.

@@ -28,6 +28,7 @@ int screenshot_run(const char *dir)
 #include "../widgets/dialog.h"
 #include "webremote.h"
 #include "hwkbd.h"
+#include "gamepad.h"
 #include <linux/input.h>
 #include "lodepng.h"
 #include <stdio.h>
@@ -247,6 +248,118 @@ static void keyboard_tests(void)
     printf("teclado: %d falha(s)\n", kb_fail);
 }
 
+/* ---------------------------------------------- controle de jogo (core/gamepad.c) */
+static void pev(int slot, uint16_t type, uint16_t code, int32_t v) { gamepad_event(slot, type, code, v); pump(20); }
+static void pbtn(int slot, uint16_t code) { pev(slot, EV_KEY, code, 1); pev(slot, EV_KEY, code, 0); pump(30); }
+
+static int pad_clicks;
+static void pad_click(lv_event_t *e) { (void)e; pad_clicks++; }
+
+static void gamepad_tests(void)
+{
+    /* DualShock 4 sem driver (hid-generic): □=0x130 ✕=0x131 ○=0x132 △=0x133 ... PS=0x13c,
+     * analógicos 0..255, direcional no HAT */
+    gp_axis_t ax[GPA__N];
+    for(int i = 0; i < GPA__N; i++) ax[i] = (gp_axis_t){ 0, 255, 0, true };
+    ax[GPA_HX] = ax[GPA_HY] = (gp_axis_t){ -1, 1, 0, true };
+    int ds4 = gamepad_attach(true, ax, "");
+    kcheck("controle: conectado", ds4 >= 0 && gamepad_count() == 1);
+    for(int a = ABS_X; a <= ABS_RZ; a++) pev(ds4, EV_ABS, (uint16_t)a, 128);
+
+    go(SCR_SETTINGS, 0);
+    int32_t x0, y0, x1, y1;
+    kcheck("controle: cursor escondido no início", !gamepad_cursor(&x0, &y0));
+    pbtn(ds4, 0x131);                                  /* ✕ com o cursor escondido: só mostra */
+    kcheck("controle: ✕ mostra o cursor", gamepad_cursor(&x0, &y0));
+
+    /* ✕ toca onde o cursor está */
+    lv_obj_t *b = lv_button_create(lv_layer_top());
+    lv_obj_set_size(b, 120, 80);
+    lv_obj_set_pos(b, x0 - 60, y0 - 40);
+    lv_obj_add_event_cb(b, pad_click, LV_EVENT_CLICKED, NULL);
+    pump(50);
+    pbtn(ds4, 0x131);
+    kcheck("controle: ✕ toca", pad_clicks == 1);
+    lv_obj_delete(b);
+
+    /* analógico esquerdo para a direita e para baixo: o cursor anda */
+    pev(ds4, EV_ABS, ABS_X, 255);
+    pev(ds4, EV_ABS, ABS_Y, 255);
+    pump(200);
+    pev(ds4, EV_ABS, ABS_X, 128);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    gamepad_cursor(&x1, &y1);
+    kcheck("controle: analógico move o cursor", x1 > x0 + 100 && y1 > y0 + 60);
+    shot("23f-controle-cursor");
+
+    /* ✕ segurado + analógico para cima: arrasta (rola a lista de Ajustes); antes volta o
+     * cursor para o meio da lista (a corrida acima o deixou na borda de baixo) */
+    pev(ds4, EV_ABS, ABS_Y, 0);
+    pump(250);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    lv_obj_t *pg = lv_obj_get_child(app_content(), 0);
+    int32_t s0 = pg ? lv_obj_get_scroll_y(pg) : 0;
+    pev(ds4, EV_KEY, 0x131, 1);
+    pev(ds4, EV_ABS, ABS_Y, 0);
+    pump(350);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    pev(ds4, EV_KEY, 0x131, 0);
+    pump(300);
+    kcheck("controle: ✕ segurado arrasta", pg && lv_obj_get_scroll_y(pg) > s0 + 40);
+
+    /* direcional para baixo (HAT): rola */
+    go(SCR_SETTINGS, 0);
+    pg = lv_obj_get_child(app_content(), 0);
+    pev(ds4, EV_ABS, ABS_HAT0Y, 1);
+    pev(ds4, EV_ABS, ABS_HAT0Y, 0);
+    pump(400);
+    kcheck("controle: direcional rola", pg && lv_obj_get_scroll_y(pg) > 0);
+
+    /* ○ volta, PS vai para o início */
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    shot("23g-teclado-controle");
+    pbtn(ds4, 0x132);
+    pump(300);
+    kcheck("controle: ○ volta", nav_current().scr == SCR_SETTINGS);
+    pbtn(ds4, 0x13c);
+    pump(300);
+    kcheck("controle: PS vai para o início", nav_current().scr == SCR_HOME);
+
+    /* direcional → / ←: as páginas de Apps */
+    go(SCR_HOME, HOME_ARG_APPS); pump(200);
+    lv_obj_t *tv = find_class(lv_screen_active(), &lv_tileview_class);
+    pev(ds4, EV_ABS, ABS_HAT0X, 1);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pump(600);
+    lv_obj_t *t1 = tv ? lv_tileview_get_tile_active(tv) : NULL;
+    kcheck("controle: direcional → passa a página de Apps", t1 && lv_obj_get_x(t1) == lv_obj_get_width(tv));
+    pev(ds4, EV_ABS, ABS_HAT0X, -1);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pump(600);
+    t1 = tv ? lv_tileview_get_tile_active(tv) : NULL;
+    kcheck("controle: direcional ← volta a página", t1 && lv_obj_get_x(t1) == 0);
+
+    /* △ = Enter num diálogo */
+    static const char *b2[] = { "Não", "Sim" };
+    dlg_answer = -9;
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    pbtn(ds4, 0x133);
+    kcheck("controle: △ confirma o diálogo", dlg_answer == 1 && !dialog_is_open());
+
+    /* controle com o mapa padrão (hid-playstation, xpad...): BTN_EAST (0x131) volta */
+    int std = gamepad_attach(false, ax, "");
+    go(SCR_SETTINGS, 0);
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    pbtn(std, BTN_EAST);
+    pump(300);
+    kcheck("controle padrão: B volta", nav_current().scr == SCR_SETTINGS && gamepad_count() == 2);
+    gamepad_detach(std);
+    gamepad_detach(ds4);
+    pump(50);
+    kcheck("controle: cursor some ao desconectar", !gamepad_cursor(NULL, NULL) && gamepad_count() == 0);
+    printf("controle: %d falha(s) no total com o teclado\n", kb_fail);
+}
+
 int screenshot_run(const char *dir)
 {
     outdir = dir;
@@ -361,6 +474,7 @@ int screenshot_run(const char *dir)
     fm_off(); pump(100);
     unsetenv("BIGFOSTON_FM_STATUS");
     keyboard_tests();
+    gamepad_tests();
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");

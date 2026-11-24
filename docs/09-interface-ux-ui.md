@@ -349,7 +349,7 @@ teclas de letra: o teclado Bluetooth dorme e reconecta com outro número. Os bot
 energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também declaram
 `KEY_POWER`), e a tecla Power do teclado não desliga nada.
 
-- **Layout** (Ajustes > Teclado físico): automático (ABNT2 em português, EUA nos outros
+- **Layout** (Ajustes > Teclado e controle): automático (ABNT2 em português, EUA nos outros
   idiomas), ABNT2, EUA ou EUA internacional. Acentos por tecla morta (ABNT2: ´ ` ~ ^ ¨;
   internacional: ' " ` ~ ^, com 'c = ç), AltGr, Caps Lock (também no Ç) e o teclado
   numérico (sem Num Lock, navegação). Tradução em `core/kbdmap.c`, testada em
@@ -363,10 +363,50 @@ energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também
   pesquisa); senão Esc ou Alt+Esquerda voltam e as setas/Page Up/Page Down/Home/End rolam
   a página. Volume, mudo e Play/Pause funcionam em qualquer lugar.
 - A primeira tecla com a tela apagada ou escurecida só acende a tela.
-- O modo performance não pausa o Bluetooth enquanto há um teclado Bluetooth conectado.
+- O modo performance não pausa o Bluetooth enquanto há um teclado ou controle Bluetooth
+  conectado.
 - Teste sem teclado: `echo "key 30 1" > /run/bigfoston/ctl` (código `KEY_*`, 1 apertou,
   0 soltou) e as capturas 23b–23e do `--screenshot`, que conferem campo, Esc, rolagem,
   diálogos, Run, Terminal e Internet.
+
+## Controle de jogo
+
+Controles Bluetooth ou USB (`src/ui/core/gamepad.c`) usam a interface inteira, sem foco de
+teclado: o analógico esquerdo move um **cursor** (um segundo indev de ponteiro do LVGL, em
+modo de evento, desenhado na `lv_layer_sys`) e o Xis/A toca onde ele está, como o dedo
+(segurar e mover arrasta: rola listas, passa páginas). O cursor aparece ao mover o
+analógico ou no primeiro Xis (que então não toca) e some depois de 8 s parado. Os outros
+botões viram teclas entregues como as do teclado físico:
+
+| Botão | Faz |
+|---|---|
+| Bola / B | voltar (Esc: fecha o teclado da tela, o diálogo, sai do campo) |
+| Triângulo / Y | Enter (botão principal do diálogo, OK do teclado da tela) |
+| Quadrado / X | espaço |
+| Direcional | setas (rola; ← → passam as páginas de Apps); segurado repete |
+| Analógico direito | rola, mais rápido quanto mais inclinado |
+| L1 / R1 | Page Up / Page Down |
+| L2 / R2 | volume − / + |
+| PS / Home | início |
+| Options / Start | tocar / pausar a música |
+
+- **Quem é controle**: `EV_ABS` com X/Y e botões `BTN_GAMEPAD` ou `BTN_JOYSTICK`, sem
+  `BTN_TOUCH` (o touchpad do DualShock com o driver da Sony fica de fora). O shell liga o
+  `fuzz` dos analógicos (1/64 da faixa) pelo `EVIOCSABS`: parado, o controle não manda
+  nenhum evento (medido: 0 em 5 s) e a interface não acorda.
+- **DualShock 4 / DualSense sem driver**: o kernel não tem o `hid-playstation` (o
+  `zImage` + initrd já estão no limite da `\ResidentFlash`), então o `hid-generic`
+  entrega os botões na ordem do relatório HID (□ ✕ ○ △ L1 R1 L2 R2 Share Options L3 R3 PS
+  em `BTN_A`…`BTN_THUMBR`) e o analógico direito em Z/RZ. Fabricante 054c com `BTN_C` e
+  `BTN_Z` declarados = esse mapa; o shell converte para o padrão do Linux (o mesmo do
+  `hid-playstation` e do `xpad`). Sem o driver não há luz, vibração nem nível de bateria.
+- **Bateria**: o controle do PlayStation nunca desliga sozinho fora do console. Parado
+  10 min, o shell pede `disconnect` ao `bfbt-agent` (endereço pelo `EVIOCGUNIQ`, que o BlueZ
+  preenche) e o controle desliga; o botão PS o liga e ele reconecta sozinho.
+- A primeira ação com a tela apagada ou escurecida só acende a tela.
+- Teste: capturas 23f–23g do `--screenshot` (cursor, toque, arrasto, direcional, Bola, PS,
+  Triângulo no diálogo, mapa do DualShock sem driver e mapa padrão). No aparelho, um
+  controle virtual pelo `uinput` com os mesmos botões e eixos do DualShock sem driver.
 
 ## Internacionalização
 

@@ -1,8 +1,10 @@
-/* hwkbd.h — teclados físicos (Bluetooth ou USB) em qualquer tela.
+/* hwkbd.h — teclados físicos e controles de jogo (Bluetooth ou USB) em qualquer tela.
  *
- * Lê os /dev/input/event* que têm teclas de letra (aparecem e somem a qualquer hora: o
- * teclado Bluetooth dorme e reconecta), traduz cada tecla pelo layout de Ajustes > Teclado
- * físico (ABNT2, EUA ou EUA internacional, com acentos por tecla morta) e entrega:
+ * Lê os /dev/input/event* que têm teclas de letra ou são controles de jogo (aparecem e somem a
+ * qualquer hora: o teclado Bluetooth dorme e reconecta). Os controles vão para o
+ * core/gamepad.c, que os transforma em cursor e teclas. Traduz cada tecla pelo layout de
+ * Ajustes > Teclado e controle (ABNT2, EUA ou EUA internacional, com acentos por tecla
+ * morta) e entrega:
  *   1. ao campo de texto ativo: o do teclado da tela aberto ou o campo tocado por último
  *      (Enter = o OK do teclado da tela, Esc = fechar o teclado);
  *   2. Enter/Esc a um diálogo aberto (botão principal / fechar);
@@ -40,6 +42,9 @@ void hwkbd_poll_done(const struct pollfd *pf, int n);
 
 /* a tela atual quer as teclas que não foram para um campo de texto (NULL ao sair) */
 void hwkbd_set_handler(hwkbd_handler_t h);
+/* uso da interface por teclado ou controle: true = a tela estava apagada ou escurecida e só
+ * acendeu (o evento não vale) */
+bool hwkbd_activity(void);
 /* entrega uma tecla já traduzida */
 void hwkbd_dispatch(const hwkey_t *k);
 /* um evento cru (KEY_*, 1 apertou / 2 repetiu / 0 soltou), como do evdev: testes e o FIFO de
@@ -51,6 +56,7 @@ const char *hwkbd_key_name(uint16_t code);
 int  hwkbd_count(void);                 /* teclados conectados agora */
 const char *hwkbd_name(int i);
 bool hwkbd_is_bt(int i);
+bool hwkbd_is_pad(int i);               /* controle de jogo (core/gamepad.c) */
 bool hwkbd_bt_connected(void);          /* algum pelo Bluetooth (o modo performance o mantém) */
 int  hwkbd_layout(void);                /* o efetivo: BF_KBD_ABNT2, _US ou _US_INTL */
 #endif

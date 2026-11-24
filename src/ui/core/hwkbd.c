@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "hwkbd.h"
 #include "kbdmap.h"
+#include "gamepad.h"
 #include "settings.h"
 #include "nav.h"
 #include "fx.h"
@@ -225,15 +226,46 @@ static lv_obj_t *find_scroll(lv_obj_t *o, int depth)
     return NULL;
 }
 
+/* telas com páginas lado a lado (Apps): o tileview à vista */
+static lv_obj_t *find_tileview(lv_obj_t *o, int depth)
+{
+    if(!o || depth > 6 || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    if(lv_obj_check_type(o, &lv_tileview_class)) return o;
+    uint32_t n = lv_obj_get_child_count(o);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_obj_t *r = find_tileview(lv_obj_get_child(o, (int32_t)i), depth + 1);
+        if(r) return r;
+    }
+    return NULL;
+}
+
+/* ← / →: a página ao lado (true = havia páginas) */
+static bool page_side(int dir)
+{
+    lv_obj_t *tv = find_tileview(lv_screen_active(), 0);
+    lv_obj_t *t = tv ? lv_tileview_get_tile_active(tv) : NULL;
+    int32_t w = tv ? lv_obj_get_width(tv) : 0;
+    if(!t || w <= 0) return false;
+    int32_t col = (lv_obj_get_x(t) + w / 2) / w + dir, n = 0;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(tv); i++)
+        if(lv_obj_get_y(lv_obj_get_child(tv, (int32_t)i)) == 0) n++;
+    if(col >= 0 && col < n) lv_tileview_set_tile_by_index(tv, (uint32_t)col, 0, LV_ANIM_ON);
+    return true;
+}
+
 static bool global_key(const hwkey_t *k)
 {
     switch(k->code) {
     case KEY_ESC:
         if(!k->repeat) nav_back();
         return true;
-    case KEY_LEFT:
-        if((k->mods & HK_ALT) && !k->repeat) { nav_back(); return true; }
-        return false;
+    case KEY_LEFT: case KEY_RIGHT:
+        if(k->code == KEY_LEFT && (k->mods & HK_ALT)) {
+            if(!k->repeat) nav_back();
+            return true;
+        }
+        if(k->mods) return false;
+        return k->repeat ? find_tileview(lv_screen_active(), 0) != NULL : page_side(k->code == KEY_LEFT ? -1 : 1);
     case KEY_HOMEPAGE:
         if(!k->repeat) nav_home();
         return true;
@@ -269,12 +301,20 @@ static bool media_key(const hwkey_t *k)
     }
 }
 
+bool hwkbd_activity(void)
+{
+    lv_display_trigger_activity(NULL);
+    if(powerkey_sleeping()) { powerkey_wake(); return true; }
+    return fx_undim();                                /* a primeira tecla só acende a tela */
+}
+
 void hwkbd_dispatch(const hwkey_t *k)
 {
     if(!k->code) return;
-    lv_display_trigger_activity(NULL);
-    if(powerkey_sleeping()) { if(!k->repeat) powerkey_wake(); return; }
-    if(fx_undim()) return;                            /* a primeira tecla só acende a tela */
+    if(k->repeat) {                                   /* segurada com a tela apagada: não acorda */
+        lv_display_trigger_activity(NULL);
+        if(powerkey_sleeping() || fx_undim()) return;
+    } else if(hwkbd_activity()) return;
     if(media_key(k)) return;
     lv_obj_t *kb, *ta = target(&kb);
     if(ta && type_into(ta, kb, k)) return;
@@ -286,7 +326,8 @@ void hwkbd_dispatch(const hwkey_t *k)
 
 /* ============================================================ dispositivos */
 
-typedef struct { int fd; char path[24]; char name[64]; bool bt; } kdev_t;
+/* pad: número do controle de jogo (core/gamepad.c) ou -1 (teclado) */
+typedef struct { int fd; char path[24]; char name[64]; bool bt; int pad; } kdev_t;
 static kdev_t devs[HWKBD_MAX];
 static int ndev;
 #if HAVE_EVDEV
@@ -299,6 +340,7 @@ enum { MOD_LSHIFT = 1, MOD_RSHIFT = 2, MOD_LCTRL = 4, MOD_RCTRL = 8, MOD_LALT = 
 int hwkbd_count(void) { return ndev; }
 const char *hwkbd_name(int i) { return i >= 0 && i < ndev ? devs[i].name : ""; }
 bool hwkbd_is_bt(int i) { return i >= 0 && i < ndev && devs[i].bt; }
+bool hwkbd_is_pad(int i) { return i >= 0 && i < ndev && devs[i].pad >= 0; }
 bool hwkbd_bt_connected(void)
 {
     for(int i = 0; i < ndev; i++) if(devs[i].bt) return true;
@@ -369,26 +411,77 @@ void hwkbd_feed(uint16_t code, int value)
 #define BITS(n) (((n) + 8 * sizeof(long) - 1) / (8 * sizeof(long)))
 #define TEST(b, a) (((a)[(b) / (8 * sizeof(long))] >> ((b) % (8 * sizeof(long)))) & 1)
 
-static bool is_keyboard(int fd)
+enum { DEV_NONE, DEV_KBD, DEV_PAD };
+
+/* teclado: letras, espaço e Enter. Controle de jogo: analógico (X/Y) e botões de gamepad ou
+ * joystick. Nenhum dos dois com BTN_TOUCH (touchscreen, touchpad do controle) */
+static int classify(int fd, bool *sony_generic)
 {
-    unsigned long ev[BITS(EV_MAX + 1)] = { 0 }, keys[BITS(KEY_MAX + 1)] = { 0 };
-    if(ioctl(fd, EVIOCGBIT(0, sizeof ev), ev) < 0 || !TEST(EV_KEY, ev)) return false;
-    if(ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0) return false;
-    return TEST(KEY_A, keys) && TEST(KEY_Z, keys) && TEST(KEY_SPACE, keys) && TEST(KEY_ENTER, keys) &&
-           !TEST(BTN_TOUCH, keys);
+    unsigned long ev[BITS(EV_MAX + 1)] = { 0 }, keys[BITS(KEY_MAX + 1)] = { 0 }, abs[BITS(ABS_MAX + 1)] = { 0 };
+    *sony_generic = false;
+    if(ioctl(fd, EVIOCGBIT(0, sizeof ev), ev) < 0 || !TEST(EV_KEY, ev)) return DEV_NONE;
+    if(ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0 || TEST(BTN_TOUCH, keys)) return DEV_NONE;
+    if(TEST(KEY_A, keys) && TEST(KEY_Z, keys) && TEST(KEY_SPACE, keys) && TEST(KEY_ENTER, keys)) return DEV_KBD;
+    if(!TEST(EV_ABS, ev) || ioctl(fd, EVIOCGBIT(EV_ABS, sizeof abs), abs) < 0) return DEV_NONE;
+    if(!TEST(ABS_X, abs) || !TEST(ABS_Y, abs) || !(TEST(BTN_GAMEPAD, keys) || TEST(BTN_JOYSTICK, keys)))
+        return DEV_NONE;
+    /* PlayStation sem o hid-playstation: BTN_C e BTN_Z existem (o driver não os usa) */
+    struct input_id id = { 0 };
+    ioctl(fd, EVIOCGID, &id);
+    *sony_generic = id.vendor == 0x054c && TEST(BTN_C, keys) && TEST(BTN_Z, keys);
+    return DEV_PAD;
+}
+
+/* faixas dos eixos; nos analógicos o kernel passa a filtrar o tremor (fuzz): o analógico
+ * parado não acorda a interface (DS4 parado com o fuzz: 0 eventos em 5 s) */
+static void pad_axes(int fd, gp_axis_t ax[GPA__N])
+{
+    static const uint16_t code[GPA__N] = { ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ, ABS_HAT0X, ABS_HAT0Y };
+    for(int i = 0; i < GPA__N; i++) {
+        struct input_absinfo a;
+        ax[i] = (gp_axis_t){ 0 };
+        if(ioctl(fd, EVIOCGABS(code[i]), &a) < 0) continue;
+        ax[i] = (gp_axis_t){ a.minimum, a.maximum, a.flat, a.maximum > a.minimum };
+        if(i < GPA_HX && a.fuzz == 0 && a.maximum - a.minimum >= 64) {
+            a.fuzz = (a.maximum - a.minimum) / 64;
+            ioctl(fd, EVIOCSABS(code[i]), &a);
+        }
+    }
+}
+
+/* endereço Bluetooth do aparelho (o BlueZ põe no "uniq"), em maiúsculas; "" se não houver */
+static void pad_addr(int fd, char out[18])
+{
+    char u[64] = "";
+    out[0] = 0;
+    if(ioctl(fd, EVIOCGUNIQ(sizeof u - 1), u) < 0) return;
+    u[sizeof u - 1] = 0;
+    for(int i = 0; i < 17; i++) {
+        char c = u[i];
+        if(c >= 'a' && c <= 'f') c = (char)(c - 32);
+        bool ok = i % 3 == 2 ? c == ':' : ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'));
+        if(!ok) { out[0] = 0; return; }
+        out[i] = c;
+    }
+    out[17] = 0;
+    if(u[17]) out[0] = 0;
 }
 
 static void drop(int i, bool announce)
 {
     char name[64];
     snprintf(name, sizeof name, "%s", devs[i].name);
+    bool pad = devs[i].pad >= 0;
     close(devs[i].fd);
-    fprintf(stderr, "bigfoston: teclado desconectado: %s\n", name);
+    if(pad) gamepad_detach(devs[i].pad);
+    fprintf(stderr, "bigfoston: %s desconectado: %s\n", pad ? "controle" : "teclado", name);
     devs[i] = devs[--ndev];
-    held = 0;                                         /* nada fica "apertado" */
-    kst.dead = 0;
+    if(!pad) {
+        held = 0;                                     /* nada fica "apertado" */
+        kst.dead = 0;
+    }
     if(announce && settings()->notify)
-        osd_show(&bf_icon_bluetooth, 0x8a93a5, tr(S_KBD_OUT), name);
+        osd_show(&bf_icon_bluetooth, 0x8a93a5, tr(pad ? S_PAD_OUT : S_KBD_OUT), name);
 }
 
 static void scan(bool announce)
@@ -411,21 +504,34 @@ static void scan(bool announce)
         int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
         if(fd < 0) fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
         if(fd < 0) continue;
-        if(!is_keyboard(fd)) { close(fd); continue; }
+        bool sony = false;
+        int kind = classify(fd, &sony);
+        int pad = -1;
+        if(kind == DEV_PAD) {
+            gp_axis_t ax[GPA__N];
+            char addr[18];
+            pad_axes(fd, ax);
+            pad_addr(fd, addr);
+            pad = gamepad_attach(sony, ax, addr);
+            if(pad < 0) kind = DEV_NONE;
+        }
+        if(kind == DEV_NONE) { close(fd); continue; }
         kdev_t *k = &devs[ndev++];
         k->fd = fd;
+        k->pad = pad;
         snprintf(k->path, sizeof k->path, "%s", path);
         k->name[0] = 0;
         if(ioctl(fd, EVIOCGNAME(sizeof k->name - 1), k->name) < 0 || !k->name[0])
-            snprintf(k->name, sizeof k->name, "%s", tr(S_KBD_GENERIC));
+            snprintf(k->name, sizeof k->name, "%s", tr(pad >= 0 ? S_PAD_GENERIC : S_KBD_GENERIC));
         k->name[sizeof k->name - 1] = 0;
         struct input_id id = { 0 };
         ioctl(fd, EVIOCGID, &id);
         k->bt = id.bustype == BUS_BLUETOOTH;
-        set_leds(fd);
-        fprintf(stderr, "bigfoston: teclado em %s: %s (%s)\n", path, k->name, k->bt ? "Bluetooth" : "USB/outro");
+        if(pad < 0) set_leds(fd);
+        fprintf(stderr, "bigfoston: %s em %s: %s (%s%s)\n", pad >= 0 ? "controle" : "teclado", path, k->name,
+                k->bt ? "Bluetooth" : "USB/outro", sony ? ", PlayStation sem driver" : "");
         if(announce && settings()->notify)
-            osd_show(k->bt ? &bf_icon_bluetooth : &bf_icon_usb, 0x3584e4, tr(S_KBD_IN), k->name);
+            osd_show(k->bt ? &bf_icon_bluetooth : &bf_icon_usb, 0x3584e4, tr(pad >= 0 ? S_PAD_IN : S_KBD_IN), k->name);
     }
     closedir(d);
 }
@@ -437,9 +543,13 @@ static void dev_read(int i)
         ssize_t n = read(devs[i].fd, ev, sizeof ev);
         if(n < 0 && (errno == EAGAIN || errno == EINTR)) return;
         if(n <= 0) { drop(i, true); return; }        /* ENODEV: o teclado saiu */
-        int fd = devs[i].fd;
+        int fd = devs[i].fd, pad = devs[i].pad;
         for(size_t j = 0; j < (size_t)n / sizeof ev[0]; j++)
-            if(ev[j].type == EV_KEY) {
+            if(pad >= 0) {
+                if(ev[j].type == EV_KEY || ev[j].type == EV_ABS) gamepad_event(pad, ev[j].type, ev[j].code, ev[j].value);
+                if(i >= ndev || devs[i].fd != fd) return;
+            }
+            else if(ev[j].type == EV_KEY) {
                 hwkbd_feed(ev[j].code, ev[j].value);
                 /* a tecla pode ter mudado a lista (não muda: drop só aqui e no scan) */
                 if(i >= ndev || devs[i].fd != fd) return;

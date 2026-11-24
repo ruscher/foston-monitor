@@ -1,6 +1,6 @@
-/* scr_keyboard.c — Ajustes > Teclado físico: teclados conectados agora, layout (ABNT2, EUA,
- * EUA internacional ou automático pelo idioma), um campo para testar e os atalhos
- * (core/hwkbd.c).
+/* scr_keyboard.c — Ajustes > Teclado e controle: teclados e controles conectados agora, layout
+ * (ABNT2, EUA, EUA internacional ou automático pelo idioma), um campo para testar, os atalhos
+ * (core/hwkbd.c) e os botões do controle de jogo (core/gamepad.c).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -8,6 +8,7 @@
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../core/hwkbd.h"
+#include "../core/gamepad.h"
 #include "../widgets/page.h"
 #include <stdio.h>
 #include <string.h>
@@ -26,8 +27,9 @@ static void list_update(lv_timer_t *t)
     char b[300] = "";
     size_t n = 0;
     for(int i = 0; i < hwkbd_count() && n < sizeof b - 80; i++)
-        n += (size_t)snprintf(b + n, sizeof b - n, "%s%s  %s", i ? "\n" : "",
-                              hwkbd_is_bt(i) ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_USB, hwkbd_name(i));
+        n += (size_t)snprintf(b + n, sizeof b - n, "%s%s  %s%s%s", i ? "\n" : "",
+                              hwkbd_is_bt(i) ? LV_SYMBOL_BLUETOOTH : LV_SYMBOL_USB, hwkbd_name(i),
+                              hwkbd_is_pad(i) ? " · " : "", hwkbd_is_pad(i) ? tr(S_PAD_GENERIC) : "");
     if(!b[0]) snprintf(b, sizeof b, "%s", tr(S_KBD_NONE));
     if(!strcmp(b, list_now)) return;
     snprintf(list_now, sizeof list_now, "%s", b);
@@ -108,7 +110,10 @@ static void build(lv_obj_t *parent)
     lv_obj_set_style_border_color(test_ta, p->accent, LV_STATE_FOCUSED);
     lv_obj_set_scrollbar_mode(test_ta, LV_SCROLLBAR_MODE_OFF);
     lv_textarea_set_text(test_ta, test_text);
-    lv_obj_add_state(test_ta, LV_STATE_FOCUSED);     /* já pronto para digitar */
+    /* já pronto para digitar; só com o controle, não: o direcional e o Bola iriam para o campo */
+    bool kbd = !gamepad_count();
+    for(int i = 0; i < hwkbd_count(); i++) if(!hwkbd_is_pad(i)) kbd = true;
+    if(kbd) lv_obj_add_state(test_ta, LV_STATE_FOCUSED);
 
     section(pg, S_KBD_SEC_LAYOUT);
     lv_obj_t *row = bf_card(pg);
@@ -135,6 +140,14 @@ static void build(lv_obj_t *parent)
     lv_obj_set_width(k, LV_PCT(100));
     lv_label_set_long_mode(k, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_line_space(k, 6, 0);
+
+    section(pg, S_PAD_SEC);
+    lv_obj_t *pads = bf_card(pg);
+    lv_obj_set_size(pads, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_t *pk = bf_label(pads, tr(S_PAD_KEYS), BF_FONT_S, p->text);
+    lv_obj_set_width(pk, LV_PCT(100));
+    lv_label_set_long_mode(pk, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_line_space(pk, 6, 0);
 }
 
 static void create(lv_obj_t *parent, int arg)
