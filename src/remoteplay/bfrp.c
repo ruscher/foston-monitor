@@ -402,6 +402,7 @@ static void serve(int c)
             int r;
             while((r = proto_take(&rx, &type, &d, &l, &used)) == 1) {
                 if(type == 'Q') relay_ack();
+                else if(type == 'R') relay_key();                 /* o FOSTON perdeu a base */
                 else if(type == 'K' && l < 500) {
                     char cmd[512];
                     memcpy(cmd, d, l);

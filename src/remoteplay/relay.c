@@ -61,7 +61,7 @@ static int zoom_pct = 100;
 static double cen_x = -1, cen_y = -1;
 static atomic_int show = 1;
 
-void relay_set_target(int w) { if(w >= 160 && w <= 800) target_w = w & ~3; }
+void relay_set_target(int w) { if(w >= 160 && w <= 800) target_w = w & ~7; }   /* múltiplo de 8: a cor em palavras de 32 bits */
 
 int video_open(int x, int y, int w, int h)
 {
@@ -77,17 +77,22 @@ void video_loop_filter(int on) { (void)on; }
 void video_smooth(int on) { (void)on; }
 void video_clip(int rows) { (void)rows; }
 
+/* Faixa preta: quase toda escura. Tolera uns pontos claros (menos de 1 em 32 amostras): um
+ * contador de FPS ou um ícone no canto da faixa (monitor ultrawide com o jogo em 16:9 no meio)
+ * não pode fazer a faixa inteira aparecer e o lado oposto do jogo ser cortado. */
 static bool black_row(const AVFrame *f, int y)
 {
     const uint8_t *r = f->data[0] + y * f->linesize[0];
-    for(int x = 0; x < f->width; x += 4) if(r[x] > 24) return false;
-    return true;
+    int bright = 0, n = 0;
+    for(int x = 0; x < f->width; x += 4, n++) bright += r[x] > 24;
+    return bright * 32 < n;
 }
 
 static bool black_col(const AVFrame *f, int x, int y0, int y1)
 {
-    for(int y = y0; y < y1; y += 4) if(f->data[0][y * f->linesize[0] + x] > 24) return false;
-    return true;
+    int bright = 0, n = 0;
+    for(int y = y0; y < y1; y += 4, n++) bright += f->data[0][y * f->linesize[0] + x] > 24;
+    return bright * 32 < n;
 }
 
 static void autocrop(const AVFrame *f)
@@ -95,9 +100,10 @@ static void autocrop(const AVFrame *f)
     int w = f->width, h = f->height, t = 0, b = h - 1, l = 0, r = w - 1;
     while(t < h / 4 && black_row(f, t)) t++;
     while(b > h * 3 / 4 && black_row(f, b)) b--;
+    if(t >= h / 4 && b <= h * 3 / 4) return;            /* quadro (quase) todo preto: fica o corte de antes */
     while(l < w / 4 && black_col(f, l, t, b)) l++;
     while(r > w * 3 / 4 && black_col(f, r, t, b)) r--;
-    if(t >= h / 4 && b <= h * 3 / 4) { t = 0; b = h - 1; }
+    if(l >= w / 4 && r <= w * 3 / 4) return;
     pthread_mutex_lock(&vp_mx);
     ct_x = l & ~1; ct_y = t & ~1; ct_w = (r - ct_x + 1) & ~1; ct_h = (b - ct_y + 1) & ~1;
     pthread_mutex_unlock(&vp_mx);
@@ -168,81 +174,152 @@ static int sws_sw, sws_sh, sws_dw, sws_dh;
 /* quadro pronto para o FOSTON (o mais novo) e a thread que manda */
 static pthread_mutex_t q_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cv = PTHREAD_COND_INITIALIZER;
-static uint8_t *q_yuv, *z_buf;
-static size_t q_cap, z_cap;
+static uint8_t *q_yuv;
+static size_t q_cap;
 static int q_w, q_h;
-static bool q_ready, waiting_ack, tx_run;
+static bool q_ready, tx_run;
+/* quadros a caminho sem confirmação: com 2, o PC prepara e manda o próximo enquanto o FOSTON
+ * desenha o atual (com 1, cada lado esperava o outro) */
+#define IN_FLIGHT 2
+static int in_flight;
 static pthread_t tx_th;
 static atomic_ulong n_dec, n_sent, n_acked, n_err;
 static atomic_ullong bytes_sent;
 
+static atomic_int want_key;
+void relay_key(void) { atomic_store(&want_key, 1); }
+
 void relay_ack(void)
 {
     pthread_mutex_lock(&q_mx);
-    waiting_ack = false;
+    if(in_flight > 0) in_flight--;
     atomic_fetch_add(&n_acked, 1);
     pthread_cond_signal(&q_cv);
     pthread_mutex_unlock(&q_mx);
 }
 
-/* Menos bytes pelo USB (no FOSTON o controlador USB custa ~40 % da CPU a 1,3 MB/s, medido):
+/* Menos bytes pelo USB (no FOSTON o controlador USB custa ~40 % da CPU a 1,3 MB/s, medido) e
+ * menos trabalho no FOSTON (ARM11 a 468 MHz):
  *  - quantização: brilho com 6 bits e cor com 5 (a tela RGB565 não mostra mais que isso) deixa
- *    as áreas lisas repetidas;
- *  - delta: o quadro vai em XOR com o anterior (o que não mudou vira zero); um quadro inteiro a
- *    cada 60 ou quando o tamanho muda;
+ *    as áreas lisas repetidas; com histerese contra o quadro anterior (uma variação menor que
+ *    um degrau fica como estava: o ruído do vídeo não "muda" a linha);
+ *  - delta por pares de linhas: um par (2 linhas de brilho + a linha de U e a de V que elas
+ *    usam) só vai se mudou, em XOR com o anterior; o FOSTON aplica e redesenha só esses pares;
+ *  - quadro inteiro a cada 60, quando o tamanho muda, quando o FOSTON pede (R) ou quando quase
+ *    tudo mudou (sai menor e o FOSTON não precisa aplicar o XOR);
  *  - LZ4 HC: comprime mais no PC, descomprime igual no FOSTON.
- * Cabeçalho: l a (u16) + 1 byte (bit 0: delta). */
+ * Cabeçalho: l a (u16) + flags (bit 0 delta, bit 1 soma) [+ soma u32] [+ máscara dos pares,
+ * 1 bit por par, se delta] + LZ4. */
+static uint8_t *z_tmp;
+static size_t z_tmp_cap;
+
+static int compress_into(const uint8_t *src, size_t n, uint8_t **out, size_t *cap)
+{
+    size_t zmax = (size_t)LZ4_compressBound((int)n);
+    if(zmax > *cap) { free(*out); *out = malloc(zmax); *cap = *out ? zmax : 0; }
+    if(!*out) return -1;
+    return LZ4_compress_HC((const char *)src, (char *)*out, (int)n, (int)zmax, 4);
+}
+
 static void *tx_thread(void *a)
 {
     (void)a;
-    static uint8_t *local, *prev;
-    static size_t local_cap, prev_n;
+    static uint8_t *local, *prev, *x, *zk, *zd;
+    static size_t local_cap, prev_cap, x_cap, zk_cap, zd_cap;
     static int prev_w, prev_h, since_key;
+    static bool have_prev;
+    static unsigned long nfr;
     pthread_mutex_lock(&q_mx);
     while(tx_run) {
-        if(!q_ready || waiting_ack) { pthread_cond_wait(&q_cv, &q_mx); continue; }
+        if(!q_ready || in_flight >= IN_FLIGHT) { pthread_cond_wait(&q_cv, &q_mx); continue; }
         int w = q_w, h = q_h;
         size_t n = yuv_size(w, h);
         if(n > local_cap) { free(local); local = malloc(n); local_cap = local ? n : 0; }
-        if(!local) { q_ready = false; continue; }
+        if(n > prev_cap) { free(prev); prev = malloc(n); prev_cap = prev ? n : 0; have_prev = false; }
+        if(n > x_cap) { free(x); x = malloc(n); x_cap = x ? n : 0; }
+        if(!local || !prev || !x) { q_ready = false; continue; }
         memcpy(local, q_yuv, n);
         q_ready = false;
-        waiting_ack = true;
+        in_flight++;
         pthread_mutex_unlock(&q_mx);
+
+        bool delta = have_prev && prev_w == w && prev_h == h && (h + 1) / 2 <= 2048 && since_key < 60 && !atomic_exchange(&want_key, 0);
         size_t ny = (size_t)w * h;
         for(size_t i = 0; i < n; i++) {                  /* 6 bits de brilho, 5 de cor (arredondado) */
-            int v = local[i] + (i < ny ? 2 : 4);
+            bool luma = i < ny;
+            int raw = local[i];
+            if(delta) {                                  /* histerese: menos de um degrau, fica */
+                int d = raw - prev[i];
+                if(d < 0) d = -d;
+                if(d <= (luma ? 3 : 6)) { local[i] = prev[i]; continue; }
+            }
+            int v = raw + (luma ? 2 : 4);
             if(v > 255) v = 255;
-            local[i] = (uint8_t)(v & (i < ny ? 0xFC : 0xF8));
+            local[i] = (uint8_t)(v & (luma ? 0xFC : 0xF8));
         }
-        bool delta = prev && prev_w == w && prev_h == h && prev_n == n && since_key < 60;
-        if(!delta) since_key = 0;
+
+        int cw = w / 2, chh = (h + 1) / 2;
+        uint8_t mask[256];                               /* até 2048 pares */
+        size_t xn = 0;
+        int dirty = 0;
+        if(delta && chh <= 2048) {                       /* os pares que mudaram, em XOR, em sequência */
+            memset(mask, 0, (size_t)(chh + 7) / 8);
+            const uint8_t *lu = local + ny, *lv = lu + (size_t)cw * chh, *pu = prev + ny, *pv = pu + (size_t)cw * chh;
+            for(int r = 0; r < chh; r++) {
+                int y0 = 2 * r, ly = y0 + 1 < h ? 2 : 1;
+                size_t ro = (size_t)y0 * w, co = (size_t)r * cw;
+                if(!memcmp(local + ro, prev + ro, (size_t)ly * w) && !memcmp(lu + co, pu + co, (size_t)cw) &&
+                   !memcmp(lv + co, pv + co, (size_t)cw)) continue;
+                mask[r / 8] |= (uint8_t)(1 << (r % 8));
+                dirty++;
+                for(size_t i = 0; i < (size_t)ly * w; i++) x[xn++] = local[ro + i] ^ prev[ro + i];
+                for(int i = 0; i < cw; i++) x[xn++] = lu[co + i] ^ pu[co + i];
+                for(int i = 0; i < cw; i++) x[xn++] = lv[co + i] ^ pv[co + i];
+            }
+        }
+        memcpy(prev, local, n);
+        have_prev = true; prev_w = w; prev_h = h;
+
+        int ok = 0, zn = -1;
+        const uint8_t *z = NULL;
+        bool sent_delta = false;
+        if(delta && dirty == 0) zn = 0, sent_delta = true;   /* nada mudou: só o cabeçalho */
+        else if(delta) {
+            zn = compress_into(x, xn, &zd, &zd_cap);
+            z = zd;
+            sent_delta = zn > 0;
+            if(dirty * 10 > chh * 8) {                   /* quase tudo mudou: o inteiro sai melhor? */
+                int kn = compress_into(local, n, &zk, &zk_cap);
+                if(kn > 0 && (zn <= 0 || kn < zn + zn / 4)) { zn = kn; z = zk; sent_delta = false; }
+            }
+        }
+        if(!delta || (zn <= 0 && !sent_delta)) { zn = compress_into(local, n, &zk, &zk_cap); z = zk; sent_delta = false; }
+        if(!sent_delta) since_key = 0;
         since_key++;
-        if(n > prev_n || !prev) { free(prev); prev = malloc(n); }
-        static uint8_t *x;
-        static size_t x_cap;
-        if(n > x_cap) { free(x); x = malloc(n); x_cap = x ? n : 0; }
-        const uint8_t *src = local;
-        if(delta && x) {
-            for(size_t i = 0; i < n; i++) x[i] = local[i] ^ prev[i];
-            src = x;
-        }
-        if(prev) { memcpy(prev, local, n); prev_w = w; prev_h = h; prev_n = n; }
-        size_t zmax = (size_t)LZ4_compressBound((int)n) + 5;
-        if(zmax > z_cap) { free(z_buf); z_buf = malloc(zmax); z_cap = z_buf ? zmax : 0; }
-        int ok = 0;
-        if(z_buf) {
-            z_buf[0] = (uint8_t)w; z_buf[1] = (uint8_t)(w >> 8); z_buf[2] = (uint8_t)h; z_buf[3] = (uint8_t)(h >> 8);
-            z_buf[4] = delta && src == x ? 1 : 0;
-            int zn = LZ4_compress_HC((const char *)src, (char *)z_buf + 5, (int)n, (int)zmax - 5, 4);
-            if(zn > 0 && relay_send('V', z_buf, (uint32_t)zn + 5) == 0) {
-                ok = 1;
-                atomic_fetch_add(&n_sent, 1);
-                atomic_fetch_add(&bytes_sent, (unsigned long long)zn + 10);
+
+        if(zn >= 0) {
+            size_t ml = sent_delta ? (size_t)(chh + 7) / 8 : 0;
+            bool with_sum = !sent_delta || nfr++ % 30 == 0; /* conferência: inteiros e 1 a cada 30 */
+            size_t hl = 5 + (with_sum ? 4 : 0) + ml;
+            size_t total = hl + (size_t)zn;
+            if(total > z_tmp_cap) { free(z_tmp); z_tmp = malloc(total); z_tmp_cap = z_tmp ? total : 0; }
+            if(z_tmp) {
+                uint8_t *o = z_tmp;
+                o[0] = (uint8_t)w; o[1] = (uint8_t)(w >> 8); o[2] = (uint8_t)h; o[3] = (uint8_t)(h >> 8);
+                o[4] = (uint8_t)((sent_delta ? 1 : 0) | (with_sum ? 2 : 0));
+                o += 5;
+                if(with_sum) { uint32_t sum = yuv_sum(local, n); for(int i = 0; i < 4; i++) *o++ = (uint8_t)(sum >> 8 * i); }
+                if(ml) { memcpy(o, mask, ml); o += ml; }
+                if(zn) memcpy(o, z, (size_t)zn);
+                if(relay_send('V', z_tmp, (uint32_t)total) == 0) {
+                    ok = 1;
+                    atomic_fetch_add(&n_sent, 1);
+                    atomic_fetch_add(&bytes_sent, (unsigned long long)total + 5);
+                }
             }
         }
         pthread_mutex_lock(&q_mx);
-        if(!ok) { waiting_ack = false; prev_n = 0; }    /* não chegou: o próximo vai inteiro */
+        if(!ok) { if(in_flight > 0) in_flight--; have_prev = false; }   /* não chegou: o próximo vai inteiro */
     }
     pthread_mutex_unlock(&q_mx);
     return NULL;
@@ -260,7 +337,8 @@ int video_setup(int w, int h)
     pk = av_packet_alloc();
     fr = av_frame_alloc();
     pthread_mutex_lock(&q_mx);
-    q_ready = waiting_ack = false;
+    q_ready = false;
+    in_flight = 0;
     tx_run = true;
     pthread_mutex_unlock(&q_mx);
     pthread_create(&tx_th, NULL, tx_thread, NULL);
@@ -282,7 +360,7 @@ static void handoff(const AVFrame *f)
     int sx = (int)vp_x & ~1, sy = (int)vp_y & ~1, sw = (int)(vp_w + 0.5) & ~1, sh = (int)(vp_h + 0.5) & ~1;
     /* metade exata da área: o FOSTON amplia 2x pelo caminho rápido (video.c, blit2x_smooth);
      * uma largura menor pedida vale (mais leve, pelo caminho genérico) */
-    int dw = area_w / 2 & ~3, dh = area_h / 2;
+    int dw = area_w / 2 & ~7, dh = area_h / 2;
     if(target_w < dw) { dw = target_w; dh = (target_w * area_h / area_w) & ~1; }
     pthread_mutex_unlock(&vp_mx);
     if(sw < 16 || sh < 16 || dh < 16) return;

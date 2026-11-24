@@ -43,12 +43,19 @@ long lz4_block_decode(const uint8_t *src, size_t sn, uint8_t *dst, size_t dn)
             memcpy(op, m, ml);
             op += ml;
         }
-        else if(off >= 8) {                           /* sobreposto: em pedaços do tamanho do deslocamento */
-            while(ml >= off) { memcpy(op, m, off); op += off; m += off; ml -= off; }
-            while(ml--) *op++ = *m++;
+        else if(off == 1) {                           /* um byte repetido (o que não mudou no delta) */
+            memset(op, *m, ml);
+            op += ml;
         }
-        else {
-            while(ml--) *op++ = *m++;                 /* repetição curta (ex.: pixel igual) */
+        else {                                        /* sobreposto: o padrão de 'off' bytes se repete;
+                                                       * cada cópia dobra a distância (sempre múltipla de off) */
+            while(ml) {
+                size_t n = (size_t)(op - m);
+                if(n > ml) n = ml;
+                memcpy(op, m, n);
+                op += n;
+                ml -= n;
+            }
         }
     }
     return (long)(op - dst);

@@ -46,11 +46,9 @@ FF=$B/ffmpeg-tv/inst                      # FFmpeg mínimo da TV (build-tv.sh): 
 [ -f "$FF/lib/libavcodec.a" ] || { echo "falta $FF (tools/bigfoston/build-tv.sh)"; exit 1; }
 OP=$B/opus-arm/inst                       # libopus 1.6.1 em ponto fixo (som do Sunshine), ver docs/remote-play/10
 [ -f "$OP/lib/libopus.a" ] || { echo "falta $OP: configure da opus-1.6.1 com --enable-fixed-point --disable-intrinsics"; exit 1; }
-LZ=$B/dl/lz4/lz4-1.10.0/lib                # o descompressor oficial do LZ4 (BSD-2): rápido no ARM11
-[ -f "$LZ/lz4.c" ] || { echo "falta $LZ (lz4-1.10.0.tar.gz conferido pelo hash do pacote lz4 do Buildroot)"; exit 1; }
-INC="-I$LZ -I$OP/include -I$FF/include -I$R/src/remoteplay -I$W/gs -I$C/src -I$C/enet/include -I$C/nanors -I$C/nanors/deps -I$C/nanors/deps/obl \
- -I$SR/usr/include"
-SRC="$R/src/remoteplay/bfrp.c $R/src/remoteplay/video.c $R/src/remoteplay/audio.c $R/src/remoteplay/client.c $B/dl/lz4/lz4-1.10.0/lib/lz4.c $W/gs/client.c $W/gs/http.c $W/gs/mkcert.c $W/gs/xml.c \
+INC="-I$OP/include -I$FF/include -I$R/src/remoteplay -I$W/gs -I$C/src -I$C/enet/include -I$C/nanors -I$C/nanors/deps -I$C/nanors/deps/obl \
+ -I$SR/usr/include -I$R/src/ui/core"
+SRC="$R/src/remoteplay/bfrp.c $R/src/remoteplay/video.c $R/src/remoteplay/audio.c $R/src/remoteplay/client.c $R/src/ui/core/lz4dec.c $W/gs/client.c $W/gs/http.c $W/gs/mkcert.c $W/gs/xml.c \
  $(ls $C/src/*.c) $C/enet/callbacks.c $C/enet/compress.c $C/enet/host.c $C/enet/list.c $C/enet/packet.c \
  $C/enet/peer.c $C/enet/protocol.c $C/enet/unix.c $C/nanors/rs.c $C/nanors/deps/obl/oblas_common.c \
  $C/nanors/deps/obl/oblas_lite.c"

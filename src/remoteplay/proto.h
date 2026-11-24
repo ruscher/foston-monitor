@@ -3,8 +3,12 @@
  *
  *   FOSTON -> PC   K linha de comando (os mesmos de bfrp.c: HOST, START, MABS, PAD...)
  *                  Q quadro desenhado (controle de fluxo: o PC manda o próximo, sempre o mais novo)
+ *                  R a soma não bateu: o próximo quadro vai inteiro
  *   PC -> FOSTON   E linha de evento (HOST, APP, STARTED, VSTATS...)
- *                  V l a (u16 LE) + LZ4(Y, U, V do quadro YUV 4:2:0 já cortado e reduzido)
+ *                  V l a (u16 LE) + flags (bit 0 delta, bit 1 soma) [+ soma u32 LE] [+ máscara
+ *                    dos pares de linhas, 1 bit por par, se delta] + LZ4: inteiro = Y, U, V do
+ *                    quadro YUV 4:2:0 já cortado e reduzido; delta = só os pares que mudaram
+ *                    (2 linhas de Y, a de U, a de V) em XOR com o anterior (relay.c)
  *                  A PCM S16_LE mono 32 kHz
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -20,6 +24,14 @@
 
 /* bytes de um quadro YUV 4:2:0 contíguo; altura ímpar: a cor tem (h + 1) / 2 linhas */
 static inline size_t yuv_size(int w, int h) { return (size_t)w * h + 2 * (size_t)(w / 2) * ((h + 1) / 2); }
+/* soma de conferência do quadro reconstruído (n múltiplo de 4) */
+static inline uint32_t yuv_sum(const uint8_t *p, size_t n)
+{
+    const uint32_t *w = (const uint32_t *)(const void *)p;
+    uint32_t a = 1, b = 0;
+    for(size_t i = 0; i < n / 4; i++) { a += w[i]; b += a; }
+    return a ^ (b << 7 | b >> 25);
+}
 #define RELAY_MAX_MSG (4u << 20)
 
 static inline int proto_write_all(int fd, const void *p, size_t n)

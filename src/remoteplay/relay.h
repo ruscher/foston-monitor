@@ -7,7 +7,8 @@
 /* PC */
 void relay_attach(int fd);                               /* o FOSTON conectado (-1: nenhum) */
 int  relay_send(char type, const void *data, uint32_t len);
-void relay_ack(void);                                    /* o FOSTON desenhou o quadro */
+void relay_ack(void);
+void relay_key(void);                                    /* o próximo quadro vai inteiro */                                    /* o FOSTON desenhou o quadro */
 void relay_set_target(int w);                            /* largura do quadro enviado */
 void relay_stats(unsigned long *decoded, unsigned long *sent, unsigned long long *bytes);
 

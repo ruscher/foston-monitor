@@ -162,17 +162,20 @@ static int passthrough;                                /* relay: o quadro já ve
 
 void video_passthrough(int on) { passthrough = on; }
 
+/* faixa preta: menos de 1 em 32 amostras clara (um contador de FPS no canto não conta) */
 static bool black_row(const AVFrame *f, int y, int x0, int x1)
 {
     const uint8_t *r = f->data[0] + y * f->linesize[0];
-    for(int x = x0; x < x1; x += 4) if(r[x] > 24) return false;
-    return true;
+    int bright = 0, n = 0;
+    for(int x = x0; x < x1; x += 4, n++) bright += r[x] > 24;
+    return bright * 32 < n;
 }
 
 static bool black_col(const AVFrame *f, int x, int y0, int y1)
 {
-    for(int y = y0; y < y1; y += 4) if(f->data[0][y * f->linesize[0] + x] > 24) return false;
-    return true;
+    int bright = 0, n = 0;
+    for(int y = y0; y < y1; y += 4, n++) bright += f->data[0][y * f->linesize[0] + x] > 24;
+    return bright * 32 < n;
 }
 
 static void autocrop(const AVFrame *f)
@@ -180,9 +183,10 @@ static void autocrop(const AVFrame *f)
     int w = f->width, h = f->height, t = 0, b = h - 1, l = 0, r = w - 1;
     while(t < h / 4 && black_row(f, t, 0, w)) t++;
     while(b > h * 3 / 4 && black_row(f, b, 0, w)) b--;
+    if(t >= h / 4 && b <= h * 3 / 4) return;            /* quadro (quase) todo preto: fica o corte de antes */
     while(l < w / 4 && black_col(f, l, t, b)) l++;
     while(r > w * 3 / 4 && black_col(f, r, t, b)) r--;
-    if(t >= h / 4 && b <= h * 3 / 4) { t = 0; b = h - 1; }   /* quadro todo escuro: não corta */
+    if(l >= w / 4 && r <= w * 3 / 4) return;
     pthread_mutex_lock(&vp_mx);
     ct_x = l & ~1; ct_y = t & ~1; ct_w = (r - ct_x + 1) & ~1; ct_h = (b - ct_y + 1) & ~1;
     pthread_mutex_unlock(&vp_mx);

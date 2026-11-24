@@ -26,12 +26,13 @@
 #include "proto.h"
 #include "relay.h"
 #include "video.h"
-#include "lz4.h"
+#include "lz4dec.h"
 
 static int dsp = -1;
 static int prof;
 static double t_lz4, t_draw, t_bytes;
 static int t_n;
+static unsigned long n_bad;
 
 static double now_ms(void)
 {
@@ -108,18 +109,90 @@ static void from_shell(int s, char *l)
     proto_send(s, 'K', l, (uint32_t)strlen(l));
 }
 
+static uint8_t yuv[1024 * 1024] __attribute__((aligned(4))), xbuf[1024 * 1024] __attribute__((aligned(4)));
+
+/* XOR de n bytes (n múltiplo de 4, endereços alinhados) */
+static void xor_words(uint8_t *dst, const uint8_t *x, size_t n)
+{
+    uint32_t *d = (uint32_t *)(void *)dst;
+    const uint32_t *s = (const uint32_t *)(const void *)x;
+    for(size_t i = 0; i < n / 4; i++) d[i] ^= s[i];
+}
+
+/* um quadro do relay (proto.h, relay.c): l a (u16) + flags (bit 0 delta, bit 1 soma) [+ soma u32]
+ * [+ máscara dos pares de linhas, se delta] + LZ4. No delta, só os pares que mudaram vêm (em XOR,
+ * em sequência: 2 linhas de brilho, a de U e a de V) e só eles são redesenhados */
+static void on_video(int s, const uint8_t *d, uint32_t l)
+{
+    static int have_w, have_h;
+    static uint8_t dirty[1024];
+    if(l < 5) goto ack;
+    int w = d[0] | d[1] << 8, h = d[2] | d[3] << 8, delta = d[4] & 1, with_sum = d[4] & 2;
+    size_t need = yuv_size(w, h), hl = 5 + (with_sum ? 4 : 0);
+    int cw = w / 2, chh = (h + 1) / 2;
+    size_t ml = delta ? (size_t)(chh + 7) / 8 : 0;
+    if(w <= 0 || (w & 7) || h <= 0 || w > 1024 || h > 1024 || need > sizeof yuv || l < hl + ml) goto ack;
+    if(delta && (w != have_w || h != have_h)) goto miss;      /* sem o quadro base */
+    uint32_t want = with_sum ? (uint32_t)d[5] | (uint32_t)d[6] << 8 | (uint32_t)d[7] << 16 | (uint32_t)d[8] << 24 : 0;
+    const uint8_t *mask = d + hl, *z = d + hl + ml;
+    size_t zn = l - hl - ml;
+    double t0 = prof ? now_ms() : 0;
+    const uint8_t *dmask = NULL;
+    if(delta) {
+        size_t pairs = 0, xn = 0;
+        for(int r = 0; r < chh; r++)
+            if(mask[r / 8] >> (r % 8) & 1) { pairs++; xn += (size_t)(2 * r + 1 < h ? 2 : 1) * w + 2 * (size_t)cw; }
+        if(xn > sizeof xbuf || (xn ? lz4_block_decode(z, zn, xbuf, xn) != (long)xn : zn != 0)) goto miss;
+        const uint8_t *x = xbuf;
+        uint8_t *yu = yuv + (size_t)w * h, *yv = yu + (size_t)cw * chh;
+        memset(dirty, 0, (size_t)h);
+        for(int r = 0; r < chh; r++) {
+            if(!(mask[r / 8] >> (r % 8) & 1)) continue;
+            int ly = 2 * r + 1 < h ? 2 : 1;
+            xor_words(yuv + (size_t)2 * r * w, x, (size_t)ly * w); x += (size_t)ly * w;
+            xor_words(yu + (size_t)r * cw, x, (size_t)cw); x += cw;
+            xor_words(yv + (size_t)r * cw, x, (size_t)cw); x += cw;
+            dirty[2 * r] = 1;
+            if(ly == 2) dirty[2 * r + 1] = 1;
+        }
+        dmask = dirty;
+        if(!pairs && !with_sum) goto ack;                    /* nada mudou */
+    } else if(lz4_block_decode(z, zn, yuv, need) != (long)need) goto miss;
+    have_w = w; have_h = h;
+    if(with_sum && yuv_sum(yuv, need) != want) {             /* a base divergiu: pede um quadro inteiro */
+        have_w = 0;
+        if(++n_bad < 20 || n_bad % 100 == 0) fprintf(stderr, "cliente: soma errada (%lu, %s)\n", n_bad, delta ? "delta" : "inteiro");
+        proto_send(s, 'R', NULL, 0);
+    }
+    double t1 = prof ? now_ms() : 0;
+    video_draw_yuv(yuv, w, h, dmask);
+    if(prof) {
+        t_lz4 += t1 - t0; t_draw += now_ms() - t1; t_bytes += l; t_n++;
+        if(t_n == 50) {
+            fprintf(stderr, "cliente: lz4 %.1f ms, desenho %.1f ms, %.1f KB por quadro, %lu somas erradas\n",
+                    t_lz4 / t_n, t_draw / t_n, t_bytes / t_n / 1024, n_bad);
+            t_lz4 = t_draw = t_bytes = 0; t_n = 0;
+        }
+    }
+    goto ack;
+miss:
+    have_w = 0;
+    proto_send(s, 'R', NULL, 0);                             /* o próximo vai inteiro */
+ack:
+    proto_send(s, 'Q', NULL, 0);                             /* o próximo quadro pode vir */
+}
+
 int relay_client_main(const char *host, int port)
 {
     int s = wait_relay(host, port);
     if(s < 0) return -1;
     video_passthrough(1);
     if(getenv("BFRP_SMOOTH")) video_smooth(atoi(getenv("BFRP_SMOOTH")));
-    prof = getenv("BFRP_PROF") != NULL;
+    prof = 1;                                            /* tempos no log (/tmp/bfrp.log) a cada 50 quadros */
     say("MODE relay");
     proto_rx_t rx = { 0 };
     rx.cap = RELAY_MAX_MSG + 16;
     rx.buf = malloc(rx.cap);
-    static uint8_t yuv[1024 * 1024] __attribute__((aligned(4))), xbuf[1024 * 1024] __attribute__((aligned(4)));
     char line[512];
     int len = 0;
     if(!rx.buf) { close(s); return -1; }
@@ -164,51 +237,8 @@ int relay_client_main(const char *host, int port)
                     ev[m] = 0;
                     say(ev);
                     if(!strncmp(ev, "STOPPED", 7) || !strncmp(ev, "TERMINATED", 10)) dsp_close();
-                } else if(type == 'V' && l > 5) {
-                    /* l a (u16) + 1 byte (bit 0: delta, em XOR com o quadro anterior) + LZ4 */
-                    int w = d[0] | d[1] << 8, h = d[2] | d[3] << 8, delta = d[4] & 1;
-                    size_t need = yuv_size(w, h);
-                    double t0 = prof ? now_ms() : 0;
-                    static int have_w, have_h;
-                    if(delta && (w != have_w || h != have_h)) delta = -1;   /* sem o quadro base */
-                    if(delta >= 0 && w > 0 && h > 0 && w <= 1024 && h <= 1024 && need <= sizeof yuv &&
-                       LZ4_decompress_safe((const char *)d + 5, (char *)(delta ? xbuf : yuv), (int)(l - 5), (int)need) == (int)need) {
-                        static uint8_t dirty[1024];
-                        const uint8_t *dmask = NULL;
-                        if(delta) {                      /* aplica a diferença e marca as linhas que mudaram */
-                            int cw = w / 2, chh = (h + 1) / 2;
-                            const uint8_t *xu = xbuf + w * h, *xv = xu + cw * chh;
-                            uint8_t *yu = yuv + w * h, *yv = yu + cw * chh;
-                            static uint8_t cdirty[512];
-                            for(int r = 0; r < chh; r++) {
-                                int ch = 0;
-                                for(int x = 0; x < cw; x++) {
-                                    uint8_t a = xu[r * cw + x], b = xv[r * cw + x];
-                                    if(a | b) { ch = 1; yu[r * cw + x] ^= a; yv[r * cw + x] ^= b; }
-                                }
-                                cdirty[r] = (uint8_t)ch;
-                            }
-                            for(int r = 0; r < h; r++) {
-                                uint32_t *a = (uint32_t *)(yuv + r * w), *b = (uint32_t *)(xbuf + r * w);
-                                uint32_t any = 0;
-                                for(int x = 0; x < w / 4; x++) { any |= b[x]; a[x] ^= b[x]; }
-                                dirty[r] = (uint8_t)(any != 0 || cdirty[r / 2]);
-                            }
-                            dmask = dirty;
-                        }
-                        have_w = w; have_h = h;
-                        double t1 = prof ? now_ms() : 0;
-                        video_draw_yuv(yuv, w, h, dmask);
-                        if(prof) {
-                            t_lz4 += t1 - t0; t_draw += now_ms() - t1; t_bytes += l; t_n++;
-                            if(t_n == 50) {
-                                fprintf(stderr, "cliente: lz4 %.1f ms, desenho %.1f ms, %.0f KB por quadro\n",
-                                        t_lz4 / t_n, t_draw / t_n, t_bytes / t_n / 1024);
-                                t_lz4 = t_draw = t_bytes = 0; t_n = 0;
-                            }
-                        }
-                    }
-                    proto_send(s, 'Q', NULL, 0);         /* o próximo quadro pode vir */
+                } else if(type == 'V') {
+                    on_video(s, d, l);
                 } else if(type == 'A' && dsp >= 0) {
                     if(write(dsp, d, l) < 0 && errno != EAGAIN) dsp_close();   /* cheio: descarta (sem atraso) */
                 }
