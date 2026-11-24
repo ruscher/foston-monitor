@@ -96,8 +96,13 @@ static bool eng_start(char *err, size_t errn)
     if(p == 0) {
         dup2(in[0], 0);
         dup2(out[1], 1);
-        int nul = open("/dev/null", O_WRONLY);
-        if(nul >= 0) dup2(nul, 2);
+        /* diagnóstico: o stderr do motor em /tmp (RAM, só root); detalhado só com o arquivo
+         * <dados>/remoteplay/debug (o log guarda as respostas do pareamento) */
+        int lg = open("/tmp/bfrp.log", O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        if(lg >= 0) dup2(lg, 2);
+        char dbg[300];
+        snprintf(dbg, sizeof dbg, "%s/debug", keys);
+        if(!access(dbg, F_OK)) setenv("BFRP_DEBUG", "1", 1);
         char *av[] = { bin, "--keys", keys, NULL };
         execv(bin, av);
         _exit(127);

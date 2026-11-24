@@ -145,9 +145,12 @@ static void cl_status(int st) { out("STATUS %s", st == CONN_STATUS_POOR ? "ruim"
 static void cmd_host(const char *addr)
 {
     if(have_server) { have_server = false; }
-    char a[128];
+    /* a libgamestream guarda só o ponteiro (serverInfo.address) e o usa depois, inclusive na
+     * thread do pareamento: o texto não pode ficar na pilha (24/11/2026: o endereço chegava
+     * como "\x??\x??2.168.7.1" e o pareamento falhava com "Could not resolve hostname") */
+    static char a[128];
     clean(a, sizeof a, addr);
-    int r = gs_init(&server, a, 47989, key_dir, getenv("BFRP_DEBUG") ? 1 : 0, true);
+    int r = gs_init(&server, a, 47989, key_dir, getenv("BFRP_DEBUG") ? 2 : 0, true);
     if(r != GS_OK) { out("ERR host %d %s", r, gs_error ? gs_error : ""); return; }
     have_server = true;
     char name[96];
@@ -161,7 +164,9 @@ static char pair_pin[5];
 static void *pair_thread(void *a)
 {
     (void)a;
+    fprintf(stderr, "bfrp: pareamento com PIN, esperando a aprovação no computador\n");
     int r = gs_pair(&server, pair_pin);
+    fprintf(stderr, "bfrp: gs_pair = %d (%s)\n", r, gs_error ? gs_error : "");
     if(r == GS_OK) { server.paired = true; out("PAIR ok"); }
     else out("PAIR erro %d %s", r, gs_error ? gs_error : "");
     return NULL;

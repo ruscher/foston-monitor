@@ -32,6 +32,8 @@ for f in client.c http.c mkcert.c xml.c; do
     sed -e 's/devicename=roth/devicename=FOSTON/g' -e 's/\bencrypt(/gs_encrypt(/g' -e 's/\bdecrypt(/gs_decrypt(/g' \
         "$M/libgamestream/$f" > "$W/gs/$f"
 done
+# o log de depuração (BFRP_DEBUG) vai para o stderr: o stdout é o protocolo com o shell
+sed -i 's/printf("/fprintf(stderr, "/g' "$W/gs/http.c"
 cp "$M"/libgamestream/*.h "$W/gs/"
 
 CFLAGS="-O2 -march=armv6 -mfloat-abi=soft -pipe -D_GNU_SOURCE -DHAS_SOCKLEN_T -DHAS_POLL=1 -DHAS_FCNTL=1 \
