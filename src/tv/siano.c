@@ -317,9 +317,11 @@ int set_mode_tune(double mhz, int seg)
 siano_stats_t last_stats;
 
 /* resposta 654: 1 palavra de status + struct sms_isdbt_stats (smscoreapi.h do Linux) */
+/* quem chama escolhe on_msg: store, ou um tratador que passe a store o que não for TS (o bftvd
+ * tocando; trocar por store perdia o TS que chegava durante a espera, uma falha por segundo) */
 int stats(void)
 {
-    on_msg = store;
+    if(!on_msg) on_msg = store;
     if(send_msg(653, 150, NULL, 0) || wait_msg(654, 2000)) { last_stats.valid = 0; return -1; }
     int32_t v[17] = { 0 };
     int n = got_n - 4 < (int)sizeof v ? got_n - 4 : (int)sizeof v;

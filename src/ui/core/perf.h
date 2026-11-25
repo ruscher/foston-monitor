@@ -20,6 +20,8 @@ typedef enum {
 void     perf_init(lv_display_t *d);
 void     perf_add(perf_metric_t m, uint32_t us);
 void     perf_reset(void);
+/* registra no log (stderr) as áreas invalidadas nos próximos ms (diagnóstico) */
+void     perf_trace_invalidate(uint32_t ms);
 uint64_t perf_now_us(void);
 /* "tag 5.0s fps 9.8 | render n=.. avg=.. p50=.. p95=.. max=.. ms | ..." */
 int      perf_format(char *buf, int n, const char *tag);

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=SC Controller
+Comment=Test, map and register game controllers
+Comment[pt]=Teste, mapa e registro de controles de jogo
+Comment[es]=Prueba, mapa y registro de mandos de juego
+Categories=Game;Settings;HardwareSettings;
+Keywords=gamepad;joystick;controller;controle;mando;DualShock;Xbox;8BitDo;
+Icon=icon.svg
+Exec=sc-controller
+X-BigFoston-Screen=sc-controller
+X-BigFoston-Color=#7a4cd9

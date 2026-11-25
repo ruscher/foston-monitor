@@ -10,7 +10,7 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
-![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.4.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
+![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.5.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -18,7 +18,7 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
-[🐧 BigFoston OS](#-bigfoston-os-040-linux-no-próprio-aparelho) •
+[🐧 BigFoston OS](#-bigfoston-os-050-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -54,14 +54,34 @@
 
 ---
 
-## 🐧 BigFoston OS 0.4.0: Linux no próprio aparelho
+## 🐧 BigFoston OS 0.5.0: Linux no próprio aparelho
 
 Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
 BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
 tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
 Brasil, rotas e voz; Bluetooth com o celular, Telefone, TV digital e transmissor FM.
 
-**Novidades da 0.4.0:**
+**Novidades da 0.5.0:**
+
+| | O que mudou | Estado |
+|---|---|---|
+| 🗂️ | **Grupos de apps personalizados**: segurar um app por 2 s abre o menu (criar grupo, enviar para o grupo, mover, renomear, cor e ícone, excluir), modo "mover" no lugar do arrastar, busca por nome; a mesma organização na Grade, no Painel e no Foston Glass | testado no aparelho (toque, acentos, Painel, Glass, reinício do shell); 41 pastas sem travar |
+| 🧭 | **Painel com o ícone Apps**: todos os apps e grupos a um toque | testado no aparelho |
+| 🔀 | **Dual Boot**: a tela do agente no Windows CE (antes "modo diagnóstico") com o visual do BigFoston, ícones do Windows CE e do BigFoston, barra de progresso da contagem e registro em várias linhas | agente 0.7.0 gravado e iniciando o BigFoston sozinho |
+| 🎮 | **Big Remote Play**: a imagem e o som do computador (Sunshine) no FOSTON, com mouse por toque, zoom e o controle Bluetooth; relay no PC | **53–60 quadros/s** com o relay |
+| 🕹️ | **Grupo Jogos e pacotes `.bfapp`**: instalar apps pelo cartão; **SC Controller** para testar e mapear controles; DualShock 4 pelo Bluetooth | testado no aparelho |
+| 📺 | TV sem travar: TS sem perda, fila de 2 s e escada de decodificação | Globo de 7–8 para **20–26 quadros/s**, 0 perdas |
+| ⚡ | Ajustes > Potência (Economia, Equilibrado, Desempenho) e efeitos do sistema; modo performance na TV e no Big Remote Play | testado no aparelho |
+| 🌐 | Internet pelo celular (Bluetooth PAN) e navegador sem girar a CPU | Wikipédia pelo celular; CPU de um artigo 66 → 11 s |
+| 🔵 | Bluetooth: música e internet do celular sem cortes; controle e teclado sem atraso | 73 pacotes/s de música; ~64 relatórios/s do controle |
+
+> 📚 [Grupos de apps](docs/launcher-groups-final-report.md) · [Dual Boot](docs/dual-boot.md) ·
+> [Big Remote Play](docs/remote-play/00-overview.md) · [Jogos e pacotes](docs/jogos-e-pacotes/00-visao-geral.md) ·
+> [Energia e desempenho](docs/energia-e-desempenho/01-plano-de-energia.md)
+
+<details>
+<summary><b>Novidades da 0.4.0</b></summary>
+
 
 | | O que mudou | Estado |
 |---|---|---|
@@ -79,6 +99,8 @@ Brasil, rotas e voz; Bluetooth com o celular, Telefone, TV digital e transmissor
 > [TV](docs/tv/00-visao-geral.md) · [FM Transmitir](docs/fm-radio/00-visao-geral.md) ·
 > [Foston Glass](docs/foston-glass/00-visao-geral.md). O FOSTON não tem receptor de rádio AM/FM,
 > só o transmissor. A entrada AV-IN e o EPG da TV ainda estão por fazer.
+
+</details>
 
 <details>
 <summary><b>Novidades da 0.3.0</b></summary>

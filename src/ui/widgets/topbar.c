@@ -191,9 +191,8 @@ lv_obj_t *topbar_create(lv_obj_t *parent)
     ic_bat = battery_create(batbox, BF_FONT_M);
     bat_pct = bf_label(batbox, "—", BF_FONT_S, p->text);
 
-    lv_obj_t *clockbox = bf_plain(icons);
-    lv_obj_set_size(clockbox, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_flex_flow(clockbox, LV_FLEX_FLOW_ROW);
+    /* data e hora: um toque abre Ajustes > Data e hora */
+    lv_obj_t *clockbox = hit_box(icons, jump_click, (void *)(intptr_t)SCR_DATE);
     lv_obj_set_flex_align(clockbox, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(clockbox, 8, 0);
     lv_obj_set_style_margin_left(clockbox, 4, 0);

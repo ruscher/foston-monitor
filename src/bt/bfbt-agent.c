@@ -2,7 +2,10 @@
  * fala D-Bus (docs/hardware-enablement/08-bluetooth-profiles.md).
  *
  *  - agente de pareamento "DisplayYesNo": o código aparece na tela do FOSTON e o usuário
- *    confirma; serviços de aparelhos pareados e confiáveis são autorizados direto;
+ *    confirma; teclados: o código aparece para digitar no teclado (DisplayPasskey, ou um PIN
+ *    sorteado nos antigos); o que o usuário pareia fica confiável (reconecta sozinho) e os
+ *    pareamentos vão para o cartão na hora; serviços de aparelhos pareados e confiáveis são
+ *    autorizados direto;
  *  - estado em /run/bigfoston-bt (chave=valor, reescrito por rename a cada mudança);
  *  - comandos, um por linha, no FIFO /run/bigfoston-bt.cmd:
  *      on | off                       liga/desliga o Bluetooth (S35bluetooth + marca)
@@ -16,6 +19,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #define _GNU_SOURCE
 #include <dbus/dbus.h>
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <strings.h>
+#include <sys/wait.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -43,11 +52,20 @@
 typedef struct {
     char path[96], addr[18], name[64], icon[32];
     int paired, connected, trusted, rssi, has_rssi, resolved;
+    int has_nap, pan_on;                  /* compartilha internet (NAP); Network1 conectado */
+    char iface[16];                       /* Network1.Interface (bnep0) */
 } dev_t_;
 
 static DBusConnection *bus;
+/* internet pelo celular (pan_tick) */
+#define INET_OFF "/data/bigfoston/bt-internet-desligada"
+#define MAXPAN 4
+static struct { char addr[18]; long next_try; int pending; pid_t dhcp; char iface[16]; } pan[MAXPAN];
 static volatile sig_atomic_t quit;
 static int dirty = 1, agent_ok, reconnect_done;   /* reconnect_done: tentativas feitas */
+static long save_soon;                              /* salvar os pareamentos (mono_ms) */
+static long hid_fix_until, hid_fix_next, hid_conn_at;  /* DualShock 4 recém-pareado (ds4_fix_all) */
+static char hid_conn_path[128];
 static long powered_at;
 static long scan_until;                             /* busca: encerra sozinha (rouba o rádio do áudio) */
 #define SCAN_MS 20000                             /* quando o adaptador apareceu ligado */
@@ -58,6 +76,9 @@ static char last_result[160];
 static DBusMessage *req_msg;
 static char req_kind[16], req_dev[96];
 static unsigned req_pass;
+static int req_display;                  /* só mostra um código (já respondido): "passkey" */
+static char pair_path[128];              /* aparelho do último "pair" pedido pelo usuário */
+static char trusted_done[MAXDEV][96];    /* teclados pareados já marcados confiáveis */
 
 /* ------------------------------------------------------------ utilidades */
 
@@ -76,6 +97,94 @@ static void run_service(const char *arg1, const char *arg2)
         execl(SERVICE, "S35bluetooth", arg1, arg2, (char *)NULL);
         _exit(127);
     }
+}
+
+/* ------------------------------------------- DualShock 4 sem o driver da Sony
+ * O kernel não tem o hid-playstation (falta espaço na flash) e o hid-generic usa o descritor
+ * HID que o BlueZ guardou do SDP do controle. Nele só o relatório 0x01 (o curto) tem botões e
+ * eixos; o 0x11, o que o DualShock 4 manda pelo Bluetooth (78 bytes, com giroscópio e
+ * bateria), está declarado como dados do fabricante: o controle conecta e nenhum botão vira
+ * evento. Aqui o registro SDP no cache do BlueZ ganha o mesmo descritor com os campos do 0x01
+ * declarados no 0x11 (depois dos 2 bytes de cabeçalho dele) e o 0x01 sem campos (o hid-input
+ * ignora um uso repetido). O tamanho não muda (431 bytes): nenhum comprimento do SDP mexe.
+ * Os botões e eixos saem iguais aos de antes (0x130..0x13d, X Y Z Rz Rx Ry, direcional), então
+ * a linha do SDL GameControllerDB continua valendo. O BlueZ lê o cache ao iniciar: corrigido
+ * pelo S35bluetooth antes do bluetoothd subir e, depois de parear, com o bluetoothd reiniciado. */
+#define BT_LIB "/var/lib/bluetooth"
+static const char ds4_old01[] = "85010930093109320935150026FF0075089504810209391500250775049501814205091901290E"
+                                "150025017501950E8102750695018101050109330934150026FF00750895028102";
+static const char ds4_new01[] = "150026FF007508";
+static const char ds4_old11[] = "85110920150026FF007508954D810209219102";
+static const char ds4_new11[] = "851109209502810205010930093109320935950481020939250775049501814205091901290E"
+                                "25017501950E810275069501810105010933093426FF007508950281020600FF092195428102"
+                                "954D09219102A4B4";
+
+/* uma ocorrência só de pat em s (NULL se nenhuma ou mais de uma) */
+static char *once(char *s, const char *pat)
+{
+    char *a = strstr(s, pat);
+    return a && !strstr(a + 1, pat) ? a : NULL;
+}
+
+/* corrige um arquivo de cache; 1 = corrigido, 0 = nada a fazer, -1 = erro */
+static int ds4_fix_file(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if(!f) return 0;
+    static char buf[65536];
+    size_t n = fread(buf, 1, sizeof buf - 1, f);
+    fclose(f);
+    buf[n] = 0;
+    if(n == sizeof buf - 1) return 0;
+    char *a = once(buf, ds4_old01), *b = once(buf, ds4_old11);
+    if(!a || !b || b < a) return 0;
+    /* os dois trechos na mesma linha (o mesmo registro SDP) */
+    for(char *c = a; c < b; c++) if(*c == '\n') return 0;
+    static char out[65536 + 128];
+    size_t k = 0;
+    size_t la = strlen(ds4_old01), lb = strlen(ds4_old11);
+    memcpy(out + k, buf, (size_t)(a - buf)); k += (size_t)(a - buf);
+    memcpy(out + k, ds4_new01, strlen(ds4_new01)); k += strlen(ds4_new01);
+    memcpy(out + k, a + la, (size_t)(b - a - (long)la)); k += (size_t)(b - a - (long)la);
+    memcpy(out + k, ds4_new11, strlen(ds4_new11)); k += strlen(ds4_new11);
+    memcpy(out + k, b + lb, n - (size_t)(b + lb - buf)); k += n - (size_t)(b + lb - buf);
+    if(k != n) return -1;                                  /* o tamanho tem de ser o mesmo */
+    char tmp[760];
+    snprintf(tmp, sizeof tmp, "%s.novo", path);
+    FILE *w = fopen(tmp, "w");
+    if(!w) return -1;
+    int ok = fwrite(out, 1, k, w) == k;
+    if(fclose(w) || !ok || rename(tmp, path)) { unlink(tmp); return -1; }
+    chmod(path, 0600);
+    return 1;
+}
+
+/* todos os caches de todos os adaptadores; devolve quantos foram corrigidos */
+static int ds4_fix_all(const char *root)
+{
+    int fixed = 0;
+    DIR *ad = opendir(root);
+    if(!ad) return 0;
+    struct dirent *e;
+    while((e = readdir(ad))) {
+        if(e->d_name[0] == '.') continue;
+        char cdir[400];
+        snprintf(cdir, sizeof cdir, "%s/%s/cache", root, e->d_name);
+        DIR *cd = opendir(cdir);
+        if(!cd) continue;
+        struct dirent *c;
+        while((c = readdir(cd))) {
+            if(c->d_name[0] == '.' || strstr(c->d_name, ".novo")) continue;
+            char p[700];
+            snprintf(p, sizeof p, "%s/%s", cdir, c->d_name);
+            int r = ds4_fix_file(p);
+            if(r > 0) { fixed++; syslog(LOG_INFO, "DualShock 4: descritor HID corrigido (%s)", c->d_name); }
+            else if(r < 0) syslog(LOG_ERR, "DualShock 4: não foi possível corrigir %s", c->d_name);
+        }
+        closedir(cd);
+    }
+    closedir(ad);
+    return fixed;
 }
 
 static void dev_path(char *out, size_t n, const char *addr)
@@ -109,6 +218,16 @@ static void clean(char *dst, size_t n, const char *src)
 
 /* --------------------------------------------------- chamadas assíncronas */
 
+static void req_clear(void);
+static int inet_off(const char *addr);
+static void inet_set(const char *addr, int on);
+static int pan_slot(const char *addr, int make);
+static void iface_ip(const char *ifc, char *out, size_t n);
+static unsigned dev_class(const char *path);
+static void call_async(const char *path, const char *iface, const char *method, const char *what, int timeout_ms,
+                       int first_type, ...);
+static void set_bool(const char *path, const char *iface, const char *prop, int v);
+
 static void call_done(DBusPendingCall *pc, void *ud)
 {
     const char *what = ud;
@@ -119,7 +238,27 @@ static void call_done(DBusPendingCall *pc, void *ud)
         dirty = 1;
         return;
     }
-    if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
+    int failed = r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR;
+    if(!strcmp(what, "pair") || !strcmp(what, "forget")) {
+        if(!strcmp(what, "pair") && !failed && pair_path[0]) {
+            /* pareado pelo usuário: confiável (reconecta e é autorizado sem perguntar) */
+            set_bool(pair_path, "org.bluez.Device1", "Trusted", 1);
+            /* periférico (teclado, mouse, controle de jogo): o Pair só cria o vínculo; o
+             * canal HID abre com o Connect. O controle do PlayStation espera o computador
+             * conectar logo depois de parear e, se ninguém conecta, desliga ("Pareado",
+             * nunca "Conectado"). Teclado que já conectou sozinho: AlreadyConnected, sem efeito */
+            if(((dev_class(pair_path) >> 8) & 0x1f) == 0x05) {
+                call_async(pair_path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
+                /* DualShock 4: o BlueZ grava o SDP no cache logo depois; corrigir o descritor */
+                hid_fix_until = mono_ms() + 15000;
+                hid_fix_next = mono_ms() + 1500;
+                snprintf(hid_conn_path, sizeof hid_conn_path, "%s", pair_path);
+            }
+        }
+        if(!failed) save_soon = mono_ms() + 1500;     /* pareamentos para o cartão */
+        if(req_display) req_clear();                   /* o código já não vale */
+    }
+    if(failed) {
         const char *msg = NULL;
         dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
         snprintf(last_result, sizeof last_result, "%s|erro|%s", what, dbus_message_get_error_name(r));
@@ -197,12 +336,18 @@ static void req_clear(void)
 {
     if(req_msg) dbus_message_unref(req_msg);
     req_msg = NULL;
+    req_display = 0;
     req_kind[0] = req_dev[0] = 0;
     dirty = 1;
 }
 
 static void req_answer(int yes)
 {
+    if(req_display) {                              /* código na tela: só dá para cancelar */
+        if(!yes && req_dev[0]) call_async(req_dev, "org.bluez.Device1", "CancelPairing", "cancel", 5000, DBUS_TYPE_INVALID);
+        req_clear();
+        return;
+    }
     if(!req_msg) return;
     if(yes && !strcmp(req_kind, "confirm")) set_bool(req_dev, "org.bluez.Device1", "Trusted", 1);
     reply_simple(req_msg, yes ? NULL : "org.bluez.Error.Rejected");
@@ -220,6 +365,26 @@ static void req_set(DBusMessage *msg, const char *kind, const char *dev, unsigne
 }
 
 static int dev_bool(const char *path, const char *prop);
+
+/* mostra um código para digitar no aparelho (teclado); a resposta ao BlueZ já foi */
+static void disp_set(const char *dev, unsigned pass)
+{
+    if(req_msg) req_answer(0);
+    req_display = 1;
+    snprintf(req_kind, sizeof req_kind, "passkey");
+    snprintf(req_dev, sizeof req_dev, "%s", dev);
+    req_pass = pass;
+    dirty = 1;
+}
+
+static unsigned random6(void)
+{
+    unsigned v = 0;
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if(fd >= 0) { if(read(fd, &v, sizeof v) != (ssize_t)sizeof v) v = 0; close(fd); }
+    if(!v) v = (unsigned)mono_ms() * 2654435761u;
+    return v % 1000000u;
+}
 
 static DBusHandlerResult agent_msg(DBusConnection *c, DBusMessage *msg, void *ud)
 {
@@ -241,10 +406,44 @@ static DBusHandlerResult agent_msg(DBusConnection *c, DBusMessage *msg, void *ud
     } else if(!strcmp(mem, "Cancel")) {
         req_clear();
         reply_simple(msg, NULL);
-    } else if(!strcmp(mem, "Release") || !strcmp(mem, "DisplayPasskey") || !strcmp(mem, "DisplayPinCode")) {
+    } else if(!strcmp(mem, "DisplayPasskey")) {
+        /* teclado: o FOSTON mostra, o usuário digita no teclado e aperta Enter (chamado de
+         * novo a cada tecla, com o mesmo código) */
+        dbus_uint16_t entered = 0;
+        if(dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_UINT32, &pass,
+                                 DBUS_TYPE_UINT16, &entered, DBUS_TYPE_INVALID)) {
+            if(!req_display || req_pass != pass || strcmp(req_dev, dev)) {
+                syslog(LOG_INFO, "pareamento: código para digitar no aparelho");
+                disp_set(dev, pass);
+            }
+        }
+        reply_simple(msg, NULL);
+    } else if(!strcmp(mem, "DisplayPinCode")) {
+        const char *pin = NULL;
+        if(dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_STRING, &pin, DBUS_TYPE_INVALID) && pin)
+            disp_set(dev, (unsigned)strtoul(pin, NULL, 10));
+        reply_simple(msg, NULL);
+    } else if(!strcmp(mem, "RequestPinCode") &&
+              dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &dev, DBUS_TYPE_INVALID)) {
+        /* aparelho antigo (antes do Bluetooth 2.1): teclado digita um PIN sorteado e mostrado
+         * aqui; fones e caixas de som usam o PIN fixo de fábrica, 0000 */
+        unsigned cls = dev_class(dev);
+        int kbd = ((cls >> 8) & 0x1f) == 0x05 && (cls & 0x40);
+        char pin[8];
+        if(kbd) { unsigned v = random6(); snprintf(pin, sizeof pin, "%06u", v); disp_set(dev, v); }
+        else snprintf(pin, sizeof pin, "0000");
+        const char *pp = pin;
+        DBusMessage *r = dbus_message_new_method_return(msg);
+        if(r) {
+            dbus_message_append_args(r, DBUS_TYPE_STRING, &pp, DBUS_TYPE_INVALID);
+            dbus_connection_send(bus, r, NULL);
+            dbus_message_unref(r);
+        }
+    } else if(!strcmp(mem, "Release")) {
         reply_simple(msg, NULL);
     } else {
-        /* RequestPinCode / RequestPasskey: aparelhos antigos que pedem digitar código */
+        /* RequestPasskey: o aparelho mostra um código para digitar aqui (o FOSTON não tem
+         * teclado de pareamento; não acontece com DisplayYesNo) */
         reply_simple(msg, "org.bluez.Error.Rejected");
     }
     return DBUS_HANDLER_RESULT_HANDLED;
@@ -276,6 +475,26 @@ static void agent_register(void)
 }
 
 /* ------------------------------------------------- leitura do estado */
+
+/* Device1.Class (0 = desconhecida) */
+static unsigned dev_class(const char *path)
+{
+    const char *iface = "org.bluez.Device1", *prop = "Class";
+    DBusMessage *m = dbus_message_new_method_call(BLUEZ, path, "org.freedesktop.DBus.Properties", "Get");
+    if(!m) return 0;
+    dbus_message_append_args(m, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
+    DBusMessage *r = dbus_connection_send_with_reply_and_block(bus, m, 2000, NULL);
+    dbus_message_unref(m);
+    if(!r) return 0;
+    dbus_uint32_t v = 0;
+    DBusMessageIter it, var;
+    if(dbus_message_iter_init(r, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_VARIANT) {
+        dbus_message_iter_recurse(&it, &var);
+        if(dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_UINT32) dbus_message_iter_get_basic(&var, &v);
+    }
+    dbus_message_unref(r);
+    return v;
+}
 
 /* lê um booleano de Device1 direto (usado pelo agente) */
 static int dev_bool(const char *path, const char *prop)
@@ -340,8 +559,9 @@ static void var_bool(DBusMessageIter *var, int *out)
 static void read_iface(state_t *s, const char *path, const char *iface, DBusMessageIter *props)
 {
     int is_ad = !strcmp(iface, "org.bluez.Adapter1"), is_dev = !strcmp(iface, "org.bluez.Device1"),
-        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1");
-    if(!is_ad && !is_dev && !is_pl && !is_tr) return;
+        is_pl = !strcmp(iface, "org.bluez.MediaPlayer1"), is_tr = !strcmp(iface, "org.bluez.MediaTransport1"),
+        is_net = !strcmp(iface, "org.bluez.Network1");
+    if(!is_ad && !is_dev && !is_pl && !is_tr && !is_net) return;
     dev_t_ *d = NULL;
     if(is_ad) {
         if(adapter[0] && strcmp(adapter, path)) return;
@@ -349,11 +569,14 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
         snprintf(adapter, sizeof adapter, "%s", path);
     }
     if(is_pl) { snprintf(s->pl_path, sizeof s->pl_path, "%s", path); s->pl_pos_at = mono_ms(); }
-    if(is_dev) {
-        if(s->ndev >= MAXDEV) return;
-        d = &s->dev[s->ndev++];
-        memset(d, 0, sizeof *d);
-        snprintf(d->path, sizeof d->path, "%s", path);
+    if(is_dev || is_net) {                     /* Device1 e Network1 no mesmo objeto, em qualquer ordem */
+        for(int i = 0; i < s->ndev && !d; i++) if(!strcmp(s->dev[i].path, path)) d = &s->dev[i];
+        if(!d) {
+            if(s->ndev >= MAXDEV) return;
+            d = &s->dev[s->ndev++];
+            memset(d, 0, sizeof *d);
+            snprintf(d->path, sizeof d->path, "%s", path);
+        }
     }
     DBusMessageIter e;
     dbus_message_iter_recurse(props, &e);
@@ -369,8 +592,20 @@ static void read_iface(state_t *s, const char *path, const char *iface, DBusMess
             else if(!strcmp(k, "Discoverable")) var_bool(&var, &s->discoverable);
             else if(!strcmp(k, "Discovering")) var_bool(&var, &s->discovering);
             else if(!strcmp(k, "Alias")) var_str(&var, s->name, sizeof s->name);
+        } else if(is_net) {
+            if(!strcmp(k, "Connected")) var_bool(&var, &d->pan_on);
+            else if(!strcmp(k, "Interface")) var_str(&var, d->iface, sizeof d->iface);
         } else if(is_dev) {
-            if(!strcmp(k, "Address")) var_str(&var, d->addr, sizeof d->addr);
+            if(!strcmp(k, "UUIDs") && dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
+                DBusMessageIter ue;
+                dbus_message_iter_recurse(&var, &ue);
+                for(; dbus_message_iter_get_arg_type(&ue) == DBUS_TYPE_STRING; dbus_message_iter_next(&ue)) {
+                    const char *u;
+                    dbus_message_iter_get_basic(&ue, &u);
+                    if(!strncasecmp(u, "00001116-", 9)) d->has_nap = 1;     /* NAP: compartilha a rede */
+                }
+            }
+            else if(!strcmp(k, "Address")) var_str(&var, d->addr, sizeof d->addr);
             else if(!strcmp(k, "Alias")) var_str(&var, d->name, sizeof d->name);
             else if(!strcmp(k, "Icon")) var_str(&var, d->icon, sizeof d->icon);
             else if(!strcmp(k, "Paired")) var_bool(&var, &d->paired);
@@ -477,7 +712,13 @@ static void write_state(const state_t *s)
     for(int i = 0; i < s->ndev; i++)
         fprintf(f, "dev=%s|%d|%d|%d|%d|%s|%s\n", d[i].addr, d[i].paired, d[i].connected, d[i].trusted,
                 d[i].has_rssi ? d[i].rssi : 0, d[i].icon, d[i].name[0] ? d[i].name : d[i].addr);
-    if(req_msg) {
+    for(int i = 0; i < s->ndev; i++) {               /* "pan=endereço|quer|conectado|ip" */
+        if(!s->dev[i].has_nap || !s->dev[i].paired) continue;
+        char ip[24] = "";
+        if(s->dev[i].pan_on && s->dev[i].iface[0]) iface_ip(s->dev[i].iface, ip, sizeof ip);
+        fprintf(f, "pan=%s|%d|%d|%s\n", s->dev[i].addr, !inet_off(s->dev[i].addr), s->dev[i].pan_on, ip);
+    }
+    if(req_msg || req_display) {
         const char *name = "", *addr = "";
         for(int i = 0; i < s->ndev; i++)
             if(!strcmp(s->dev[i].path, req_dev)) { name = s->dev[i].name; addr = s->dev[i].addr; }
@@ -495,6 +736,30 @@ static void write_state(const state_t *s)
     if(last_result[0]) fprintf(f, "result=%s\n", last_result);
     fclose(f);
     rename(tmp, STATE);
+}
+
+/* Teclados (e mouses) pareados mas não confiáveis: o BlueZ recusa a reconexão quando acordam
+ * e o agente perguntaria a cada vez. Pareados aqui pelo usuário: ficam confiáveis (uma vez por
+ * aparelho; quem desmarcar por fora não é remarcado nesta execução). O código mostrado para
+ * digitar some quando o aparelho fica pareado. */
+static void trust_inputs(const state_t *s)
+{
+    for(int i = 0; i < s->ndev; i++) {
+        const dev_t_ *d = &s->dev[i];
+        if(req_display && d->paired && !strcmp(d->path, req_dev)) { req_clear(); save_soon = mono_ms() + 1500; }
+        if(!d->paired || d->trusted || strncmp(d->icon, "input-", 6)) continue;
+        int seen = 0, free_ = -1;
+        for(int k = 0; k < MAXDEV; k++) {
+            if(!strcmp(trusted_done[k], d->path)) seen = 1;
+            else if(free_ < 0 && !trusted_done[k][0]) free_ = k;
+        }
+        if(seen) continue;
+        if(free_ >= 0) snprintf(trusted_done[free_], sizeof trusted_done[free_], "%s", d->path);
+        syslog(LOG_INFO, "teclado/mouse/controle pareado marcado como confiável");
+        set_bool(d->path, "org.bluez.Device1", "Trusted", 1);
+        save_soon = mono_ms() + 1500;
+        dirty = 1;
+    }
 }
 
 /* -------------------------------------------------------------- comandos */
@@ -532,6 +797,14 @@ static void command(char *line)
             call_async(player_path, "org.bluez.MediaPlayer1",
                        !strcmp(line, "play") ? "Play" : !strcmp(line, "pause") ? "Pause" :
                        !strcmp(line, "next") ? "Next" : "Previous", "player", 5000, DBUS_TYPE_INVALID);
+    } else if(!strcmp(line, "internet")) {            /* "internet ENDEREÇO 1|0" */
+        char a[18] = "";
+        int on = 1;
+        if(sscanf(arg, "%17s %d", a, &on) >= 1 && valid_addr(a)) {
+            inet_set(a, on);
+            int k = pan_slot(a, 0);
+            if(k >= 0) pan[k].next_try = 0;             /* tenta já */
+        }
     } else if((!strcmp(line, "repeat") || !strcmp(line, "shuffle")) && player_path[0]) {
         /* AVRCP: repeat off|singletrack|alltracks, shuffle off|alltracks */
         static const char *ok[] = { "off", "singletrack", "alltracks", "group", NULL };
@@ -542,7 +815,10 @@ static void command(char *line)
     } else if(valid_addr(arg)) {
         reconnect_done = 3;                       /* o usuário decide: sem reconexão automática */
         dev_path(path, sizeof path, arg);
-        if(!strcmp(line, "pair")) call_async(path, "org.bluez.Device1", "Pair", "pair", 60000, DBUS_TYPE_INVALID);
+        if(!strcmp(line, "pair")) {
+            snprintf(pair_path, sizeof pair_path, "%s", path);
+            call_async(path, "org.bluez.Device1", "Pair", "pair", 60000, DBUS_TYPE_INVALID);
+        }
         else if(!strcmp(line, "connect")) call_async(path, "org.bluez.Device1", "Connect", "connect", 30000, DBUS_TYPE_INVALID);
         else if(!strcmp(line, "disconnect")) call_async(path, "org.bluez.Device1", "Disconnect", "disconnect", 10000, DBUS_TYPE_INVALID);
         else if(!strcmp(line, "forget")) {
@@ -649,6 +925,77 @@ static void become_peripheral(const char *addr)
     close(s);
 }
 
+/* Teclado e controle de jogo em tempo real (medido em 24/11/2026 com o DualShock 4):
+ *  - o controle pede o modo sniff quando fica parado e, com o MT6611, o enlace em sniff chega
+ *    a ~3 relatórios/s, com buracos de até 2 s: o atraso "oscila" (bom ativo, ruim em sniff).
+ *    A política do enlace sem sniff (0x080D = 0) faz o chip recusar o pedido, e Exit Sniff
+ *    (0x0804) tira o enlace do sniff se já entrou;
+ *  - ativo, o Tpoll padrão (40 slots, 25 ms) limitava a ~38 relatórios/s. QoS Setup (0x0807)
+ *    "garantido", latência 1250 us: ~62 relatórios/s, 99% em menos de 28 ms.
+ * Uma vez por conexão, 1 s depois de conectado. Gasta mais bateria do teclado/controle. */
+static void hid_link_fast(const char *addr)
+{
+    unsigned v[6];
+    if(sscanf(addr, "%x:%x:%x:%x:%x:%x", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 6) return;
+    struct { unsigned short family, dev, channel; } a = { 31, 0, 0 };
+    int s = socket(31, SOCK_RAW | SOCK_CLOEXEC, 1);
+    if(s < 0) return;
+    struct conn_info_req r;
+    memset(&r, 0, sizeof r);
+    for(int i = 0; i < 6; i++) r.bdaddr[i] = (uint8_t)v[5 - i];
+    r.type = 1;                                          /* ACL */
+    if(bind(s, (struct sockaddr *)&a, sizeof a) == 0 && ioctl(s, HCIGETCONNINFO, &r) == 0) {
+        uint16_t h = r.info.handle;
+        uint8_t hl = (uint8_t)h, hh = (uint8_t)(h >> 8);
+        unsigned char pol[] = { 0x01, 0x0d, 0x08, 0x04, hl, hh, 0x00, 0x00 };
+        unsigned char ex[] = { 0x01, 0x04, 0x08, 0x02, hl, hh };
+        unsigned char qos[] = { 0x01, 0x07, 0x08, 0x14, hl, hh, 0x00, 0x02,
+                                0x10, 0x27, 0x00, 0x00,      /* taxa: 10000 B/s */
+                                0x00, 0x00, 0x00, 0x00,      /* pico: sem limite */
+                                0xe2, 0x04, 0x00, 0x00,      /* latência: 1250 us */
+                                0xff, 0xff, 0xff, 0xff };    /* variação: qualquer */
+        int ok = write(s, pol, sizeof pol) == (ssize_t)sizeof pol;
+        usleep(20000);
+        ok &= write(s, ex, sizeof ex) == (ssize_t)sizeof ex;   /* fora do sniff dá "não permitido": tudo bem */
+        usleep(20000);
+        ok &= write(s, qos, sizeof qos) == (ssize_t)sizeof qos;
+        if(ok) syslog(LOG_INFO, "teclado/controle: enlace sem sniff e com latência baixa");
+    }
+    close(s);
+}
+
+#define MAXHL 4
+static struct { char addr[18]; long since; int done; } hl[MAXHL];
+
+static void hid_link_tick(const state_t *st, long now)
+{
+    for(int k = 0; k < MAXHL; k++) {                     /* esquece quem desconectou */
+        if(!hl[k].addr[0]) continue;
+        int still = 0;
+        for(int i = 0; i < st->ndev; i++)
+            if(!strcmp(st->dev[i].addr, hl[k].addr) && st->dev[i].connected) still = 1;
+        if(!still) hl[k].addr[0] = 0;
+    }
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->connected || strncmp(d->icon, "input-", 6)) continue;
+        int k, freek = -1;
+        for(k = 0; k < MAXHL && strcmp(hl[k].addr, d->addr); k++)
+            if(!hl[k].addr[0] && freek < 0) freek = k;
+        if(k == MAXHL) {
+            if(freek < 0) continue;
+            k = freek;
+            snprintf(hl[k].addr, sizeof hl[k].addr, "%s", d->addr);
+            hl[k].since = now;
+            hl[k].done = 0;
+        }
+        if(!hl[k].done && now - hl[k].since >= 1000) {
+            hl[k].done = 1;
+            hid_link_fast(d->addr);
+        }
+    }
+}
+
 /* um pedido por conexão, 2 s depois de os perfis estarem conectados */
 #define MAXRS 8
 static struct { char addr[18]; long since; int done; } rs[MAXRS];
@@ -665,6 +1012,9 @@ static void role_switch_tick(const state_t *st, long now)
     for(int i = 0; i < st->ndev; i++) {
         const dev_t_ *d = &st->dev[i];
         if(!d->connected || !d->resolved) continue;
+        /* teclado, mouse e controle: o FOSTON segue mestre. A troca serve ao áudio (AFH); com
+         * vários aparelhos de entrada mestres o FOSTON viraria escravo de várias piconets */
+        if(!strncmp(d->icon, "input-", 6)) continue;
         int k, freek = -1;
         for(k = 0; k < MAXRS && strcmp(rs[k].addr, d->addr); k++)
             if(!rs[k].addr[0] && freek < 0) freek = k;
@@ -675,11 +1025,177 @@ static void role_switch_tick(const state_t *st, long now)
             rs[k].since = now;
             rs[k].done = 0;
         }
-        if(!rs[k].done && now - rs[k].since >= 2000) {
+        /* 2 s depois de conectado e, depois, a cada 30 s: o celular às vezes desfaz a troca
+         * (24/11/2026: FOSTON mestre de novo, qualidade 3/255 e a música sem som). Se já é
+         * escravo, become_peripheral não faz nada */
+        if(now - rs[k].since >= 2000 && (!rs[k].done || now - rs[k].since >= 30000)) {
             rs[k].done = 1;
+            rs[k].since = now - 2000;
             become_peripheral(d->addr);
         }
     }
+}
+
+/* ------------------------------------------------ internet pelo celular (Bluetooth PAN)
+ * Celular com o "Tethering Bluetooth" ligado oferece o NAP: Network1.Connect("nap") cria a
+ * bnep0 e o udhcpc pega endereço, rota (métrica 0: ganha da rota do PC, 200) e DNS (o
+ * default.script marca as linhas "# bnep0" e as tira ao desconectar). Ligado por padrão para
+ * todo aparelho pareado e conectado que anuncia NAP; desligado à mão fica em INET_OFF.
+ * Tenta de novo a cada 30 s enquanto o aparelho está conectado (o tethering pode ser ligado
+ * depois). Antes ninguém chamava o Network1: o celular conectava e a internet não vinha. */
+
+static int inet_off(const char *addr)
+{
+    FILE *f = fopen(INET_OFF, "r");
+    if(!f) return 0;
+    char l[64];
+    int off = 0;
+    while(!off && fgets(l, sizeof l, f)) if(!strncmp(l, addr, 17)) off = 1;
+    fclose(f);
+    return off;
+}
+
+static void inet_set(const char *addr, int on)
+{
+    char tmp[300];
+    snprintf(tmp, sizeof tmp, "%s.novo", INET_OFF);
+    FILE *in = fopen(INET_OFF, "r"), *out = fopen(tmp, "w");
+    if(!out) { if(in) fclose(in); return; }
+    char l[64];
+    while(in && fgets(l, sizeof l, in)) if(strncmp(l, addr, 17)) fputs(l, out);
+    if(in) fclose(in);
+    if(!on) fprintf(out, "%s\n", addr);
+    if(fclose(out) == 0) rename(tmp, INET_OFF);
+}
+
+static int pan_slot(const char *addr, int make)
+{
+    int fr = -1;
+    for(int k = 0; k < MAXPAN; k++) {
+        if(!strcmp(pan[k].addr, addr)) return k;
+        if(!pan[k].addr[0] && fr < 0) fr = k;
+    }
+    if(!make || fr < 0) return -1;
+    memset(&pan[fr], 0, sizeof pan[fr]);
+    snprintf(pan[fr].addr, sizeof pan[fr].addr, "%s", addr);
+    return fr;
+}
+
+static void pan_done(DBusPendingCall *pc, void *ud)
+{
+    int k = (int)(intptr_t)ud;
+    DBusMessage *r = dbus_pending_call_steal_reply(pc);
+    pan[k].pending = 0;
+    if(r && dbus_message_get_type(r) == DBUS_MESSAGE_TYPE_ERROR) {
+        const char *msg = NULL;
+        dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &msg, DBUS_TYPE_INVALID);
+        syslog(LOG_INFO, "internet pelo celular: %s %s (o tethering Bluetooth está ligado no celular?)",
+               dbus_message_get_error_name(r), msg ? msg : "");
+    } else if(r) {
+        const char *ifc = NULL;
+        if(dbus_message_get_args(r, NULL, DBUS_TYPE_STRING, &ifc, DBUS_TYPE_INVALID) && ifc)
+            snprintf(pan[k].iface, sizeof pan[k].iface, "%s", ifc);
+        syslog(LOG_INFO, "internet pelo celular: %s conectada", pan[k].iface);
+    }
+    if(r) dbus_message_unref(r);
+    dbus_pending_call_unref(pc);
+    dirty = 1;
+}
+
+static void pan_dhcp_stop(int k)
+{
+    if(pan[k].dhcp > 0) {
+        kill(pan[k].dhcp, SIGTERM);                       /* -R: devolve o endereço e o script limpa */
+        pan[k].dhcp = 0;
+    }
+}
+
+static void pan_tick(const state_t *st, long now)
+{
+    for(int i = 0; i < st->ndev; i++) {
+        const dev_t_ *d = &st->dev[i];
+        if(!d->addr[0] || !d->has_nap) continue;
+        int want = d->paired && d->connected && !inet_off(d->addr);
+        int k = pan_slot(d->addr, want || d->pan_on);
+        if(k < 0) continue;
+        if(d->pan_on && d->iface[0]) snprintf(pan[k].iface, sizeof pan[k].iface, "%s", d->iface);
+        if(want && !d->pan_on && !pan[k].pending && now >= pan[k].next_try) {
+            DBusMessage *m = dbus_message_new_method_call(BLUEZ, d->path, "org.bluez.Network1", "Connect");
+            const char *nap = "nap";
+            DBusPendingCall *pc = NULL;
+            if(m) {
+                dbus_message_append_args(m, DBUS_TYPE_STRING, &nap, DBUS_TYPE_INVALID);
+                if(dbus_connection_send_with_reply(bus, m, &pc, 20000) && pc) {
+                    dbus_pending_call_set_notify(pc, pan_done, (void *)(intptr_t)k, NULL);
+                    pan[k].pending = 1;
+                }
+                dbus_message_unref(m);
+            }
+            pan[k].next_try = now + 30000;
+        }
+        if(d->pan_on && want && pan[k].iface[0] && pan[k].dhcp <= 0) {
+            pid_t p = fork();
+            if(p == 0) {
+                setsid();
+                int nul = open("/dev/null", O_RDWR);
+                if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
+                execl("/sbin/udhcpc", "udhcpc", "-i", pan[k].iface, "-f", "-R", "-t", "8", "-T", "3", "-A", "10",
+                      "-s", "/usr/sbin/bigfoston-pan-dhcp", (char *)NULL);   /* DNS do celular primeiro */
+                _exit(127);
+            }
+            if(p > 0) {
+                pan[k].dhcp = p;
+                syslog(LOG_INFO, "internet pelo celular: pedindo endereço na %s", pan[k].iface);
+            }
+        }
+        if((!d->pan_on || !want) && pan[k].dhcp > 0) pan_dhcp_stop(k);
+        if(!want && d->pan_on)                          /* desligado à mão: solta a rede */
+            call_async(d->path, "org.bluez.Network1", "Disconnect", "reconnect", 10000, DBUS_TYPE_INVALID);
+        if(!want && !d->pan_on && !pan[k].pending) pan[k].addr[0] = 0;
+    }
+}
+
+/* o endereço IPv4 da interface ("" se não há) */
+static void iface_ip(const char *ifc, char *out, size_t n)
+{
+    out[0] = 0;
+    int s = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if(s < 0) return;
+    struct ifreq r;
+    memset(&r, 0, sizeof r);
+    snprintf(r.ifr_name, sizeof r.ifr_name, "%s", ifc);
+    if(ioctl(s, SIOCGIFADDR, &r) == 0)
+        inet_ntop(AF_INET, &((struct sockaddr_in *)&r.ifr_addr)->sin_addr, out, (socklen_t)n);
+    close(s);
+}
+
+/* pareamentos novos ou trocados (inclusive os que o celular começa) vão para o cartão: a
+ * chave nova só existia na RAM até o próximo "desligar o Bluetooth" e, se o aparelho fosse
+ * desligado sem isso, voltava a antiga do cartão e o celular pedia o código de novo */
+static long newest_info(void)
+{
+    long newest = 0;
+    DIR *ad = opendir("/var/lib/bluetooth");
+    if(!ad) return 0;
+    struct dirent *a;
+    while((a = readdir(ad))) {
+        if(a->d_name[0] == '.') continue;
+        char dp[300];
+        snprintf(dp, sizeof dp, "/var/lib/bluetooth/%s", a->d_name);
+        DIR *dd = opendir(dp);
+        if(!dd) continue;
+        struct dirent *e;
+        while((e = readdir(dd))) {
+            if(e->d_name[0] == '.' || strlen(e->d_name) != 17) continue;
+            char ip[400];
+            struct stat sb;
+            snprintf(ip, sizeof ip, "%s/%s/info", dp, e->d_name);
+            if(!stat(ip, &sb) && sb.st_mtime > newest) newest = sb.st_mtime;
+        }
+        closedir(dd);
+    }
+    closedir(ad);
+    return newest;
 }
 
 static void on_sig(int s) { (void)s; quit = 1; }
@@ -688,6 +1204,12 @@ int main(int argc, char **argv)
 {
     int fg = argc > 1 && !strcmp(argv[1], "-f");
     openlog("bfbt-agent", LOG_PID, LOG_DAEMON);
+    /* S35bluetooth, antes do bluetoothd: corrige os caches (e testes: outra pasta) */
+    if(argc > 1 && !strcmp(argv[1], "--fix-hid")) {
+        int n = ds4_fix_all(argc > 2 ? argv[2] : BT_LIB);
+        printf("%d\n", n);
+        return 0;
+    }
     DBusError e;
     dbus_error_init(&e);
     bus = dbus_bus_get(DBUS_BUS_SYSTEM, &e);
@@ -725,9 +1247,17 @@ int main(int argc, char **argv)
             last_write = now;
             if(!agent_ok) agent_register();
             read_state(&st);
+            trust_inputs(&st);
             snprintf(player_path, sizeof player_path, "%s", st.pl_path);
             write_state(&st);
             role_switch_tick(&st, now);
+            hid_link_tick(&st, now);
+            pan_tick(&st, now);
+            /* chave de pareamento nova ou trocada: para o cartão (a primeira leitura só marca) */
+            static long info_seen = -1;
+            long ni = newest_info();
+            if(info_seen >= 0 && ni > info_seen && !save_soon) save_soon = now + 2000;
+            if(ni > info_seen) info_seen = ni;
             if(!st.powered) powered_at = 0;
             else if(!powered_at) { powered_at = now; fix_inquiry_scan(); }
             /* a inicialização do adaptador pode desfazer a gravação: repete ao ficar visível,
@@ -741,11 +1271,42 @@ int main(int argc, char **argv)
         static const long when[] = { 3000, 15000, 60000 };
         if(powered_at && reconnect_done < 3 && now - powered_at >= when[reconnect_done]) {
             reconnect_done++;
+            /* com teclado ou controle conectado, não procura ninguém: enquanto o MT6611 chama
+             * um aparelho ausente (Create Connection, até ~5 s de page) o enlace do controle
+             * fica sem relatório nenhum (medido: 0/s por 5 s, o "controle travou e depois
+             * mexeu sozinho"). O celular ainda pode conectar sozinho (quem chama é ele). */
+            int hid_on = 0;
             for(int i = 0; i < st.ndev; i++)
-                if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected)
+                if(st.dev[i].connected && !strncmp(st.dev[i].icon, "input-", 6)) hid_on = 1;
+            if(hid_on) syslog(LOG_INFO, "reconexão automática adiada: teclado/controle conectado");
+            for(int i = 0; i < st.ndev && !hid_on; i++)
+                /* teclados e mouses reconectam sozinhos (o BlueZ cuida dos que pedem ao
+                 * computador): aqui só atrasariam o celular com uma espera de ~5 s */
+                if(st.dev[i].paired && st.dev[i].trusted && !st.dev[i].connected && strncmp(st.dev[i].icon, "input-", 6))
                     call_async(st.dev[i].path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
             dirty = 1;
         }
+        if(hid_fix_until && now >= hid_fix_next) {
+            if(ds4_fix_all(BT_LIB) > 0) {
+                /* o bluetoothd só lê o cache ao iniciar: reinicia e conecta de novo */
+                hid_fix_until = 0;
+                syslog(LOG_INFO, "DualShock 4 pareado: bluetoothd reiniciado com o descritor corrigido");
+                pid_t p = fork();
+                if(p == 0) {
+                    setsid();
+                    execl("/etc/init.d/S40bluetoothd", "S40bluetoothd", "restart", (char *)NULL);
+                    _exit(127);
+                }
+                save_soon = now + 8000;
+                hid_conn_at = now + 6000;
+            } else if(now >= hid_fix_until) hid_fix_until = 0;
+            else hid_fix_next = now + 1500;
+        }
+        if(hid_conn_at && now >= hid_conn_at && adapter[0]) {
+            hid_conn_at = 0;
+            call_async(hid_conn_path, "org.bluez.Device1", "Connect", "reconnect", 30000, DBUS_TYPE_INVALID);
+        }
+        if(save_soon && now >= save_soon) { save_soon = 0; run_service("save", NULL); }
         if(scan_until && now >= scan_until) {
             scan_until = 0;
             if(adapter[0]) call_async(adapter, "org.bluez.Adapter1", "StopDiscovery", "scan", 5000, DBUS_TYPE_INVALID);
@@ -755,8 +1316,12 @@ int main(int argc, char **argv)
         int timeout = dirty ? 250 : (int)(next_full - now);
         if(powered_at && reconnect_done < 3 && timeout > 1000) timeout = 1000;
         if(scan_until && timeout > 1000) timeout = 1000;
+        if(save_soon && timeout > 500) timeout = 500;
+        if((hid_fix_until || hid_conn_at) && timeout > 500) timeout = 500;
         for(int k = 0; k < MAXRS; k++)
             if(rs[k].addr[0] && !rs[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
+        for(int k = 0; k < MAXHL; k++)
+            if(hl[k].addr[0] && !hl[k].done) { dirty = 1; if(timeout > 500) timeout = 500; }
         if(timeout < 0) timeout = 0;
         if(dbus_connection_get_dispatch_status(bus) == DBUS_DISPATCH_DATA_REMAINS) timeout = 0;
         if(dbus_connection_has_messages_to_send(bus)) p[0].events |= POLLOUT;

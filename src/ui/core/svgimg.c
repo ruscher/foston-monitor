@@ -96,3 +96,72 @@ bool svg_render(svgdoc_t *d, float scale, lv_color_t bg, int max_px, lv_image_ds
     img->data_size = (uint32_t)(w * h * 2);
     return true;
 }
+
+bool svg_render_mask(const char *path, int box, lv_image_dsc_t *img)
+{
+    svg_image_free(img);
+    svgdoc_t *d = svg_open(path);
+    if(!d) return false;
+    float iw = d->img->width, ih = d->img->height;
+    float scale = (float)box * 0.86f / (iw > ih ? iw : ih);
+    unsigned char *rgba = malloc((size_t)box * box * 4);
+    uint8_t *a8 = malloc((size_t)box * box);
+    NSVGrasterizer *r = nsvgCreateRasterizer();
+    if(!rgba || !a8 || !r) {
+        free(rgba); free(a8);
+        if(r) nsvgDeleteRasterizer(r);
+        svg_close(d);
+        return false;
+    }
+    memset(rgba, 0, (size_t)box * box * 4);
+    float tx = ((float)box - iw * scale) / 2, ty = ((float)box - ih * scale) / 2;
+    nsvgRasterize(r, d->img, tx, ty, scale, rgba, box, box, box * 4);
+    nsvgDeleteRasterizer(r);
+    svg_close(d);
+    for(size_t i = 0; i < (size_t)box * box; i++) a8[i] = rgba[4 * i + 3];
+    free(rgba);
+    memset(img, 0, sizeof *img);
+    img->header.magic = LV_IMAGE_HEADER_MAGIC;
+    img->header.cf = LV_COLOR_FORMAT_A8;
+    img->header.w = (uint32_t)box;
+    img->header.h = (uint32_t)box;
+    img->header.stride = (uint32_t)box;
+    img->data = a8;
+    img->data_size = (uint32_t)(box * box);
+    return true;
+}
+
+bool svg_render_mask_str(const char *svg, int w, lv_image_dsc_t *img)
+{
+    svg_image_free(img);
+    char *copy = strdup(svg);                     /* nsvgParse escreve no texto */
+    if(!copy) return false;
+    NSVGimage *im = nsvgParse(copy, "px", 96.0f);
+    free(copy);
+    if(!im || im->width <= 0) { if(im) nsvgDelete(im); return false; }
+    float scale = (float)w / im->width;
+    int h = (int)(im->height * scale + 0.5f);
+    unsigned char *rgba = calloc((size_t)w * h, 4);
+    uint8_t *a8 = malloc((size_t)w * h);
+    NSVGrasterizer *r = nsvgCreateRasterizer();
+    if(!rgba || !a8 || !r) {
+        free(rgba); free(a8);
+        if(r) nsvgDeleteRasterizer(r);
+        nsvgDelete(im);
+        return false;
+    }
+    nsvgRasterize(r, im, 0, 0, scale, rgba, w, h, w * 4);
+    nsvgDeleteRasterizer(r);
+    nsvgDelete(im);
+    for(size_t i = 0; i < (size_t)w * h; i++) a8[i] = rgba[4 * i + 3];
+    free(rgba);
+    memset(img, 0, sizeof *img);
+    img->header.magic = LV_IMAGE_HEADER_MAGIC;
+    img->header.cf = LV_COLOR_FORMAT_A8;
+    img->header.w = (uint32_t)w;
+    img->header.h = (uint32_t)h;
+    img->header.stride = (uint32_t)w;
+    img->data = a8;
+    img->data_size = (uint32_t)(w * h);
+    return true;
+}

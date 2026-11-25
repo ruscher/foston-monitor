@@ -12,6 +12,8 @@ void volpop_open(int x, int y);
 void volpop_close(void);
 bool volpop_is_open(void);
 void volpop_toggle_mute(void);
+/* teclas de volume: abre o painel (se fechado) e muda delta pontos */
+void volpop_step(int delta);
 /* símbolo de volume para pct (mudo, médio, alto) */
 const char *volpop_symbol(int pct);
 #endif

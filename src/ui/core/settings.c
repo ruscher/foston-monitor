@@ -42,11 +42,30 @@ void settings_defaults(bf_settings_t *s)
     s->book_font = 1;
     s->book_space = 1;
     s->book_margin = 1;
+    s->web_zoom = 100;
+    s->web_pc = true;
+    s->web_fs_sharp = false;
+    s->perf_auto = true;
+    s->perf_enter_s = 2;
+    s->perf_exit_s = 10;
+    s->perf_svc = 0xf;                  /* GPS, Bluetooth, telefone e tarefas */
+    s->perf_quiet = true;
+    s->perf_prio = true;
+    s->perf_tag = true;
+    s->perf_modal = true;
+    s->perf_pad = true;
+    s->perf_tv = true;
+    s->perf_stream = true;
+    s->perf_wall = true;
+    s->perf_always = false;
+    s->power_plan = BF_PLAN_BAL;
+    s->fx_level = BF_FX_FULL;
     s->show_date = true;
     s->clock_24h = true;
     s->nav_voice = true;
     s->map_detail = BF_DETAIL_AUTO;
     s->map_avoid_toll = false;
+    s->kbd_layout = 0;                  /* automático: ABNT2 em português, EUA nas outras */
 }
 
 static void mkdir_p(const char *path)
@@ -121,6 +140,27 @@ void settings_load(void)
         else if(!strcmp(k, "music_bg"))      cur.music_bg = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "music_light"))   cur.music_light = atoi(v) != 0;
         else if(!strcmp(k, "gallery_sort"))  cur.gallery_sort = atoi(v) != 0;
+        else if(!strcmp(k, "web_js"))        cur.web_js = atoi(v) != 0;
+        else if(!strcmp(k, "web_no_images")) cur.web_no_images = atoi(v) != 0;
+        else if(!strcmp(k, "web_search"))    cur.web_search = clampi(atoi(v), 0, 15);
+        else if(!strcmp(k, "web_zoom"))      cur.web_zoom = clampi(atoi(v), 50, 200);
+        else if(!strcmp(k, "web_pc"))        cur.web_pc = atoi(v) != 0;
+        else if(!strcmp(k, "web_fs_sharp"))  cur.web_fs_sharp = atoi(v) != 0;
+        else if(!strcmp(k, "web_perf") || !strcmp(k, "perf_auto")) cur.perf_auto = atoi(v) != 0;   /* web_perf: 0.4 */
+        else if(!strcmp(k, "perf_enter_s"))  cur.perf_enter_s = clampi(atoi(v), 0, 60);
+        else if(!strcmp(k, "perf_exit_s"))   cur.perf_exit_s = clampi(atoi(v), 1, 600);
+        else if(!strcmp(k, "perf_svc"))      cur.perf_svc = (unsigned)strtoul(v, NULL, 0) & 0xfu;
+        else if(!strcmp(k, "perf_quiet"))    cur.perf_quiet = atoi(v) != 0;
+        else if(!strcmp(k, "perf_prio"))     cur.perf_prio = atoi(v) != 0;
+        else if(!strcmp(k, "perf_tag"))      cur.perf_tag = atoi(v) != 0;
+        else if(!strcmp(k, "perf_modal"))    cur.perf_modal = atoi(v) != 0;
+        else if(!strcmp(k, "perf_pad"))      cur.perf_pad = atoi(v) != 0;
+        else if(!strcmp(k, "perf_tv"))       cur.perf_tv = atoi(v) != 0;
+        else if(!strcmp(k, "perf_stream"))   cur.perf_stream = atoi(v) != 0;
+        else if(!strcmp(k, "perf_wall"))     cur.perf_wall = atoi(v) != 0;
+        else if(!strcmp(k, "perf_always"))   cur.perf_always = atoi(v) != 0;
+        else if(!strcmp(k, "power_plan"))    cur.power_plan = clampi(atoi(v), 0, BF_PLAN__N - 1);
+        else if(!strcmp(k, "fx_level"))      cur.fx_level = clampi(atoi(v), 0, BF_FX__N - 1);
         else if(!strcmp(k, "book_font"))     cur.book_font = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_space"))    cur.book_space = clampi(atoi(v), 0, 2);
         else if(!strcmp(k, "book_margin"))   cur.book_margin = clampi(atoi(v), 0, 2);
@@ -130,6 +170,7 @@ void settings_load(void)
         else if(!strcmp(k, "map_avoid_toll")) cur.map_avoid_toll = atoi(v) != 0;
         else if(!strcmp(k, "show_date")) cur.show_date = atoi(v) != 0;
         else if(!strcmp(k, "clock_24h")) cur.clock_24h = atoi(v) != 0;
+        else if(!strcmp(k, "kbd_layout")) cur.kbd_layout = clampi(atoi(v), 0, 3);
     }
     fclose(f);
 }
@@ -162,6 +203,16 @@ bool settings_save(void)
     fprintf(f, "music_bg = %d\n", cur.music_bg);
     fprintf(f, "music_light = %d\n", cur.music_light ? 1 : 0);
     fprintf(f, "gallery_sort = %d\n", cur.gallery_sort ? 1 : 0);
+    fprintf(f, "web_js = %d\nweb_no_images = %d\nweb_search = %d\nweb_zoom = %d\nweb_pc = %d\n",
+            cur.web_js ? 1 : 0, cur.web_no_images ? 1 : 0, cur.web_search, cur.web_zoom, cur.web_pc ? 1 : 0);
+    fprintf(f, "web_fs_sharp = %d\n", cur.web_fs_sharp ? 1 : 0);
+    fprintf(f, "perf_auto = %d\nperf_enter_s = %d\nperf_exit_s = %d\nperf_svc = %u\nperf_quiet = %d\n"
+               "perf_prio = %d\nperf_tag = %d\nperf_modal = %d\nperf_pad = %d\nperf_tv = %d\nperf_wall = %d\n"
+               "perf_always = %d\npower_plan = %d\nfx_level = %d\n",
+            cur.perf_auto ? 1 : 0, cur.perf_enter_s, cur.perf_exit_s, cur.perf_svc, cur.perf_quiet ? 1 : 0,
+            cur.perf_prio ? 1 : 0, cur.perf_tag ? 1 : 0, cur.perf_modal ? 1 : 0, cur.perf_pad ? 1 : 0,
+            cur.perf_tv ? 1 : 0, cur.perf_wall ? 1 : 0, cur.perf_always ? 1 : 0, cur.power_plan, cur.fx_level);
+    fprintf(f, "perf_stream = %d\n", cur.perf_stream ? 1 : 0);
     fprintf(f, "book_font = %d\nbook_space = %d\nbook_margin = %d\nbook_theme = %d\n",
             cur.book_font, cur.book_space, cur.book_margin, cur.book_theme);
     fprintf(f, "nav_voice = %d\n", cur.nav_voice ? 1 : 0);
@@ -169,6 +220,7 @@ bool settings_save(void)
     fprintf(f, "map_avoid_toll = %d\n", cur.map_avoid_toll ? 1 : 0);
     fprintf(f, "show_date = %d\n", cur.show_date);
     fprintf(f, "clock_24h = %d\n", cur.clock_24h);
+    fprintf(f, "kbd_layout = %d\n", cur.kbd_layout);
     /* no cartão SD (FAT): o conteúdo vai ao cartão antes da troca de nome */
     bool ok = fflush(f) == 0 && fsync(fileno(f)) == 0;
     fclose(f);

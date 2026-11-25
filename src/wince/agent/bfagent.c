@@ -30,11 +30,15 @@
 #include "bfp.h"
 #include "boot.h"
 #include "sha256.h"
+#include "ui.h"
 
-#define AGENT_VERSION "bfagent 0.6.2"
-#define AGENT_VERSION_W L"bfagent 0.6.2"
+#define AGENT_VERSION "bfagent 0.7.0"
+#define AGENT_VERSION_W L"bfagent 0.7.0"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
+#define WM_APP_COUNT  (WM_APP + 2)     /* wParam 1: a contagem começou (anima a barra), 0: acabou */
+#define TIMER_IDLE 1
+#define TIMER_BAR  2
 
 /* ------------------------------------------------------------------ state */
 
@@ -48,14 +52,22 @@ static WCHAR g_origin_dir[MAX_PATH];
 static WCHAR g_port_name[16];
 static WCHAR g_prev_client[128];
 static int g_switched_usb;
-static WCHAR g_status[200] = L"Iniciando...";
-static WCHAR g_last[200] = L"";
 static DWORD g_requests;
-static RECT g_exit_button;
 static FILE *g_log;
 /* boot automático do Linux da memória interna (autoboot.conf) */
 static volatile LONG g_autoboot;           /* 0 nada, 1 contando, 2 cancelado, 3 agora */
-static RECT g_btn_stay, g_btn_now;
+static volatile LONG g_cd_total, g_cd_start;   /* contagem: duração e início (GetTickCount, ms) */
+static volatile LONG g_linux_ok;           /* Linux completo na memória interna */
+/* tela Dual Boot (ui.c): o registro em várias linhas, o cartão com o dedo em cima */
+static ui_line_t g_lines[UI_LINES];
+static int g_nlines;
+static CRITICAL_SECTION g_ui_lock;
+static int g_pressed;
+static int g_ui_ok;
+static WCHAR g_port_label[16];             /* a porta aberta, sem os dois-pontos ("COM9") */
+static volatile LONG g_redraw_pending;     /* um redesenho já pedido: não acumula mensagens */
+#define TIMER_REDRAW 3
+#define REDRAW_MS    80                    /* no máximo ~12 quadros/s, mesmo com milhares de pedidos */
 
 static void log_line(const char *fmt, ...)
 {
@@ -70,17 +82,47 @@ static void log_line(const char *fmt, ...)
     fflush(g_log);
 }
 
-static void set_text(WCHAR *dst, const WCHAR *src)
+/* sem wcscmp: só funções da CRT do coredll que o agente já usava com sucesso */
+static int same_text(const WCHAR *a, const WCHAR *b)
 {
-    wcsncpy(dst, src, 199);
-    dst[199] = 0;
-    if (g_hwnd)
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/* uma linha no registro da tela. Os pedidos do PC (milhares numa cópia) ocupam uma linha só,
+ * a mais recente; um texto igual ao último não repete */
+static void log_add(int kind, const WCHAR *src)
+{
+    int i;
+    EnterCriticalSection(&g_ui_lock);
+    if (g_nlines && ((kind == UI_L_PC && g_lines[g_nlines - 1].kind == UI_L_PC) ||
+                     same_text(g_lines[g_nlines - 1].text, src)))
+        i = g_nlines - 1;
+    else {
+        if (g_nlines == UI_LINES) {
+            memmove(g_lines, g_lines + 1, sizeof(g_lines[0]) * (UI_LINES - 1));
+            g_nlines--;
+        }
+        i = g_nlines++;
+    }
+    g_lines[i].kind = kind;
+    wcsncpy(g_lines[i].text, src, UI_LINE_CHARS - 1);
+    g_lines[i].text[UI_LINE_CHARS - 1] = 0;
+    LeaveCriticalSection(&g_ui_lock);
+    if (g_hwnd && !InterlockedExchange(&g_redraw_pending, 1))
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
 }
 
 /* this device's coredll has no _vsnwprintf: format with _snwprintf only */
-#define STATUS(...) do { WCHAR s_[200]; _snwprintf(s_, 199, __VA_ARGS__); s_[199] = 0; set_text(g_status, s_); } while (0)
-#define LAST(...)   do { WCHAR s_[200]; _snwprintf(s_, 199, __VA_ARGS__); s_[199] = 0; set_text(g_last, s_); } while (0)
+#define LOGK(k, ...) do { WCHAR s_[200]; _snwprintf(s_, 199, __VA_ARGS__); s_[199] = 0; log_add((k), s_); } while (0)
+#define STATUS(...) LOGK(UI_L_INFO, __VA_ARGS__)
+#define OK_(...)    LOGK(UI_L_OK, __VA_ARGS__)
+#define WARN(...)   LOGK(UI_L_WARN, __VA_ARGS__)
+#define FAIL(...)   LOGK(UI_L_ERR, __VA_ARGS__)
+#define LAST(...)   LOGK(UI_L_PC, __VA_ARGS__)
 
 /* --------------------------------------------- kernel/coredll entry points */
 
@@ -1134,11 +1176,11 @@ static void cmd_boot(const bfp_msg *req)
      * (suspected cause of initramfs corruption, 2026-11-19). The delay lets
      * the user unplug the cable first. */
     while (delay) {
-        STATUS(L"DESCONECTE O CABO USB.  Linux inicia em %u s  (reset volta ao Windows CE)", delay);
+        WARN(L"Desconecte o cabo USB: o Linux inicia em %u s (o reset volta ao Windows CE).", delay);
         Sleep(1000);
         delay--;
     }
-    STATUS(L"Iniciando %ls ... (reset volta ao Windows CE)", args.kernel);
+    STATUS(L"Iniciando %ls... (o reset volta ao Windows CE)", args.kernel);
     Sleep(300);                                  /* let the reply and the screen update out */
     if (g_log) {
         fclose(g_log);
@@ -1148,7 +1190,7 @@ static void cmd_boot(const bfp_msg *req)
         WCHAR w[240];
         MultiByteToWideChar(CP_UTF8, 0, err, -1, w, 239);
         w[239] = 0;
-        STATUS(L"Boot falhou: %ls", w);
+        FAIL(L"O início falhou: %ls", w);
     }
 }
 
@@ -1229,7 +1271,7 @@ static void handle(const bfp_msg *m)
     /* o PC falou com o agente durante a contagem: ele assume o controle */
     if (g_autoboot == 1) {
         InterlockedExchange(&g_autoboot, 2);
-        STATUS(L"PC conectado: boot automatico cancelado.");
+        WARN(L"PC conectado: início automático cancelado.");
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
     }
     if (!m->crc_ok) {
@@ -1480,7 +1522,7 @@ static DWORD WINAPI comm_thread(LPVOID unused)
     bfp_parser parser;
     (void)unused;
     if (!rx) {
-        STATUS(L"Sem memoria.");
+        FAIL(L"Sem memória.");
         return 1;
     }
     if (p_CeSetThreadPriority)
@@ -1490,17 +1532,23 @@ static DWORD WINAPI comm_thread(LPVOID unused)
         if (!ensure_serial_client())
             log_line("usb function switching unavailable");
         if (!find_usb_serial_port(g_port_name, 16)) {
-            STATUS(L"Aguardando a porta USB serial. Conecte o cabo USB.");
+            STATUS(L"Aguardando a porta USB serial (cabo USB ao PC).");
             Sleep(1500);
             continue;
         }
         g_port = open_port(g_port_name);
         if (g_port == INVALID_HANDLE_VALUE) {
-            STATUS(L"Porta %ls ocupada (erro %lu).", g_port_name, GetLastError());
+            WARN(L"Porta %ls ocupada (erro %lu).", g_port_name, GetLastError());
             Sleep(1500);
             continue;
         }
-        STATUS(L"Pronto em %ls. Rode no PC: tools/bigfoston/bfagent.py info", g_port_name);
+        {   /* "COM9:" -> "COM9" para a tela */
+            int k;
+            for (k = 0; k < 15 && g_port_name[k] && g_port_name[k] != L':'; k++)
+                g_port_label[k] = g_port_name[k];
+            g_port_label[k] = 0;
+        }
+        OK_(L"Pronto na porta %ls. No PC: tools/bigfoston/bfagent.py info", g_port_label);
         log_line("port %ls open", g_port_name);
         bfp_parser_init(&parser, rx, BFP_HEADER + BFP_MAX_REQUEST + 4096);
         while (!g_quit) {
@@ -1711,7 +1759,7 @@ static void update_reject(const char *why)
 {
     upd_log("RECUSADA: %s; o Linux instalado continua", why);
     update_retire(UPDATE_DIR L".bad");
-    STATUS(L"Atualizacao do SD recusada (ver BigFoston\\update.log no cartao).");
+    FAIL(L"Atualização do cartão recusada (ver BigFoston\\update.log no cartão).");
     PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
     Sleep(3000);
 }
@@ -1756,7 +1804,7 @@ static void apply_sd_update(void)
         Sleep(500);                        /* the card may still be mounting at power-on */
     if (!file_exists(UPDATE_DIR L"\\SHA256SUMS"))
         return;
-    STATUS(L"Atualizacao do BigFoston encontrada no cartao SD: conferindo...");
+    STATUS(L"Atualização do BigFoston encontrada no cartão SD: conferindo...");
     PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
 
     f = _wfopen(UPDATE_DIR L"\\SHA256SUMS", L"rb");
@@ -1812,7 +1860,7 @@ static void apply_sd_update(void)
     for (i = 0; i < UPD_FILES; i++) {
         WCHAR tmp[MAX_PATH];
         DWORD err;
-        STATUS(L"Atualizacao do BigFoston: gravando %ls na memoria interna...", upd_names[i]);
+        STATUS(L"Gravando %ls na memória interna...", upd_names[i]);
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
         _snwprintf(src, MAX_PATH - 1, L"%ls\\%ls", UPDATE_DIR, upd_names[i]);
         _snwprintf(dst, MAX_PATH - 1, L"%ls\\%ls", LINUX_DIR, upd_names[i]);
@@ -1832,7 +1880,7 @@ static void apply_sd_update(void)
         err = GetLastError();
         upd_log("INCOMPLETA: %ls nao foi gravado na memoria interna (erro %lu); a atualizacao fica no "
                 "cartao e continua no proximo boot", upd_names[i], (unsigned long)err);
-        STATUS(L"Atualizacao incompleta: desligue e ligue de novo (ver BigFoston\\update.log).");
+        FAIL(L"Atualização incompleta: desligue e ligue de novo (ver BigFoston\\update.log).");
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
         Sleep(3000);
         return;
@@ -1849,7 +1897,7 @@ static void apply_sd_update(void)
     upd_log("APLICADA: zImage %lu, initrd.img %lu, fs707dc.dtb %lu bytes; zImage %.16s",
             (unsigned long)size[0], (unsigned long)size[1], (unsigned long)size[2], want[0]);
     update_retire(UPDATE_DIR L".ok");
-    STATUS(L"Atualizacao do BigFoston instalada e conferida.");
+    OK_(L"Atualização do BigFoston instalada e conferida.");
     PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
     Sleep(1500);
 }
@@ -1892,11 +1940,11 @@ static void do_autoboot(void)
         CloseHandle(f);
     }
     if (!bf_stage_data[1]) {
-        STATUS(L"Boot automatico: fs707dc.dtb ausente ou ilegivel.");
+        FAIL(L"Início: fs707dc.dtb ausente ou ilegível.");
         InterlockedExchange(&g_autoboot, 2);
         return;
     }
-    STATUS(L"Iniciando o BigFoston (Linux)...  (reset volta ao Windows CE)");
+    STATUS(L"Iniciando o BigFoston (Linux)... (o reset volta ao Windows CE)");
     PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
     Sleep(300);
     log_line("autoboot: %ls", args.kernel);
@@ -1908,7 +1956,7 @@ static void do_autoboot(void)
         WCHAR w[240];
         MultiByteToWideChar(CP_UTF8, 0, err, -1, w, 239);
         w[239] = 0;
-        STATUS(L"Boot automatico falhou: %ls", w);
+        FAIL(L"O início do BigFoston falhou: %ls", w);
         InterlockedExchange(&g_autoboot, 2);
         PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
     }
@@ -1924,26 +1972,58 @@ static int linux_installed(void)
 static DWORD WINAPI autoboot_thread(LPVOID arg)
 {
     int left = (int)(intptr_t)arg;
+    DWORD total;
     apply_sd_update();
-    if (!linux_installed()) {
+    InterlockedExchange(&g_linux_ok, linux_installed());
+    if (!g_linux_ok) {
         InterlockedExchange(&g_autoboot, 2);
-        STATUS(L"Linux da memoria interna incompleto: ficando no Windows CE. Desligue e ligue para continuar "
-               L"a atualizacao do cartao, ou copie BigFoston\\recuperacao\\linux-0.2.0 para BigFoston\\update.");
-        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        FAIL(L"Linux da memória interna incompleto: ficando no Windows CE. Desligue e ligue para continuar "
+             L"a atualização do cartão, ou copie BigFoston\\recuperacao\\linux-0.2.0 para BigFoston\\update.");
         return 0;
     }
-    for (; left > 0 && g_autoboot == 1; left--) {
-        STATUS(L"Iniciando o BigFoston (Linux) em %d s.  Toque em \"Ficar no Windows CE\" para cancelar.", left);
-        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
-        Sleep(1000);
-    }
+    /* a contagem anda em milissegundos: a barra de progresso avança suave (WM_APP_COUNT liga o
+     * temporizador da tela); um toque, o PC ou "Iniciar agora" mudam g_autoboot e encerram */
+    total = (DWORD)left * 1000;
+    InterlockedExchange(&g_cd_total, (LONG)total);
+    InterlockedExchange(&g_cd_start, (LONG)GetTickCount());
+    STATUS(L"Início automático do BigFoston em %d s.", left);
+    PostMessageW(g_hwnd, WM_APP_COUNT, 1, 0);
+    while (g_autoboot == 1 && GetTickCount() - (DWORD)g_cd_start < total)
+        Sleep(50);
+    PostMessageW(g_hwnd, WM_APP_COUNT, 0, 0);
     if (g_autoboot == 2) {
-        STATUS(L"Boot automatico cancelado: ficando no Windows CE. Use Sair para voltar ao menu.");
-        PostMessageW(g_hwnd, WM_APP_REDRAW, 0, 0);
+        WARN(L"Início automático cancelado: ficando no Windows CE.");
         return 0;
     }
+    InterlockedExchange(&g_autoboot, 3);
     do_autoboot();
     return 0;
+}
+
+/* "Iniciar o BigFoston" tocado fora da contagem (cancelada, ou o agente aberto à mão) */
+static DWORD WINAPI manual_boot_thread(LPVOID unused)
+{
+    do_autoboot();
+    return 0;
+}
+
+static void start_linux_now(void)
+{
+    HANDLE t;
+    if (!g_linux_ok || g_autoboot == 3)
+        return;
+    if (g_autoboot == 1) {                 /* a contagem segue para o início na hora */
+        InterlockedExchange(&g_autoboot, 3);
+        return;
+    }
+    InterlockedExchange(&g_autoboot, 3);
+    t = CreateThread(NULL, 0, manual_boot_thread, NULL, 0, NULL);
+    if (t)
+        CloseHandle(t);
+    else {
+        InterlockedExchange(&g_autoboot, 2);
+        FAIL(L"Não foi possível iniciar o BigFoston (sem memória).");
+    }
 }
 
 /* Só no início do aparelho (agente aberto pelo Launch90 a partir da memória
@@ -1976,66 +2056,55 @@ static void autoboot_start(void)
         InterlockedExchange(&g_autoboot, 0);
 }
 
-static void paint(HDC dc)
+static void paint(HDC dc, const RECT *clip)
 {
-    RECT r;
-    HBRUSH bg = CreateSolidBrush(RGB(0x1b, 0x1f, 0x27));
-    HBRUSH accent = CreateSolidBrush(RGB(0x35, 0x84, 0xe4));
-    HBRUSH button = CreateSolidBrush(RGB(0x3a, 0x3f, 0x4b));
-    LOGFONTW lf;
-    HFONT font_big, font_small, old;
-    SetRect(&r, 0, 0, g_width, g_height);
-    FillRect(dc, &r, bg);
-    SetRect(&r, 0, 0, g_width, 6);
-    FillRect(dc, &r, accent);
-    SetBkMode(dc, TRANSPARENT);
-    memset(&lf, 0, sizeof(lf));
-    lf.lfHeight = 40;
-    lf.lfWeight = FW_BOLD;
-    wcscpy(lf.lfFaceName, L"Tahoma");
-    font_big = CreateFontIndirectW(&lf);
-    lf.lfHeight = 22;
-    lf.lfWeight = FW_NORMAL;
-    font_small = CreateFontIndirectW(&lf);
-    old = (HFONT)SelectObject(dc, font_big);
-    SetTextColor(dc, RGB(0xff, 0xff, 0xff));
-    SetRect(&r, 32, 40, g_width - 32, 100);
-    DrawTextW(dc, L"BigFoston  \x2022  modo diagnostico", -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    SelectObject(dc, font_small);
-    SetTextColor(dc, RGB(0x99, 0xc1, 0xf1));
-    SetRect(&r, 32, 100, g_width - 32, 130);
-    DrawTextW(dc, AGENT_VERSION_W, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    SetTextColor(dc, RGB(0xde, 0xdd, 0xda));
-    SetRect(&r, 32, 160, g_width - 32, 280);
-    DrawTextW(dc, g_status, -1, &r, DT_LEFT | DT_TOP | DT_WORDBREAK);
-    SetTextColor(dc, RGB(0x8f, 0xf0, 0xa4));
-    SetRect(&r, 32, 290, g_width - 32, 330);
-    DrawTextW(dc, g_last, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    if (g_autoboot == 1) {
-        HBRUSH stay = CreateSolidBrush(RGB(0x3a, 0x3f, 0x4b)), now = CreateSolidBrush(RGB(0x35, 0x84, 0xe4));
-        FillRect(dc, &g_btn_stay, stay);
-        FillRect(dc, &g_btn_now, now);
-        SetTextColor(dc, RGB(0xff, 0xff, 0xff));
-        DrawTextW(dc, L"Ficar no Windows CE", -1, &g_btn_stay, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DrawTextW(dc, L"Iniciar agora", -1, &g_btn_now, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        DeleteObject(stay);
-        DeleteObject(now);
-    } else {
-        SetTextColor(dc, RGB(0x9a, 0x99, 0x96));
-        SetRect(&r, 32, 360, g_width - 240, g_height - 20);
-        DrawTextW(dc, L"Leitura do aparelho; gravacao so na pasta BigFoston e no autostart.", -1, &r,
-                  DT_LEFT | DT_TOP | DT_WORDBREAK);
+    ui_state_t st;
+    ui_line_t lines[UI_LINES];
+    DWORD now = GetTickCount();
+    memset(&st, 0, sizeof(st));
+    EnterCriticalSection(&g_ui_lock);
+    memcpy(lines, g_lines, sizeof(lines));
+    st.nlines = g_nlines;
+    LeaveCriticalSection(&g_ui_lock);
+    st.lines = lines;
+    st.autoboot = (int)g_autoboot;
+    st.linux_ok = (int)g_linux_ok;
+    st.cd_total_ms = (DWORD)g_cd_total;
+    st.cd_elapsed_ms = now - (DWORD)g_cd_start;
+    if (st.cd_elapsed_ms > st.cd_total_ms)
+        st.cd_elapsed_ms = st.cd_total_ms;
+    st.requests = g_requests;
+    st.pressed = g_pressed;
+    st.version = AGENT_VERSION_W;
+    st.port = g_port_label;
+    if (g_ui_ok) {
+        ui_paint(dc, &st, clip);
+        return;
     }
-    FillRect(dc, &g_exit_button, button);
-    SetTextColor(dc, RGB(0xff, 0xff, 0xff));
-    SelectObject(dc, font_big);
-    DrawTextW(dc, L"Sair", -1, &g_exit_button, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    SelectObject(dc, old);
-    DeleteObject(font_big);
-    DeleteObject(font_small);
-    DeleteObject(bg);
-    DeleteObject(accent);
-    DeleteObject(button);
+    {   /* sem memória para a tela própria: o mínimo, para não ficar preta */
+        RECT r;
+        HBRUSH bg = CreateSolidBrush(RGB(0x13, 0x20, 0x4a));
+        SetRect(&r, 0, 0, g_width, g_height);
+        FillRect(dc, &r, bg);
+        DeleteObject(bg);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(0xee, 0xf1, 0xf6));
+        SetRect(&r, 24, 24, g_width - 24, g_height - 24);
+        DrawTextW(dc, st.nlines ? lines[st.nlines - 1].text : AGENT_VERSION_W, -1, &r, DT_LEFT | DT_TOP | DT_WORDBREAK);
+    }
+}
+
+/* toque solto em cima de um cartão: o que ele faz depende da contagem */
+static void card_action(HWND hwnd, int hit)
+{
+    if (hit == UI_HIT_LINUX)
+        start_linux_now();
+    else if (hit == UI_HIT_CE) {
+        if (g_autoboot == 1)
+            InterlockedExchange(&g_autoboot, 2);          /* ficar no Windows CE */
+        else if (g_autoboot != 3)
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);           /* voltar ao Windows CE: fecha o agente */
+    }
 }
 
 static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -2044,31 +2113,66 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);
-        paint(dc);
+        paint(dc, &ps.rcPaint);
         EndPaint(hwnd, &ps);
         return 0;
     }
+    case WM_ERASEBKGND:
+        return 1;                              /* a tela inteira é desenhada de uma vez: sem piscar */
     case WM_APP_REDRAW:
+        /* junta os pedidos de redesenho de REDRAW_MS em um (uma cópia grande gera milhares) */
+        SetTimer(hwnd, TIMER_REDRAW, REDRAW_MS, NULL);
+        return 0;
+    case WM_APP_COUNT:
+        if (wp)
+            SetTimer(hwnd, TIMER_BAR, 100, NULL);
+        else
+            KillTimer(hwnd, TIMER_BAR);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
-    case WM_LBUTTONUP: {
-        POINT pt;
-        pt.x = (short)LOWORD(lp);
-        pt.y = (short)HIWORD(lp);
-        if (g_autoboot == 1 && PtInRect(&g_btn_stay, pt)) {
-            InterlockedExchange(&g_autoboot, 2);
+    case WM_LBUTTONDOWN:
+        if (g_ui_ok) {
+            int hit = ui_hit((short)LOWORD(lp), (short)HIWORD(lp));
+            /* só destaca o cartão que faz algo agora */
+            if ((hit == UI_HIT_LINUX && (!g_linux_ok || g_autoboot == 3)) || (hit == UI_HIT_CE && g_autoboot == 3))
+                hit = UI_HIT_NONE;
+            g_pressed = hit;
+            if (g_pressed)
+                InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+    case WM_MOUSEMOVE:
+        /* o dedo saiu do cartão: solta o destaque (e soltar ali não faz nada) */
+        if (g_pressed && ui_hit((short)LOWORD(lp), (short)HIWORD(lp)) != g_pressed) {
+            g_pressed = UI_HIT_NONE;
             InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+    case WM_LBUTTONUP: {
+        int was = g_pressed;
+        if (!g_ui_ok) {                        /* tela mínima: um toque fica no CE (cancela ou fecha) */
+            card_action(hwnd, UI_HIT_CE);
             return 0;
         }
-        if (g_autoboot == 1 && PtInRect(&g_btn_now, pt)) {
-            InterlockedExchange(&g_autoboot, 3);
-            return 0;
-        }
-        if (PtInRect(&g_exit_button, pt))
-            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+        g_pressed = UI_HIT_NONE;
+        if (was && ui_hit((short)LOWORD(lp), (short)HIWORD(lp)) == was)
+            card_action(hwnd, was);
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
     case WM_TIMER:
+        if (wp == TIMER_REDRAW) {
+            KillTimer(hwnd, TIMER_REDRAW);
+            InterlockedExchange(&g_redraw_pending, 0);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        if (wp == TIMER_BAR) {
+            RECT r;
+            ui_progress_rect(&r);
+            InvalidateRect(hwnd, &r, FALSE);
+            return 0;
+        }
         if (p_idle_reset)
             p_idle_reset();
         return 0;
@@ -2144,6 +2248,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     } else if (!(cmd && wcsstr(cmd, L"/norelocate")) && relocate(self)) {
         return 0;
     }
+    InitializeCriticalSection(&g_ui_lock);
     g_log = _wfopen(L"\\Temp\\bfagent.log", L"w");
     log_line("%s starting from %ls (origin %ls)", AGENT_VERSION, self, g_origin_dir);
     InitializeCriticalSection(&g_write_lock);
@@ -2152,16 +2257,22 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
         p_SetProcPermissions(0xFFFFFFFF);     /* see every process slot (needed by VirtualCopy on CE 5) */
     g_width = GetSystemMetrics(SM_CXSCREEN);
     g_height = GetSystemMetrics(SM_CYSCREEN);
-    SetRect(&g_exit_button, g_width - 200, g_height - 100, g_width - 24, g_height - 24);
-    SetRect(&g_btn_stay, 32, 290, g_width / 2 - 10, 370);
-    SetRect(&g_btn_now, g_width / 2 + 10, 290, g_width - 32, 370);
+    {
+        HDC screen = GetDC(NULL);
+        g_ui_ok = ui_init(screen, g_width, g_height);
+        ReleaseDC(NULL, screen);
+        if (!g_ui_ok)
+            log_line("tela: sem memoria para os buffers; usando a tela minima");
+    }
+    InterlockedExchange(&g_linux_ok, linux_installed());
+    STATUS(L"%ls iniciado (%ls).", AGENT_VERSION_W, g_origin_dir);
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wnd_proc;
     wc.hInstance = inst;
     wc.lpszClassName = AGENT_CLASS;
     RegisterClassW(&wc);
-    g_hwnd = CreateWindowExW(WS_EX_TOPMOST, AGENT_CLASS, L"BigFoston Agent", WS_VISIBLE | WS_POPUP, 0, 0, g_width,
+    g_hwnd = CreateWindowExW(WS_EX_TOPMOST, AGENT_CLASS, L"BigFoston Dual Boot", WS_VISIBLE | WS_POPUP, 0, 0, g_width,
                              g_height, NULL, NULL, inst, NULL);
     if (!g_hwnd)
         return 1;
@@ -2169,7 +2280,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     if (taskbar)
         ShowWindow(taskbar, SW_HIDE);
     SetForegroundWindow(g_hwnd);
-    SetTimer(g_hwnd, 1, 5000, NULL);
+    SetTimer(g_hwnd, TIMER_IDLE, 5000, NULL);
 
     thread = CreateThread(NULL, 0, comm_thread, NULL, 0, NULL);
     autoboot_start();
@@ -2204,6 +2315,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
         }
         g_log = NULL;
     }
+    ui_free();
     restore_usb_client();
     if (taskbar)
         ShowWindow(taskbar, SW_SHOW);

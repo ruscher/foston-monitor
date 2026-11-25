@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #endif
 #include "screens.h"
+#include "../core/perfui.h"
 #include "../core/theme.h"
 #include "../core/settings.h"
 #include "../widgets/glass.h"
@@ -27,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -192,9 +194,14 @@ static const char *ch_label(int i, char *b, size_t n)
 
 static void tv_spawn(char *const argv[])
 {
+    pid_t parent = getpid();
     pid_t p = fork();
     if(p == 0) {
         setsid();
+        /* o shell morreu (atualizado, travou): o vídeo para junto, senão continua desenhando
+         * por cima da interface nova sem ninguém para pará-lo */
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        if(getppid() != parent) _exit(0);
         int nul = open("/dev/null", O_RDWR);               /* nada do player no log do shell */
         if(nul >= 0) { dup2(nul, 0); dup2(nul, 1); dup2(nul, 2); }
         execv(argv[0], argv);
@@ -634,6 +641,23 @@ static void fs_exit(void)
 
 static void on_fs(lv_event_t *e) { (void)e; fs_enter(); }
 
+/* tocar na imagem: tela cheia (lá, qualquer toque volta: on_fs_tap) */
+static void on_video_tap(lv_event_t *e) { (void)e; if(!stopped) fs_enter(); }
+
+/* algo visível na camada de cima além da tela cheia (um diálogo, um aviso): sai dela. Antes
+ * contava os filhos: a etiqueta do modo performance (escondida na TV, mas sempre na camada)
+ * fazia a tela cheia abrir e fechar na hora desde que a TV liga o modo sozinha */
+static bool top_busy(void)
+{
+    lv_obj_t *top = lv_layer_top();
+    uint32_t n = lv_obj_get_child_count(top);
+    for(uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(top, (int32_t)i);
+        if(c != fs_ov && !lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) return true;
+    }
+    return false;
+}
+
 /* ------------------------------------------------------------ volume no rodapé */
 
 static void vol_show(int v)
@@ -899,7 +923,7 @@ static void tick_cb(lv_timer_t *t)
     bool gone = tv_reap();
     if(gone && want_start) { want_start = false; tv_start_now(); }
     /* tela cheia: sai se o vídeo parou ou se algo precisa aparecer (chamada recebida, aviso) */
-    if(fs_on && (tv_pid <= 0 || lv_obj_get_child_count(lv_layer_top()) > 1)) fs_exit();
+    if(fs_on && (tv_pid <= 0 || top_busy())) fs_exit();
     if(fs_on) return;                                    /* nada se redesenha por cima do vídeo */
     if(vol_row && vol_until && ms_now() > vol_until) {
         vol_until = 0;
@@ -938,6 +962,7 @@ static void create(lv_obj_t *parent, int arg)
 {
     (void)arg;
     app_wallpaper_visible(false);                        /* TV: tudo preto */
+    perfui_tv(true);                                     /* modo performance (perf_tv) */
     root = bf_plain(parent);
     lv_obj_set_size(root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(root, lv_color_black(), 0);
@@ -955,6 +980,8 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_bg_color(video, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(video, LV_OPA_COVER, 0);
     panel = box(video, AREA_W, area_h);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(panel, on_video_tap, LV_EVENT_CLICKED, NULL);
     build_column(area_h);                                /* o controle acaba onde começa o rodapé */
     build_footer(area_h, h - area_h);
     lv_obj_update_layout(root);
@@ -988,6 +1015,7 @@ static void destroy(void)
         if(tv_pid > 0) { waitpid(tv_pid, NULL, 0); tv_pid = 0; }
     }
     app_wallpaper_visible(true);
+    perfui_tv(false);
     root = col = video = panel = foot = ft_info = ft_name = ft_sub = ft_bars = vol_row = vol_sl = vol_pct = NULL;
     play_btn = stop_btn = rec_btn = rec_dot = rec_txt = chdn = chup = list_btn = fs_btn = volup = voldn = NULL;
     memset(src_btn, 0, sizeof src_btn);

@@ -9,6 +9,12 @@ start)
     done
     if ip link set lo up && ip addr add 192.168.7.2/24 dev usb0 && ip link set usb0 up; then
         echo "bigfoston: usb0 192.168.7.2 up" > /dev/kmsg
+        # internet pelo PC (compartilhamento/NAT em 192.168.7.1; app Internet, NTP).
+        # metric 200: uma rota melhor (Bluetooth PAN do celular) ganha desta.
+        ip route add default via 192.168.7.1 dev usb0 metric 200 2>/dev/null
+        # DNS: o do PC e públicos (o musl pergunta a todos ao mesmo tempo; um firewall
+        # no PC que bloqueie o 53 não impede os outros)
+        [ -s /run/resolv.conf ] || printf 'nameserver 192.168.7.1\nnameserver 1.1.1.1\nnameserver 9.9.9.9\n' > /run/resolv.conf
     else
         echo "bigfoston: usb0 missing ($(ls /sys/class/net | tr '\n' ' '))" > /dev/kmsg
     fi

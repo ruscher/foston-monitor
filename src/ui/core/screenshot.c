@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #if !BIGFOSTON_SCREENSHOT
+
 int screenshot_run(const char *dir)
 {
     fprintf(stderr, "bigfoston: --screenshot não incluído neste build (SCREENSHOT=1)\n");
@@ -26,6 +27,17 @@ int screenshot_run(const char *dir)
 #include "../screens/screens.h"
 #include "../widgets/bottombar.h"
 #include "../widgets/dialog.h"
+#include "webremote.h"
+#include "hwkbd.h"
+#include "gamepad.h"
+#include "apps.h"
+#include "launcher.h"
+#include "appgroups.h"
+#include "../screens/launcher_ui.h"
+#include "../widgets/ctxmenu.h"
+#include "../widgets/namebox.h"
+#include "padmap.h"
+#include <linux/input.h>
 #include "lodepng.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +119,722 @@ static void wait_runner(void)
     pump(150);
 }
 
+/* ---------------------------------------------- teclado físico (core/hwkbd.c) */
+static int kb_fail;
+
+static void kfeed(uint16_t code, uint16_t mod)
+{
+    if(mod) hwkbd_feed(mod, 1);
+    hwkbd_feed(code, 1);
+    hwkbd_feed(code, 0);
+    if(mod) hwkbd_feed(mod, 0);
+    pump(15);
+}
+
+/* digita como num ABNT2 (só o que os testes usam) */
+static void ktype(const char *s)
+{
+    static const char row1[] = "qwertyuiop", row2[] = "asdfghjkl", row3[] = "zxcvbnm";
+    for(; *s; s++) {
+        char c = *s, l = (char)(c | 0x20);
+        const char *p;
+        uint16_t sh = (c >= 'A' && c <= 'Z') ? KEY_LEFTSHIFT : 0;
+        if((p = strchr(row1, l)) && l >= 'a') kfeed((uint16_t)(KEY_Q + (p - row1)), sh);
+        else if((p = strchr(row2, l)) && l >= 'a') kfeed((uint16_t)(KEY_A + (p - row2)), sh);
+        else if((p = strchr(row3, l)) && l >= 'a') kfeed((uint16_t)(KEY_Z + (p - row3)), sh);
+        else if(c >= '1' && c <= '9') kfeed((uint16_t)(KEY_1 + (c - '1')), 0);
+        else if(c == '0') kfeed(KEY_0, 0);
+        else if(c == ' ') kfeed(KEY_SPACE, 0);
+        else if(c == '-') kfeed(KEY_MINUS, 0);
+        else if(c == '.') kfeed(KEY_DOT, 0);
+        else if(c == ',') kfeed(KEY_COMMA, 0);
+    }
+}
+
+static void kcheck(const char *what, bool ok)
+{
+    printf("teclado: %s %s\n", ok ? "ok" : "FALHOU", what);
+    if(!ok) kb_fail++;
+}
+
+static lv_obj_t *find_class(lv_obj_t *o, const lv_obj_class_t *c)
+{
+    if(lv_obj_check_type(o, c)) return o;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *r = find_class(lv_obj_get_child(o, (int32_t)i), c);
+        if(r) return r;
+    }
+    return NULL;
+}
+
+static int dlg_answer = -9;
+static void dlg_cb(int b, void *ud) { (void)ud; dlg_answer = b; }
+
+static void keyboard_tests(void)
+{
+    /* Ajustes > Teclado físico: o campo de teste já recebe o texto, com acentos ABNT2 */
+    go(SCR_SETTINGS, 0);
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    ktype("Ola");
+    kfeed(KEY_COMMA, 0);
+    kfeed(KEY_SPACE, 0);
+    ktype("a");
+    kfeed(KEY_SEMICOLON, 0);                          /* ç */
+    kfeed(KEY_APOSTROPHE, 0); ktype("a");              /* ~a = ã */
+    ktype("o ");
+    kfeed(KEY_LEFTBRACE, 0); ktype("E");               /* ´E = É */
+    kfeed(KEY_SEMICOLON, KEY_LEFTSHIFT);              /* Ç */
+    lv_obj_t *ta = find_class(lv_screen_active(), &lv_textarea_class);
+    const char *t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("campo de teste ABNT2", !strcmp(t, "Ola, a\xC3\xA7\xC3\xA3o \xC3\x89\xC3\x87"));
+    kfeed(KEY_BACKSPACE, 0);
+    kfeed(KEY_BACKSPACE, KEY_LEFTCTRL);               /* apaga a palavra */
+    t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("Backspace e Ctrl+Backspace", !strcmp(t, "Ola, a\xC3\xA7\xC3\xA3o "));
+    kfeed(KEY_HOME, 0); ktype("X");
+    t = ta ? lv_textarea_get_text(ta) : "";
+    kcheck("Home move o cursor", t[0] == 'X');
+    shot("23b-teclado-fisico");
+
+    /* Esc com o campo em foco: sai do campo; o segundo volta para Ajustes */
+    kfeed(KEY_ESC, 0); pump(50);
+    kcheck("Esc sai do campo", ta && !lv_obj_has_state(ta, LV_STATE_FOCUSED));
+    kfeed(KEY_ESC, 0); pump(300);
+    kcheck("Esc volta", nav_current().scr == SCR_SETTINGS);
+    kfeed(KEY_PAGEDOWN, 0); pump(400);
+    lv_obj_t *pg = lv_obj_get_child(app_content(), 0);
+    kcheck("Page Down rola Ajustes", pg && lv_obj_get_scroll_y(pg) > 0);
+
+    /* diálogo: Enter = botão principal, Esc = fechar (-1) */
+    static const char *b2[] = { "Não", "Sim" };
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    kfeed(KEY_ENTER, 0); pump(50);
+    kcheck("Enter no diálogo", dlg_answer == 1 && !dialog_is_open());
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    kfeed(KEY_ESC, 0); pump(50);
+    kcheck("Esc no diálogo", dlg_answer == -1 && !dialog_is_open() && nav_current().scr == SCR_SETTINGS);
+
+    /* Arquivos/Run: o teclado da tela com campo; Enter = OK dele */
+    go(SCR_RUN, RUN_ARG_NORMAL); pump(300);
+    lv_obj_t *rta = find_class(lv_screen_active(), &lv_textarea_class);
+    if(rta) lv_obj_send_event(rta, LV_EVENT_CLICKED, NULL);
+    pump(100);
+    ktype("echo teclado-ok");
+    t = rta ? lv_textarea_get_text(rta) : "";
+    kcheck("Run recebe o texto", strstr(t, "echo teclado-ok") != NULL);
+    shot("23c-run-teclado");
+
+    /* Terminal: tudo vai para o shell; o teclado da tela some na primeira tecla */
+    go(SCR_TERM, 0); pump(500);
+    ktype("echo TECLADO ");
+    kfeed(KEY_LEFTBRACE, 0); ktype("a");               /* á pelo shell */
+    kfeed(KEY_ENTER, 0);
+    pump(800);
+    kfeed(KEY_L, KEY_LEFTCTRL);                       /* Ctrl+L limpa a tela */
+    pump(400);
+    ktype("echo fim");
+    kfeed(KEY_ENTER, 0);
+    pump(800);
+    shot("23d-terminal-teclado");
+    kfeed(KEY_ESC, 0); pump(300);
+    kcheck("Esc no Terminal vai para o shell", nav_current().scr == SCR_TERM);
+
+    /* Internet: na página inicial, digitar abre o endereço com a letra; Esc fecha */
+    go(SCR_WEB, 0); pump(400);
+    ktype("w");
+    pump(100);
+    lv_obj_t *wta = find_class(lv_screen_active(), &lv_textarea_class);
+    t = wta ? lv_textarea_get_text(wta) : "";
+    kcheck("Internet: digitar abre o endereço", !strcmp(t, "w"));
+    ktype("ikipedia");
+    shot("23e-internet-teclado");
+    kfeed(KEY_ESC, 0); pump(100);
+    kcheck("Internet: Esc fecha o endereço", !find_class(lv_screen_active(), &lv_textarea_class));
+    kfeed(KEY_L, KEY_LEFTCTRL); pump(100);
+    kcheck("Internet: Ctrl+L abre o endereço", find_class(lv_screen_active(), &lv_textarea_class) != NULL);
+    kfeed(KEY_ESC, 0); pump(100);
+    printf("teclado: %d falha(s)\n", kb_fail);
+}
+
+/* ---------------------------------------------- controle de jogo (core/gamepad.c) */
+static void pev(int slot, uint16_t type, uint16_t code, int32_t v) { gamepad_event(slot, type, code, v); pump(20); }
+static void pbtn(int slot, uint16_t code) { pev(slot, EV_KEY, code, 1); pev(slot, EV_KEY, code, 0); pump(30); }
+
+static int pad_clicks;
+static void pad_click(lv_event_t *e) { (void)e; pad_clicks++; }
+
+static void gamepad_tests(void)
+{
+    /* DualShock 4 sem driver (hid-generic): □=0x130 ✕=0x131 ○=0x132 △=0x133 ... PS=0x13c,
+     * analógicos 0..255, direcional no HAT */
+    static gp_axis_t ax[GP_NABS];
+    static pm_bits_t bits, sbits;
+    for(unsigned c = ABS_X; c <= ABS_RZ; c++) { ax[c] = (gp_axis_t){ 0, 255, true }; pm_bits_set(&bits, false, c); }
+    ax[ABS_HAT0X] = ax[ABS_HAT0Y] = (gp_axis_t){ -1, 1, true };
+    pm_bits_set(&bits, false, ABS_HAT0X);
+    pm_bits_set(&bits, false, ABS_HAT0Y);
+    sbits = bits;
+    for(unsigned c = 0x130; c <= 0x13d; c++) pm_bits_set(&bits, true, c);
+    static const unsigned skeys[] = { BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR, BTN_TL2, BTN_TR2,
+                                      BTN_SELECT, BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR };
+    for(size_t i = 0; i < sizeof skeys / sizeof skeys[0]; i++) pm_bits_set(&sbits, true, skeys[i]);
+    const gp_id_t ds4id = { BUS_BLUETOOTH, 0x054c, 0x09cc, 0x0100 }, stdid = { BUS_BLUETOOTH, 0x1234, 0x5678, 1 };
+    int ds4 = gamepad_attach("Wireless Controller", &ds4id, &bits, ax, "");
+    gp_info_t gi;
+    kcheck("controle: DS4 sem driver usa o mapa embutido",
+           gamepad_info(ds4, &gi) && gi.map_from == GPM_BUILTIN && !strcmp(gi.guid, "050000004c050000cc09000000010000"));
+    kcheck("controle: conectado", ds4 >= 0 && gamepad_count() == 1);
+    for(int a = ABS_X; a <= ABS_RZ; a++) pev(ds4, EV_ABS, (uint16_t)a, 128);
+
+    go(SCR_SETTINGS, 0);
+    int32_t x0, y0, x1, y1;
+    kcheck("controle: cursor escondido no início", !gamepad_cursor(&x0, &y0));
+    pbtn(ds4, 0x131);                                  /* ✕ com o cursor escondido: só mostra */
+    kcheck("controle: ✕ mostra o cursor", gamepad_cursor(&x0, &y0));
+
+    /* ✕ toca onde o cursor está */
+    lv_obj_t *b = lv_button_create(lv_layer_top());
+    lv_obj_set_size(b, 120, 80);
+    lv_obj_set_pos(b, x0 - 60, y0 - 40);
+    lv_obj_add_event_cb(b, pad_click, LV_EVENT_CLICKED, NULL);
+    pump(50);
+    pbtn(ds4, 0x131);
+    kcheck("controle: ✕ toca", pad_clicks == 1);
+    lv_obj_delete(b);
+
+    /* analógico esquerdo para a direita e para baixo: o cursor anda */
+    pev(ds4, EV_ABS, ABS_X, 255);
+    pev(ds4, EV_ABS, ABS_Y, 255);
+    pump(200);
+    pev(ds4, EV_ABS, ABS_X, 128);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    gamepad_cursor(&x1, &y1);
+    kcheck("controle: analógico move o cursor", x1 > x0 + 100 && y1 > y0 + 60);
+    shot("23f-controle-cursor");
+
+    /* ✕ segurado + analógico para cima: arrasta (rola a lista de Ajustes); antes volta o
+     * cursor para o meio da lista (a corrida acima o deixou na borda de baixo) */
+    pev(ds4, EV_ABS, ABS_Y, 0);
+    pump(250);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    lv_obj_t *pg = lv_obj_get_child(app_content(), 0);
+    int32_t s0 = pg ? lv_obj_get_scroll_y(pg) : 0;
+    pev(ds4, EV_KEY, 0x131, 1);
+    pev(ds4, EV_ABS, ABS_Y, 0);
+    pump(350);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    pev(ds4, EV_KEY, 0x131, 0);
+    pump(300);
+    kcheck("controle: ✕ segurado arrasta", pg && lv_obj_get_scroll_y(pg) > s0 + 40);
+
+    /* direcional para baixo (HAT): rola */
+    go(SCR_SETTINGS, 0);
+    pg = lv_obj_get_child(app_content(), 0);
+    pev(ds4, EV_ABS, ABS_HAT0Y, 1);
+    pev(ds4, EV_ABS, ABS_HAT0Y, 0);
+    pump(400);
+    kcheck("controle: direcional rola", pg && lv_obj_get_scroll_y(pg) > 0);
+
+    /* ○ volta, PS vai para o início */
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    shot("23g-teclado-controle");
+    pbtn(ds4, 0x132);
+    pump(300);
+    kcheck("controle: ○ volta", nav_current().scr == SCR_SETTINGS);
+    pbtn(ds4, 0x13c);
+    pump(300);
+    kcheck("controle: PS vai para o início", nav_current().scr == SCR_HOME);
+
+    /* direcional → / ←: as páginas de Apps */
+    go(SCR_HOME, HOME_ARG_APPS); pump(200);
+    lv_obj_t *tv = find_class(lv_screen_active(), &lv_tileview_class);
+    pev(ds4, EV_ABS, ABS_HAT0X, 1);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pump(600);
+    lv_obj_t *t1 = tv ? lv_tileview_get_tile_active(tv) : NULL;
+    kcheck("controle: direcional → passa a página de Apps", t1 && lv_obj_get_x(t1) == lv_obj_get_width(tv));
+    pev(ds4, EV_ABS, ABS_HAT0X, -1);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pump(600);
+    t1 = tv ? lv_tileview_get_tile_active(tv) : NULL;
+    kcheck("controle: direcional ← volta a página", t1 && lv_obj_get_x(t1) == 0);
+
+    /* △ = Enter num diálogo */
+    static const char *b2[] = { "Não", "Sim" };
+    dlg_answer = -9;
+    dialog_open(NULL, lv_color_white(), "Teste", NULL, b2, 2, 1, -1, dlg_cb, NULL); pump(50);
+    pbtn(ds4, 0x133);
+    kcheck("controle: △ confirma o diálogo", dlg_answer == 1 && !dialog_is_open());
+
+    /* controle com o mapa padrão (hid-playstation, xpad...): BTN_EAST (0x131) volta */
+    int std = gamepad_attach("Controle Padrão", &stdid, &sbits, ax, "");
+    kcheck("controle padrão: mapa do Linux", gamepad_info(std, &gi) && gi.map_from == GPM_DEFAULT);
+    go(SCR_SETTINGS, 0);
+    nav_go(SCR_KEYBOARD, 0); pump(300);
+    pbtn(std, BTN_EAST);
+    pump(300);
+    kcheck("controle padrão: B volta", nav_current().scr == SCR_SETTINGS && gamepad_count() == 2);
+    gamepad_detach(std);
+    gamepad_detach(ds4);
+    pump(50);
+    kcheck("controle: cursor some ao desconectar", !gamepad_cursor(NULL, NULL) && gamepad_count() == 0);
+    printf("controle: %d falha(s) no total com o teclado\n", kb_fail);
+}
+
+/* ---------------------------------------------- apps instalados e SC Controller */
+static void apps_tests(void)
+{
+    const char *pkg = getenv("BIGFOSTON_TEST_BFAPP");      /* pkg/apps/sc-controller.bfapp */
+    if(!pkg || !*pkg) { printf("apps: sem BIGFOSTON_TEST_BFAPP, testes pulados\n"); return; }
+    apps_uninstall_now("sc-controller");                    /* sobra de outra rodada */
+    static gp_axis_t ax[GP_NABS];
+    static pm_bits_t bits;
+    for(unsigned c = ABS_X; c <= ABS_RZ; c++) { ax[c] = (gp_axis_t){ 0, 255, true }; pm_bits_set(&bits, false, c); }
+    ax[ABS_HAT0X] = ax[ABS_HAT0Y] = (gp_axis_t){ -1, 1, true };
+    pm_bits_set(&bits, false, ABS_HAT0X);
+    pm_bits_set(&bits, false, ABS_HAT0Y);
+    for(unsigned c = 0x130; c <= 0x13d; c++) pm_bits_set(&bits, true, c);
+    const gp_id_t ds4id = { BUS_BLUETOOTH, 0x054c, 0x09cc, 0x0100 };
+    int ds4 = gamepad_attach("Wireless Controller", &ds4id, &bits, ax, "");
+    for(int a = ABS_X; a <= ABS_RZ; a++) pev(ds4, EV_ABS, (uint16_t)a, 128);
+    gp_info_t gi;
+
+    /* Jogos existe mesmo vazio */
+    launcher_load();
+    int games = ag_group_by_key("games") ? ag_group_by_key("games")->id : -1;
+    go(SCR_APPGROUP, games); pump(300);
+    shot("44a-jogos-vazio");
+    kcheck("apps: Jogos vazio", apps_count() == 0 && nav_current().scr == SCR_APPGROUP);
+
+    /* Arquivos -> .bfapp: "Instalar?"; Enter = Instalar */
+    apps_install_ask(pkg); pump(200);
+    shot("44b-instalar");
+    dialog_key(true); pump(300);
+    shot("44c-instalado");
+    const bf_app_entry_t *a = apps_find("sc-controller");
+    kcheck("apps: instalado em Jogos", a && apps_group_of(a) == BF_GRP_GAMES && !strcmp(a->name, "SC Controller") &&
+           ag_parent("pkg:sc-controller") == games);
+    kcheck("apps: ícone do pacote", a && apps_icon(a) != NULL);
+    dialog_key(false); pump(100);
+    kcheck("controle: mapa agora do banco do SC Controller", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
+
+    go(SCR_HOME, HOME_ARG_APPS); pump(200);
+    scr_home_show_page(1); pump(300);
+    shot("44d-apps-pasta-jogos");
+    go(SCR_APPGROUP, games); pump(400);
+    shot("44e-grupo-jogos");
+
+    /* abre o app pelo .desktop (X-BigFoston-Screen) */
+    apps_launch(a); pump(400);
+    kcheck("apps: abre o SC Controller", nav_current().scr == SCR_SCC);
+    shot("44f-scc-controles");
+
+    /* testador: o controle não mexe na interface */
+    scr_scc_demo_tab(1); pump(200);
+    pev(ds4, EV_KEY, 0x131, 1);                      /* ✕ */
+    pev(ds4, EV_KEY, 0x134, 1);                      /* L1 */
+    pev(ds4, EV_ABS, ABS_X, 40);
+    pev(ds4, EV_ABS, ABS_Y, 200);
+    pev(ds4, EV_ABS, ABS_RY, 230);                   /* R2 analógico */
+    pev(ds4, EV_ABS, ABS_HAT0X, 1);
+    pump(200);
+    shot("44g-scc-testar");
+    pev(ds4, EV_KEY, 0x131, 0);
+    pev(ds4, EV_KEY, 0x134, 0);
+    pev(ds4, EV_ABS, ABS_X, 128);
+    pev(ds4, EV_ABS, ABS_Y, 128);
+    pev(ds4, EV_ABS, ABS_RY, 128);
+    pev(ds4, EV_ABS, ABS_HAT0X, 0);
+    pbtn(ds4, 0x132);                                 /* ○: no testador não volta */
+    pump(200);
+    kcheck("scc: no testador o controle não navega", nav_current().scr == SCR_SCC);
+    pev(ds4, EV_KEY, 0x132, 1);                       /* ○ segurado 2 s: sai do teste */
+    pump(2300);
+    pev(ds4, EV_KEY, 0x132, 0);
+    pump(100);
+    pbtn(ds4, 0x132);                                 /* fora do teste, ○ volta */
+    pump(300);
+    kcheck("scc: segurar ○ sai do testador", nav_current().scr == SCR_APPGROUP);
+
+    /* registro: as 21 etapas como o DS4 sem driver, com os gatilhos em repouso no 0 */
+    apps_launch(apps_find("sc-controller")); pump(400);
+    pev(ds4, EV_ABS, ABS_RX, 0);
+    pev(ds4, EV_ABS, ABS_RY, 0);
+    scr_scc_demo_tab(2); pump(200);
+    shot("44h-scc-registrar");
+    scr_scc_demo_tab(3); pump(100);
+    shot("44i-scc-registrar-passo");
+    static const struct { uint16_t t, c; int32_t on, off; } seq[] = {
+        { EV_KEY, 0x131, 1, 0 }, { EV_KEY, 0x132, 1, 0 }, { EV_KEY, 0x130, 1, 0 }, { EV_KEY, 0x133, 1, 0 },
+        { EV_KEY, 0x134, 1, 0 }, { EV_KEY, 0x135, 1, 0 }, { EV_ABS, ABS_RX, 255, 0 }, { EV_ABS, ABS_RY, 255, 0 },
+        { EV_KEY, 0x138, 1, 0 }, { EV_KEY, 0x139, 1, 0 }, { EV_KEY, 0x13c, 1, 0 }, { EV_KEY, 0x13a, 1, 0 },
+        { EV_KEY, 0x13b, 1, 0 }, { EV_ABS, ABS_HAT0Y, -1, 0 }, { EV_ABS, ABS_HAT0Y, 1, 0 },
+        { EV_ABS, ABS_HAT0X, -1, 0 }, { EV_ABS, ABS_HAT0X, 1, 0 }, { EV_ABS, ABS_X, 255, 128 },
+        { EV_ABS, ABS_Y, 255, 128 }, { EV_ABS, ABS_Z, 255, 128 }, { EV_ABS, ABS_RZ, 255, 128 },
+    };
+    for(size_t k = 0; k < sizeof seq / sizeof seq[0]; k++) {
+        pev(ds4, seq[k].t, seq[k].c, seq[k].on);
+        pev(ds4, seq[k].t, seq[k].c, seq[k].off);
+        pump(30);
+    }
+    pump(200);
+    shot("44j-scc-registrar-fim");
+    scr_scc_demo_tab(4); pump(300);
+    kcheck("scc: registro salvo e usado", gamepad_info(ds4, &gi) && gi.map_from == GPM_USER);
+    /* o mapa ensinado é o mesmo da linha oficial do banco */
+    char path[320], line[1024] = "";
+    gamepad_user_db(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if(f) { if(!fgets(line, sizeof line, f)) line[0] = 0; fclose(f); }
+    padmap_t mine, off;
+    padmap_parse(line, &mine);
+    padmap_parse("050000004c050000cc09000000010000,PS4 Controller,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,platform:Linux,", &off);
+    bool same = true;
+    for(int c = 0; c < PC__N; c++)
+        if(memcmp(&mine.src[c], &off.src[c], sizeof mine.src[c])) {
+            same = false;
+            printf("controle: registro difere em %s\n", padmap_ctl_name(c));
+        }
+    kcheck("scc: registro igual ao banco do SDL", same);
+    /* o registro vale na interface: ✕ toca */
+    pev(ds4, EV_ABS, ABS_RX, 128);
+    pev(ds4, EV_ABS, ABS_RY, 128);
+    scr_scc_demo_tab(5); pump(300);
+    kcheck("scc: esquecer volta ao banco", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
+
+    /* desinstalar: o grupo fica vazio e o controle volta ao mapa embutido */
+    kcheck("apps: desinstala", apps_uninstall_now("sc-controller") && !apps_find("sc-controller") &&
+           ag_parent("pkg:sc-controller") == -1);
+    kcheck("controle: sem o app, mapa embutido", gamepad_info(ds4, &gi) && gi.map_from == GPM_BUILTIN);
+    gamepad_detach(ds4);
+    printf("apps: %d falha(s) no total\n", kb_fail);
+}
+
+/* ---------------------------------------------- grupos de apps (core/appgroups.c, launcher_ui.c)
+ * Um toque virtual de verdade (indev de ponteiro do LVGL), como o do aparelho: o mesmo caminho
+ * de PRESSED/PRESSING/RELEASED, rolagem e clique. */
+static lv_indev_t *tp;
+static lv_point_t tp_pt;
+static bool tp_down;
+static int g_fail, g_total;
+
+static void gcheck(const char *what, bool ok)
+{
+    g_total++;
+    printf("grupos: %s %s\n", ok ? "ok" : "FALHOU", what);
+    if(!ok) g_fail++;
+}
+
+static void tp_read(lv_indev_t *i, lv_indev_data_t *d)
+{
+    (void)i;
+    d->point = tp_pt;
+    d->state = tp_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void touch(lv_point_t p, uint32_t ms)
+{
+    tp_pt = p;
+    tp_down = true;
+    pump(ms);
+    tp_down = false;
+    pump(150);
+}
+
+static lv_obj_t *find_label(lv_obj_t *o, const char *txt)
+{
+    if(lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    if(lv_obj_check_type(o, &lv_label_class) && !strcmp(lv_label_get_text(o), txt)) return o;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *r = find_label(lv_obj_get_child(o, (int32_t)i), txt);
+        if(r) return r;
+    }
+    return NULL;
+}
+
+/* o centro do ícone (o quadrado acima do nome) do tile com esse nome, se estiver à vista */
+static bool tile_pt(const char *name, lv_point_t *pt)
+{
+    lv_obj_t *l = find_label(lv_screen_active(), name);
+    if(!l) return false;
+    lv_area_t a;
+    lv_obj_get_coords(lv_obj_get_parent(l), &a);
+    pt->x = (a.x1 + a.x2) / 2;
+    pt->y = (a.y1 + a.y2) / 2 - 16;
+    return pt->x > 0 && pt->x < BF_SCREEN_W && pt->y > 0 && pt->y < BF_SCREEN_H;
+}
+
+static int gid_named(const char *n)
+{
+    for(int i = 0; i < ag_group_count(); i++)
+        if(!strcmp(ag_group_name(ag_group_at(i)), n)) return ag_group_at(i)->id;
+    return 0;
+}
+
+/* clica no botão com esse texto na camada de cima (diálogos) */
+static bool click_top(const char *txt)
+{
+    lv_obj_t *l = find_label(lv_layer_top(), txt);
+    if(!l) return false;
+    lv_obj_send_event(lv_obj_get_parent(l), LV_EVENT_CLICKED, NULL);
+    pump(150);
+    return true;
+}
+
+static void group_tests(void)
+{
+    bf_settings_t *s = settings();
+    s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    scr_home_show_page(0); pump(100);
+    if(!tp) {
+        tp = lv_indev_create();
+        lv_indev_set_type(tp, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(tp, tp_read);
+        lv_indev_set_display(tp, disp);
+        lv_indev_set_scroll_limit(tp, 16);         /* como o toque calibrado do aparelho */
+    }
+    lv_point_t pt;
+    const char *tvn = tr(S_APP_TV);
+
+    /* toque rápido / soltar cedo / segurar 2 s */
+    gcheck("TV visível na grade", tile_pt(tvn, &pt));
+    touch(pt, 120); pump(300);
+    gcheck("toque rápido abre a TV", nav_current().scr == SCR_TV);
+    nav_home(); pump(500);
+    tile_pt(tvn, &pt);
+    touch(pt, 1000); pump(300);
+    gcheck("soltar com 1 s: nem abre nem menu", nav_current().scr == SCR_HOME && !ctxmenu_is_open());
+    tp_pt = pt; tp_down = true; pump(1100);
+    shot("50a-grupos-segurando");
+    gcheck("anel de progresso durante o toque", find_class(lv_screen_active(), &lv_arc_class) != NULL);
+    gcheck("1,1 s: ainda sem menu", !ctxmenu_is_open());
+    pump(1100);
+    gcheck("2 s: menu aberto", ctxmenu_is_open());
+    tp_down = false; pump(300);
+    gcheck("soltar depois do menu não abre o app", nav_current().scr == SCR_HOME && ctxmenu_is_open());
+    gcheck("anel some", find_class(lv_screen_active(), &lv_arc_class) == NULL);
+    shot("50b-grupos-menu-app");
+    kfeed(KEY_ESC, 0); pump(150);
+    gcheck("Esc fecha o menu (sem voltar de tela)", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+    tile_pt(tvn, &pt);
+    touch(pt, 2200); pump(100);
+    touch((lv_point_t){ 12, 470 }, 100); pump(200);
+    gcheck("toque fora fecha o menu", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+
+    /* arrastar (rolagem) não abre menu nem app */
+    tile_pt(tvn, &pt);
+    tp_pt = pt; tp_down = true; pump(80);
+    for(int i = 0; i < 10; i++) { tp_pt.x -= 12; pump(35); }
+    pump(2300);
+    tp_down = false; pump(500);
+    gcheck("arrastar: sem menu e sem abrir", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+    scr_home_show_page(0); pump(200);
+
+    /* criar grupo: o app vai junto */
+    tile_pt(tvn, &pt);
+    touch(pt, 2200);
+    lui_demo_pick(M_NEW); pump(250);
+    gcheck("Novo grupo: janela aberta", namebox_is_open());
+    ktype("Entretenimento"); pump(100);
+    shot("50c-grupos-novo-grupo");
+    gcheck("nome vazio recusado", namebox_demo_submit("   ") != NULL && namebox_is_open());
+    pump(100);
+    shot("50d-grupos-nome-vazio");
+    gcheck("nome repetido (Jogos) recusado", namebox_demo_submit("jogos") != NULL && namebox_is_open());
+    gcheck("o campo para em 24 letras", !strcmp(namebox_demo_set("Aplicativos do dia a dia!"), "Aplicativos do dia a dia"));
+    gcheck("Entretenimento criado", namebox_demo_submit("Entretenimento") == NULL && !namebox_is_open());
+    pump(500);
+    int ent = gid_named("Entretenimento");
+    gcheck("TV dentro de Entretenimento", ent > 0 && ag_parent("sys:tv") == ent);
+    gcheck("pasta na grade, TV fora da grade", find_label(lv_screen_active(), "Entretenimento") &&
+           !find_label(lv_screen_active(), tvn));
+    shot("50e-grupos-pasta-criada");
+
+    /* enviar para o grupo (lista) */
+    lui_item_menu(NULL, "sys:music", 0); pump(100);
+    lui_demo_pick(M_SEND); pump(200);
+    shot("50f-grupos-enviar");
+    lui_demo_pick(ent); pump(500);
+    gcheck("Multimídia enviada para Entretenimento", ag_parent("sys:music") == ent);
+    lui_item_menu(NULL, "sys:music", ent); lui_demo_pick(M_SEND); lui_demo_pick(ent); pump(200);
+    gcheck("enviar de novo: sem duplicar", ag_parent("sys:music") == ent && ag_children(ent, NULL, 0) == 2);
+    lui_item_menu(NULL, "sys:book", 0); lui_demo_pick(M_NEW); pump(100);
+    gcheck("Educação (acentos) criado com o Livro", namebox_demo_submit("Educação") == NULL);
+    pump(300);
+    int edu = gid_named("Educação");
+    gcheck("Livro em Educação", edu > 0 && ag_parent("sys:book") == edu);
+    lui_item_menu(NULL, "sys:music", ent); lui_demo_pick(M_SEND); lui_demo_pick(edu); pump(300);
+    gcheck("Multimídia de um grupo para outro", ag_parent("sys:music") == edu && ag_children(ent, NULL, 0) == 1);
+
+    /* dentro do grupo: tocar na pasta abre; segurar o app; tirar do grupo */
+    nav_home(); pump(500);
+    gcheck("pasta à vista", tile_pt("Entretenimento", &pt));
+    touch(pt, 120); pump(500);
+    gcheck("tocar na pasta abre o grupo", nav_current().scr == SCR_APPGROUP && nav_current().arg == ent);
+    shot("50g-grupo-aberto");
+    gcheck("TV no grupo", tile_pt(tvn, &pt));
+    touch(pt, 2200); pump(100);
+    gcheck("segurar no grupo abre o menu", ctxmenu_is_open());
+    shot("50h-grupo-menu-app");
+    lui_demo_pick(M_REMOVE); pump(500);
+    gcheck("TV fora do grupo; grupo vazio continua", ag_parent("sys:tv") == 0 && ag_group_get(ent) &&
+           nav_current().scr == SCR_APPGROUP);
+    shot("50i-grupo-vazio");
+    lui_group_menu(NULL, ent); pump(100);
+    shot("50j-grupo-opcoes");
+    lui_demo_pick(G_RENAME); pump(100);
+    gcheck("renomear para o nome de outro: recusado", namebox_demo_submit("educação") != NULL);
+    gcheck("renomeado", namebox_demo_submit("Diversão") == NULL && gid_named("Diversão") == ent);
+    pump(400);
+    gcheck("título novo", !strcmp(nav_title(SCR_APPGROUP, ent), "Diversão"));
+    lui_group_menu(NULL, ent); lui_demo_pick(G_STYLE); pump(200);
+    shot("50k-grupo-cor-icone");
+    click_top(tr(S_LG_SAVE));
+
+    /* mover: tocar no novo lugar; tocar numa pasta põe dentro */
+    nav_home(); pump(500);
+    lui_item_menu(NULL, "sys:settings", 0); lui_demo_pick(M_MOVE); pump(400);
+    shot("50l-grupos-mover");
+    gcheck("faixa do modo mover", lui_moving() && find_label(lv_screen_active(), tr(S_LG_MOVE_END)));
+    gcheck("Bluetooth à vista", tile_pt(tr(S_APP_BLUETOOTH), &pt));
+    touch(pt, 120); pump(500);
+    {
+        const char *v[64];
+        int n = ag_children(0, v, 64), si = -1, bi = -1;
+        for(int i = 0; i < n && i < 64; i++) {
+            if(!strcmp(v[i], "sys:settings")) si = i;
+            if(!strcmp(v[i], "sys:bluetooth")) bi = i;
+        }
+        gcheck("Ajustes logo antes do Bluetooth", si >= 0 && si + 1 == bi && !lui_moving());
+    }
+    lui_item_menu(NULL, "sys:gps", 0); lui_demo_pick(M_MOVE); pump(400);
+    scr_home_show_page(0); pump(200);
+    gcheck("pasta Educação à vista", tile_pt("Educação", &pt));
+    touch(pt, 120); pump(500);
+    gcheck("tocar na pasta no modo mover: GPS entra", ag_parent("sys:gps") == edu && nav_current().scr == SCR_HOME);
+
+    /* todos os temas: mesma organização */
+    s->home_mode = BF_HOME_GLASS;
+    app_rebuild_now(); pump(50);
+    go(SCR_HOME, HOME_ARG_APPS); pump(500);
+    gcheck("Foston Glass > Apps: pastas", find_label(lv_screen_active(), "Educação") &&
+           find_label(lv_screen_active(), "Diversão"));
+    shot("50m-glass-apps-grupos");
+    tile_pt("Educação", &pt);
+    touch(pt, 2200); pump(100);
+    gcheck("Glass: segurar a pasta abre o menu do grupo", ctxmenu_is_open());
+    shot("50n-glass-menu-grupo");
+    ctxmenu_close(); pump(100);
+    s->home_mode = BF_HOME_PANEL;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    shot("50o-painel-com-apps");
+    gcheck("Painel: ícone Apps", tile_pt(tr(S_GL_APPS), &pt));
+    touch(pt, 120); pump(500);
+    gcheck("Painel: Apps abre a grade", nav_current().scr == SCR_HOME && nav_current().arg == HOME_ARG_APPS &&
+           find_label(lv_screen_active(), "Educação"));
+    shot("50p-painel-apps-grade");
+    s->home_mode = BF_HOME_KIOSK;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    if(tile_pt(tr(S_APP_FILES), &pt)) {
+        touch(pt, 2200); pump(100);
+        gcheck("Quiosque: sem menu de grupos", !ctxmenu_is_open());
+        nav_home(); pump(300);
+    }
+    s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(400);
+    gcheck("Grade: mesmas pastas", find_label(lv_screen_active(), "Diversão") != NULL);
+
+    /* persistência: relê o arquivo como numa reinicialização */
+    launcher_reopen();
+    launcher_sync();
+    gcheck("depois de reler: grupos e apps no lugar", gid_named("Educação") == edu && ag_parent("sys:book") == edu &&
+           ag_parent("sys:music") == edu && ag_parent("sys:gps") == edu && gid_named("Diversão") == ent);
+
+    /* busca: acha dentro dos grupos, sem acento nem maiúsculas */
+    go(SCR_HOME, HOME_ARG_APPS); pump(400);
+    lui_search(); pump(100);
+    gcheck("busca sem resultado: avisa e continua aberta", namebox_demo_submit("zzz") != NULL && namebox_is_open());
+    gcheck("busca \"MULTIMIDIA\" acha Multimídia (no grupo)", namebox_demo_submit("MULTIMIDIA") == NULL && ctxmenu_is_open());
+    pump(150);
+    shot("50t-grupos-busca");
+    lui_demo_pick(0); pump(400);
+    gcheck("resultado abre o app", nav_current().scr == SCR_MUSIC);
+    nav_home(); pump(400);
+
+    /* excluir: os apps voltam */
+    lui_group_menu(NULL, edu); lui_demo_pick(G_DELETE); pump(200);
+    shot("50q-grupos-excluir");
+    gcheck("confirmar exclusão", click_top(tr(S_LG_DEL_BTN)));
+    pump(500);
+    gcheck("grupo excluído, apps de volta (nenhum perdido)", !ag_group_get(edu) && ag_parent("sys:book") == 0 &&
+           ag_parent("sys:music") == 0 && ag_parent("sys:gps") == 0);
+    shot("50r-grupos-excluido");
+
+    /* teclado físico na janela de nome: Esc cancela, Enter confirma */
+    lui_item_menu(NULL, "sys:gallery", 0); lui_demo_pick(M_NEW); pump(100);
+    kfeed(KEY_ESC, 0); pump(150);
+    gcheck("Esc cancela a janela de nome", !namebox_is_open() && ag_parent("sys:gallery") == 0);
+    lui_item_menu(NULL, "sys:gallery", 0); lui_demo_pick(M_NEW); pump(100);
+    ktype("Fotos"); kfeed(KEY_ENTER, 0); pump(300);
+    gcheck("Enter do teclado físico cria o grupo", !namebox_is_open() && gid_named("Fotos") > 0 &&
+           ag_parent("sys:gallery") == gid_named("Fotos"));
+    ag_group_delete(gid_named("Fotos")); pump(200);
+
+    /* tema claro e nome comprido */
+    lui_item_menu(NULL, "sys:files", 0); lui_demo_pick(M_NEW);
+    gcheck("nome de 24 letras", namebox_demo_submit("Ferramentas do dia a dia") == NULL);
+    s->mode = BF_MODE_LIGHT;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    if(!tile_pt("Ferramentas do dia a dia", &pt)) tile_pt(tr(S_APP_BLUETOOTH), &pt);
+    touch(pt, 2200); pump(100);
+    shot("50s-grupos-claro-menu");
+    ctxmenu_close(); pump(100);
+    s->mode = BF_MODE_DARK;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(300);
+
+    /* muitos grupos: a página à vista na hora, as outras em segundo plano */
+    {
+        int made[40], nm = 0;
+        char nm_[32];
+        for(int i = 0; i < 40; i++) {
+            snprintf(nm_, sizeof nm_, "Carga %02d", i);
+            if(ag_group_create(nm_, NULL, &made[nm]) == AG_OK) nm++;
+        }
+        gcheck("40 grupos criados", nm == 40);
+        go(SCR_HOME, HOME_ARG_APPS); pump(30);
+        uint32_t t0 = now_ms();
+        nav_show_now();
+        uint32_t dt = now_ms() - t0;
+        lv_obj_t *tv = find_class(lv_screen_active(), &lv_tileview_class);
+        int pages = tv ? (int)lv_obj_get_child_count(tv) : 0;
+        lv_obj_t *last = pages ? lv_obj_get_child(lv_obj_get_child(tv, pages - 1), 0) : NULL;
+        gcheck("várias páginas; a última ainda vazia logo depois de abrir", pages >= 6 && last &&
+               lv_obj_get_child_count(last) == 0);
+        printf("grupos: abrir Apps com %d páginas: %u ms no PC (só a página à vista)\n", pages, (unsigned)dt);
+        scr_home_show_page(pages - 1); pump(50);
+        gcheck("pular para a última: preenchida na hora", last && lv_obj_get_child_count(last) > 0);
+        shot("50u-grupos-muitos");
+        scr_home_show_page(0);
+        pump(1500);
+        int empty = 0;
+        for(int i = 0; i < pages; i++) if(!lv_obj_get_child_count(lv_obj_get_child(lv_obj_get_child(tv, i), 0))) empty++;
+        gcheck("em 1,5 s todas as páginas preenchidas", empty == 0);
+        for(int i = 0; i < nm; i++) ag_group_delete(made[i]);
+        pump(300);
+    }
+
+    lv_indev_delete(tp);
+    tp = NULL;
+    printf("grupos: %d/%d ok\n", g_total - g_fail, g_total);
+}
+
 int screenshot_run(const char *dir)
 {
     outdir = dir;
@@ -128,6 +856,10 @@ int screenshot_run(const char *dir)
     settings_defaults(s);
     app_init(disp);
     pump(600);                      /* entrada animada dos ícones */
+    if(getenv("BIGFOSTON_TEST_GROUPS_ONLY")) {      /* só os testes de grupos (rápido) */
+        group_tests();
+        return g_fail ? 1 : 0;
+    }
 
     shot("01-inicio");
     scr_home_show_page(1);
@@ -172,7 +904,23 @@ int screenshot_run(const char *dir)
     scroll_content_end();           shot("16b-data-fim");
     go(SCR_DATE, 1);                shot("16c-data-ajustar");
     go(SCR_DATE, 2);                shot("16d-data-fuso");
+    go(SCR_BRP, 0);
+    scr_brp_demo("HOST 192.168.7.1|0|0|0|7.1.431.-1"); pump(100); shot("40-brp-inicio");
+    scr_brp_demo("PIN 4821");       pump(100); shot("40b-brp-pin");
+    scr_brp_demo("PAIR ok");
+    scr_brp_demo("HOST 192.168.7.1|1|0|0|7.1.431.-1");
+    scr_brp_demo("APP 1|01 - Monitor"); scr_brp_demo("APP 2|Desktop"); scr_brp_demo("APP 3|Desktop Low");
+    scr_brp_demo("APP 4|Steam Big Picture"); scr_brp_demo("APPS fim"); pump(100); shot("40c-brp-apps");
+    scr_brp_demo("+video");         pump(100); shot("40f-brp-imagem");
+    scr_brp_demo("+full");          pump(400);
+    scr_brp_demo("+bar");           pump(400); shot("40g-brp-tela-cheia-barra");
+    scr_brp_demo("+window");        pump(100);
     go(SCR_POWER, 0);               shot("17-potencia");
+    scroll_content_end();           shot("17b-potencia-plano");
+    go(SCR_PERF, 0);                shot("17c-desempenho");
+    scroll_content_end();           shot("17d-desempenho-fim");
+    go(SCR_PERFMODE, 0);            shot("17e-modo-performance");
+    scroll_content_end();           shot("17f-modo-performance-fim");
     go(SCR_RESET, 0);               shot("18-reset-settings");
     go(SCR_SSH, 0);                 shot("19-ssh");
     go(SCR_ADVANCED, 0);            shot("20-avancado");
@@ -220,6 +968,10 @@ int screenshot_run(const char *dir)
     go(SCR_FM, 0); pump(500);       shot("22-fm-transmitir");
     fm_off(); pump(100);
     unsetenv("BIGFOSTON_FM_STATUS");
+    keyboard_tests();
+    gamepad_tests();
+    apps_tests();
+    group_tests();
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
@@ -417,6 +1169,63 @@ int screenshot_run(const char *dir)
     scr_gallery_demo(5); pump(50);  shot("37e-galeria-foto-zoom");
     scr_gallery_demo(6); pump(100); shot("37f-galeria-voltar");     /* Voltar fecha a foto, fica na Galeria */
     scr_gallery_demo(2); pump(50);
+    {   /* Internet: motor do PC (firmware/build/web/host/dist, tools/bigfoston/build-web.sh host) */
+        const char *wd = getenv("BIGFOSTON_WEB_DIR");
+        static const char host_dist[] = "../../firmware/build/web/host/dist";
+        char b[600];
+        snprintf(b, sizeof b, "%s/bfweb", host_dist);
+        if(!wd && access(b, X_OK) == 0) setenv("BIGFOSTON_WEB_DIR", host_dist, 1);
+        char page[600], url[1100];
+        snprintf(page, sizeof page, "%s/web-demo.html", data_dir());
+        FILE *f = fopen(page, "w");
+        if(f) {
+            fputs("<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\"><title>Notícias do BigFoston</title>"
+                  "<style>body{font-family:sans-serif;margin:0;background:#f4f6fb;color:#1a1a2e}"
+                  "header{background:#3584e4;color:#fff;padding:14px 20px;font-size:24px;font-weight:bold}"
+                  "main{padding:8px 20px} .c{background:#fff;border-radius:10px;padding:12px 16px;margin:10px 0;border:1px solid #d5dbe8}"
+                  "h2{margin:0 0 6px;font-size:19px;color:#1d4f9a} a{color:#3584e4}</style></head><body>"
+                  "<header>BigFoston Web</header><main>"
+                  "<div class=\"c\"><h2>Navegação leve no FOSTON</h2>Páginas simples, formulários, favoritos, histórico e downloads"
+                  " direto para o cartão. Motor NetSurf 3.11 num processo separado, sem privilégios.</div>"
+                  "<div class=\"c\"><h2>Pesquisa</h2><form action=\"https://html.duckduckgo.com/html/\"><input name=\"q\" value=\"previsão do tempo\" size=\"30\">"
+                  " <button>Pesquisar</button></form></div>"
+                  "<div class=\"c\"><h2>Links</h2><a href=\"https://pt.m.wikipedia.org\">Wikipédia</a> · "
+                  "<a href=\"https://github.com/ruscher/foston-monitor\">foston-monitor no GitHub</a></div>", f);
+            for(int i = 1; i <= 12; i++) fprintf(f, "<div class=\"c\"><h2>Seção %d</h2>Texto para rolar a página.</div>", i);
+            fputs("</main></body></html>", f);
+            fclose(f);
+        }
+        snprintf(url, sizeof url, "file://%s", page);
+        if(page[0] != '/') {                                  /* caminho relativo: absoluto para o file:// */
+            char cwd[400];
+            if(getcwd(cwd, sizeof cwd)) snprintf(url, sizeof url, "file://%s/%s", cwd, page);
+        }
+        go(SCR_WEB, 0); pump(1500);                 shot("47-internet-inicio");
+        scr_web_demo("+mark Wikipédia\thttps://pt.m.wikipedia.org");
+        scr_web_demo("+mark GitHub\thttps://github.com");
+        scr_web_demo("+mark DuckDuckGo\thttps://html.duckduckgo.com/html/");
+        scr_web_demo("+start"); pump(100);          shot("47a-internet-inicio-favoritos");
+        scr_web_demo(url); pump(4000);              shot("47b-internet-pagina");
+        scr_web_demo("+scroll 300"); pump(800);     shot("47c-internet-rolagem");
+        scr_web_demo("+menu"); pump(200);           shot("47d-internet-menu");
+        scr_web_demo("+close");
+        scr_web_demo("+edit"); scr_web_demo("+type wiki"); pump(200); shot("47e-internet-endereco");
+        scr_web_demo("+close");
+        if(getenv("BIGFOSTON_SHOT_PC")) {            /* modo completo: tools/bigfoston/bfweb-pc.py --host 127.0.0.1 */
+            for(int k = 0; k < 300 && !webremote_active(); k++) pump(100);
+            shot("48-internet-pc-ligado");
+            scr_web_demo("https://www.biglinux.com.br/pt-br/"); pump(9000); shot("48a-internet-pc-biglinux");
+            scr_web_demo("+scroll 600"); pump(2500);                    shot("48b-internet-pc-rolagem");
+            scr_web_demo("https://g1.globo.com"); pump(12000);          shot("48c-internet-pc-g1");
+            scr_web_demo("https://www.gov.br"); pump(10000);            shot("48d-internet-pc-govbr");
+        }
+        scr_web_demo("+app BigLinux\thttps://www.biglinux.com.br");
+        scr_web_demo("+start"); pump(100);          shot("47g-internet-webapps");
+        go(SCR_HOME, HOME_ARG_APPS); pump(600);
+        scr_home_show_page(1); pump(400);           shot("47f-apps-com-internet");
+        scr_home_show_page(0);
+        go(SCR_HOME, 0); pump(300);
+    }
     go(SCR_BOOK, 0);                shot("24-livro");
     {
         char f[600];
@@ -525,6 +1334,6 @@ int screenshot_run(const char *dir)
     go(SCR_MONITOR, 0); pump(2500); shot("36-es-monitor");
 
     printf("screenshot: %d imagens em %s\n", n_ok, dir);
-    return n_ok > 0 ? 0 : 1;
+    return n_ok > 0 && !g_fail ? 0 : 1;
 }
 #endif /* BIGFOSTON_SCREENSHOT */

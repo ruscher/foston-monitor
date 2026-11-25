@@ -332,9 +332,86 @@ Estado geral do projeto: [implementation-status.md](implementation-status.md).
 Cinco alvos (cantos a 50 px da borda + centro), média das amostras enquanto o
 toque dura, ajuste afim por mínimos quadrados e erro residual exibido. Salva em
 `$BIGFOSTON_DATA/pointercal` no formato do tslib (`a b c d e f s 800 480`).
-A aplicação no driver é `touch_calibration_apply()` em `src/ui/core/touch_calib.c`,
-hoje um *stub* porque o driver do touchscreen do MT3351 ainda não existe — ponto de
-integração previsto: envolver o `read_cb` do `lv_evdev` com a transformação.
+Sem arquivo do usuário vale a calibração de fábrica (`/etc/bigfoston/touchcal`).
+O leitor de toque é próprio (`src/ui/core/touch_calib.c`): lê o evdev do driver
+`mt3351-ts`, aplica a transformação afim (`touch_calibration_apply()`) e filtra (mediana
+de 3 amostras, média com a anterior, zona morta de 2 px). É lido por evento: o laço
+principal espera no fd do toque. Com a interface ocupada (vídeo em tela cheia: ~60 ms por
+quadro) um toque curto chegava inteiro, "encostou" e "soltou", numa leitura só, e o LVGL
+via só o estado final; o toque sumia. Agora a pressão é entregue primeiro e a soltura na
+leitura seguinte (`touch_pending()`, que o laço principal consulta antes de esperar).
+
+## Teclado físico
+
+Teclados Bluetooth (pareados em Ajustes > Bluetooth) ou USB funcionam em qualquer tela
+(`src/ui/core/hwkbd.c`). O shell vigia `/dev/input` (inotify) e abre todo `eventN` com
+teclas de letra: o teclado Bluetooth dorme e reconecta com outro número. Os botões de
+energia ficam de fora (`powerkey.c` ignora dispositivos com `KEY_A`, que também declaram
+`KEY_POWER`), e a tecla Power do teclado não desliga nada.
+
+- **Layout** (Ajustes > Teclado e controle): automático (ABNT2 em português, EUA nos outros
+  idiomas), ABNT2, EUA ou EUA internacional. Acentos por tecla morta (ABNT2: ´ ` ~ ^ ¨;
+  internacional: ' " ` ~ ^, com 'c = ç), AltGr, Caps Lock (também no Ç) e o teclado
+  numérico (sem Num Lock, navegação). Tradução em `core/kbdmap.c`, testada em
+  `tests/test_kbdmap.c` (`make test`).
+- **Para onde vai a tecla**: o campo de texto do teclado da tela aberto ou o campo tocado
+  por último (Enter aperta o OK do teclado da tela, Esc o fecha, Ctrl+Backspace apaga a
+  palavra); senão Enter/Esc num diálogo (botão principal / fechar); senão a tela (o
+  Terminal manda tudo ao shell, com Ctrl e Alt, e esconde o teclado da tela; o Internet
+  manda à página: texto, setas, Tab, Ctrl+A/C/V/X/Z, e tem Ctrl+L/F6 endereço, F5/Ctrl+R
+  recarregar, Alt+Esquerda/Direita, Esc sai da tela cheia; na página inicial, digitar abre a
+  pesquisa); senão Esc ou Alt+Esquerda voltam e as setas/Page Up/Page Down/Home/End rolam
+  a página. Volume, mudo e Play/Pause funcionam em qualquer lugar.
+- A primeira tecla com a tela apagada ou escurecida só acende a tela.
+- O modo performance não pausa o Bluetooth enquanto há um teclado ou controle Bluetooth
+  conectado; um controle de jogo também liga o modo, e o app aberto religa o serviço que usa
+  (GPS, Telefone, Bluetooth) — [jogos-e-pacotes/07](jogos-e-pacotes/07-latencia-e-modo-performance.md).
+- Teste sem teclado: `echo "key 30 1" > /run/bigfoston/ctl` (código `KEY_*`, 1 apertou,
+  0 soltou) e as capturas 23b–23e do `--screenshot`, que conferem campo, Esc, rolagem,
+  diálogos, Run, Terminal e Internet.
+
+## Controle de jogo
+
+Testar, mapear e registrar controles: app SC Controller, no grupo Jogos
+([jogos-e-pacotes](jogos-e-pacotes/00-visao-geral.md)).
+
+Controles Bluetooth ou USB (`src/ui/core/gamepad.c`) usam a interface inteira, sem foco de
+teclado: o analógico esquerdo move um **cursor** (um segundo indev de ponteiro do LVGL, em
+modo de evento, desenhado na `lv_layer_sys`) e o Xis/A toca onde ele está, como o dedo
+(segurar e mover arrasta: rola listas, passa páginas). O cursor aparece ao mover o
+analógico ou no primeiro Xis (que então não toca) e some depois de 8 s parado. Os outros
+botões viram teclas entregues como as do teclado físico:
+
+| Botão | Faz |
+|---|---|
+| Bola / B | voltar (Esc: fecha o teclado da tela, o diálogo, sai do campo) |
+| Triângulo / Y | Enter (botão principal do diálogo, OK do teclado da tela) |
+| Quadrado / X | espaço |
+| Direcional | setas (rola; ← → passam as páginas de Apps); segurado repete |
+| Analógico direito | rola, mais rápido quanto mais inclinado |
+| L1 / R1 | Page Up / Page Down |
+| L2 / R2 | volume − / + |
+| PS / Home | início |
+| Options / Start | tocar / pausar a música |
+
+- **Quem é controle**: `EV_ABS` com X/Y e botões `BTN_GAMEPAD` ou `BTN_JOYSTICK`, sem
+  `BTN_TOUCH` (o touchpad do DualShock com o driver da Sony fica de fora). O shell liga o
+  `fuzz` dos analógicos (1/64 da faixa) pelo `EVIOCSABS`: o tremor do analógico parado
+  não vira evento nem acorda a interface.
+- **Mapa de cada controle**: formato do SDL GameControllerDB (`core/padmap.c`). Procura no
+  banco do usuário (controles registrados), nos bancos dos apps instalados (o SC Controller
+  traz 746 modelos para Linux), nas linhas embutidas (DualShock 4 e DualSense pelo Bluetooth
+  com o `hid-generic`) e, por fim, no padrão do Linux pelos códigos. Detalhes em
+  [jogos-e-pacotes/03](jogos-e-pacotes/03-mapa-de-controles.md). Desde 24/11/2026 o kernel
+  tem o `hid-playstation`, que configura o DualShock para mandar relatórios no ritmo certo
+  (sem ele eram ~6/s): [jogos-e-pacotes/07](jogos-e-pacotes/07-latencia-e-modo-performance.md).
+- **Bateria**: o controle do PlayStation nunca desliga sozinho fora do console. Parado
+  10 min, o shell pede `disconnect` ao `bfbt-agent` (endereço pelo `EVIOCGUNIQ`, que o BlueZ
+  preenche) e o controle desliga; o botão PS o liga e ele reconecta sozinho.
+- A primeira ação com a tela apagada ou escurecida só acende a tela.
+- Teste: capturas 23f–23g do `--screenshot` (cursor, toque, arrasto, direcional, Bola, PS,
+  Triângulo no diálogo, mapa do DualShock sem driver e mapa padrão). No aparelho, um
+  controle virtual pelo `uinput` com os mesmos botões e eixos do DualShock sem driver.
 
 ## Internacionalização
 

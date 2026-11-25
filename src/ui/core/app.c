@@ -6,6 +6,7 @@
 #include "../screens/screens.h"
 #include "app.h"
 #include "nav.h"
+#include "../screens/launcher_ui.h"
 #include "theme.h"
 #include "settings.h"
 #include "status.h"
@@ -13,6 +14,8 @@
 #include "clock.h"
 #include "devwatch.h"
 #include "powerkey.h"
+#include "ctl.h"
+#include "perfui.h"
 #include "../widgets/topbar.h"
 #include "fmstat.h"
 #include "../widgets/bottombar.h"
@@ -45,8 +48,25 @@ static void tick_cb(lv_timer_t *t)
 
 static lv_obj_t *wall, *topb;
 
+/* quem pede o fundo sem papel de parede: a TV (preto) e o modo performance (cor lisa do tema) */
+static bool wall_tv, wall_perf;
+
+static void wall_apply(void)
+{
+    if(!wall) return;
+    if(wall_tv || wall_perf) lv_obj_add_flag(wall, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_remove_flag(wall, LV_OBJ_FLAG_HIDDEN);
+}
+
+void app_wallpaper_plain(bool on)
+{
+    wall_perf = on;
+    wall_apply();
+}
+
 void app_wallpaper_visible(bool on)
 {
+    wall_tv = !on;
     lv_obj_t *scr = lv_screen_active();
     if(on) lv_obj_remove_local_style_prop(scr, LV_STYLE_BG_COLOR, 0);   /* volta a cor do tema */
     else lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
@@ -70,9 +90,7 @@ void app_wallpaper_visible(bool on)
             lv_obj_set_style_bg_opa(topb, top_o, 0);
         }
     }
-    if(!wall) return;
-    if(on) lv_obj_remove_flag(wall, LV_OBJ_FLAG_HIDDEN);
-    else lv_obj_add_flag(wall, LV_OBJ_FLAG_HIDDEN);
+    wall_apply();
 }
 
 static void build(void)
@@ -91,6 +109,7 @@ static void build(void)
         lv_image_set_src(wall, wp);
         lv_obj_set_pos(wall, 0, theme_glass() ? 0 : BF_TOPBAR_H);   /* Glass: atrás da barra translúcida */
         lv_obj_remove_flag(wall, LV_OBJ_FLAG_CLICKABLE);
+        if(wall_perf) lv_obj_add_flag(wall, LV_OBJ_FLAG_HIDDEN);   /* refeito no meio do modo performance */
     }
 
     lv_obj_t *top = topbar_create(scr);
@@ -125,12 +144,15 @@ void app_init(lv_display_t *d)
     theme_init(disp);
     build();
     nav_init(content);
+    lui_init();                   /* grupos de apps: redesenha a grade quando a organização muda */
     nav_show_now();
     tick = lv_timer_create(tick_cb, 1000, NULL);
     music_service_init();               /* música do celular reconhecida sem abrir a Multimídia */
     fx_init();
     devwatch_init();
     powerkey_init();
+    ctl_init();
+    perfui_init();                      /* etiqueta e janela do modo performance */
     fx_sound(FX_STARTUP);
 }
 

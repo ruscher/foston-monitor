@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #endif
 #include "screens.h"
+#include "../core/apps.h"
 #include "../core/theme.h"
 #include "../core/runner.h"
 #include "../core/desktop.h"
@@ -181,6 +182,7 @@ static void exec_text(const char *text, bool sh)
 
 static void run_app(const bf_app_entry_t *a)
 {
+    if(a->screen[0]) { apps_launch(a); return; }     /* app com tela própria (SC Controller) */
     if(a->terminal) { exec_text(a->exec, false); return; }
     static char buf[256];
     char *argv[32], msg[200];

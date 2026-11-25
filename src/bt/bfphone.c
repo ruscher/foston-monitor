@@ -531,6 +531,7 @@ static void sco_drop(void);
 struct sockaddr_hci { unsigned short family, dev, channel; };
 struct hci_filter { uint32_t type_mask; uint32_t event_mask[2]; uint16_t opcode; };
 static int hci = -1;
+static int hci_retry;                                 /* reabrir o socket HCI (ms) */
 
 static void hci_open(void)
 {
@@ -1093,7 +1094,27 @@ int main(void)
         notify_poll(t);
         struct pollfd p[6] = { { ff, POLLIN, 0 }, { at_fd, POLLIN, 0 }, { hci, POLLIN, 0 }, { sync_fd, POLLIN, 0 },
                                { mns_fd, POLLIN, 0 }, { sms_fd, POLLIN, 0 } };
-        if(poll(p, 6, 250) < 0 && errno != EINTR) break;
+        int pr = poll(p, 6, 250);
+        if(pr < 0 && errno != EINTR) break;
+        /* guarda: o laço girava a 91 % da CPU (24/11/2026, causa não capturada). Mil voltas
+         * seguidas com o poll acordando na hora: registra quais descritores (só números de
+         * eventos, nada pessoal) e passa a dormir 50 ms por volta até acalmar */
+        static int busy;
+        static long busy_t0;
+        if(pr > 0) {
+            if(!busy) busy_t0 = t;
+            if(++busy >= 1000) {
+                if(t - busy_t0 < 2000) {
+                    static int logged;
+                    if(logged++ < 5)
+                        syslog(LOG_WARNING, "laço ocupado: fifo %x at %x(%d) hci %x(%d) sync %x mns %x sms %x",
+                               p[0].revents, p[1].revents, at_fd, p[2].revents, hci, p[3].revents,
+                               p[4].revents, p[5].revents);
+                    usleep(50000);
+                }
+                busy = 0;
+            }
+        } else busy = 0;
         if(sms_fd >= 0 && (p[5].revents & (POLLIN | POLLHUP))) sms_done();
         if(mns_fd >= 0 && (p[4].revents & (POLLIN | POLLHUP | POLLERR))) mns_read();
         if(p[0].revents & POLLIN) {
@@ -1109,7 +1130,15 @@ int main(void)
             }
         }
         if(at_fd >= 0 && (p[1].revents & (POLLIN | POLLHUP | POLLERR))) at_read();
-        if(hci >= 0 && (p[2].revents & POLLIN)) hci_read();
+        if(hci >= 0 && (p[2].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+            /* o hci0 foi registrado de novo (o Bluetooth religou): o socket fica em erro e o poll
+             * voltava na hora para sempre. Medido: bfphone a 91 % da CPU desde o boot, o
+             * aparelho todo lento (HTTPS do navegador sem tempo de handshake, TV a 100 %) */
+            close(hci);
+            hci = -1;
+            hci_retry = t + 2000;
+        } else if(hci >= 0 && (p[2].revents & POLLIN)) hci_read();
+        if(hci < 0 && t - hci_retry >= 0) { hci_open(); hci_retry = t + 2000; }
         if(sync_fd >= 0 && (p[3].revents & (POLLIN | POLLHUP))) sync_done();
         dbus_connection_read_write_dispatch(bus, 0);
     }

@@ -1,0 +1,32 @@
+#!/bin/sh
+# bigfoston-pan-dhcp — script do udhcpc da internet pelo celular (bfbt-agent, Bluetooth PAN).
+# Faz o que o script padrão faz (endereço, rota e DNS) e depois arruma o DNS do celular:
+#  - no TOPO do resolv.conf: o musl só usa os três primeiros "nameserver" e, ao fim da lista
+#    (depois do PC e dos públicos), o do celular era ignorado; sem o cabo USB sobravam só os
+#    públicos, que algumas operadoras bloqueiam no tethering;
+#  - sem o comentário "# bnep0" na linha, que o nslookup do busybox não entende ("bad
+#    address"). As linhas do celular ficam anotadas em /run/resolv.<interface> para sair
+#    quando a conexão cai.
+# SPDX-License-Identifier: GPL-3.0-or-later
+R=/etc/resolv.conf
+M=/run/resolv.$interface
+T=/run/resolv.conf.pan.$$
+
+drop() {                                   # tira as linhas anotadas de uma concessão anterior
+    [ -s "$M" ] || return 0
+    grep -vxF -f "$M" "$R" > "$T"; cat "$T" > "$R"; rm -f "$T" "$M"
+}
+
+case "$1" in
+deconfig|leasefail|nak) drop ;;
+esac
+/usr/share/udhcpc/default.script "$@"
+case "$1" in
+bound|renew)
+    drop
+    grep -E "# $interface\$" "$R" | sed "s/ # $interface\$//" > "$M"
+    { cat "$M"; grep -vE "# $interface\$" "$R"; } > "$T" && cat "$T" > "$R"
+    rm -f "$T"
+    ;;
+esac
+exit 0

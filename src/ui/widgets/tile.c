@@ -1,9 +1,25 @@
 /* tile.c — ícone da grade inicial (alvo de toque 152x146). */
 #include "tile.h"
 #include "../core/theme.h"
+#include <stdio.h>
 #include <string.h>
 
+static lv_obj_t *make(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *text, const char *label,
+                      uint32_t color, lv_event_cb_t cb, void *ud);
+
 lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *label,
+                      uint32_t color, lv_event_cb_t cb, void *ud)
+{
+    return make(parent, icon, NULL, label, color, cb, ud);
+}
+
+lv_obj_t *tile_create_text(lv_obj_t *parent, const char *text, const char *label,
+                           uint32_t color, lv_event_cb_t cb, void *ud)
+{
+    return make(parent, NULL, text, label, color, cb, ud);
+}
+
+static lv_obj_t *make(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *text, const char *label,
                       uint32_t color, lv_event_cb_t cb, void *ud)
 {
     const bf_palette_t *p = pal();
@@ -39,11 +55,20 @@ lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *
     lv_obj_remove_flag(sq, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(sq, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *img = lv_image_create(sq);
-    lv_image_set_src(img, icon);
-    lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-    lv_obj_center(img);
+    if(icon) {
+        lv_obj_t *img = lv_image_create(sq);
+        lv_image_set_src(img, icon);
+        lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
+        lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+        lv_obj_center(img);
+    }
+    else {                                       /* WebApp: a inicial do nome */
+        lv_obj_t *tx = lv_label_create(sq);
+        lv_label_set_text(tx, text ? text : "?");
+        lv_obj_set_style_text_font(tx, BF_FONT_L, 0);
+        lv_obj_set_style_text_color(tx, lv_color_white(), 0);
+        lv_obj_center(tx);
+    }
 
     lv_obj_t *l = lv_label_create(t);
     lv_label_set_text(l, label);
@@ -55,5 +80,72 @@ lv_obj_t *tile_create(lv_obj_t *parent, const lv_image_dsc_t *icon, const char *
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
 
     if(cb) lv_obj_add_event_cb(t, cb, LV_EVENT_CLICKED, ud);
+    return t;
+}
+
+lv_obj_t *tile_create_folder(lv_obj_t *parent, const char *label, uint32_t color, const tile_mini_t *minis,
+                             int n_apps, lv_event_cb_t cb, void *ud)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *t = make(parent, NULL, "", label, color, cb, ud);
+    lv_obj_t *sq = lv_obj_get_child(t, 0);
+    lv_obj_clean(sq);
+    /* vidro com a cor do grupo bem de leve, no lugar do degradê cheio */
+    lv_color_t c = lv_color_hex(color);
+    lv_obj_set_style_bg_color(sq, lv_color_mix(c, p->surface2, 70), 0);
+    lv_obj_set_style_bg_grad_color(sq, lv_color_mix(c, p->surface, 40), 0);
+    lv_obj_set_style_border_width(sq, 1, 0);
+    lv_obj_set_style_border_color(sq, lv_color_lighten(c, 60), 0);
+    lv_obj_set_style_border_opa(sq, LV_OPA_40, 0);
+    /* 2x2 miniaturas de 30 cabem em 80: 1 (borda) + 6 + 30 + 5 + 30 + 6 + 1 = 79 */
+    lv_obj_set_style_pad_all(sq, 6, 0);
+    lv_obj_set_style_pad_gap(sq, 5, 0);
+    lv_obj_set_flex_flow(sq, LV_FLEX_FLOW_ROW_WRAP);
+    for(int i = 0; i < 4; i++) {
+        lv_obj_t *m = lv_obj_create(sq);
+        lv_obj_remove_style_all(m);
+        lv_obj_set_size(m, 30, 30);
+        lv_obj_set_style_radius(m, 9, 0);
+        lv_obj_remove_flag(m, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        if(i >= n_apps) {                            /* lugar vazio da pasta */
+            lv_obj_set_style_bg_color(m, lv_color_white(), 0);
+            lv_obj_set_style_bg_opa(m, LV_OPA_10, 0);
+            continue;
+        }
+        lv_color_t mc = lv_color_hex(minis[i].color);
+        lv_obj_set_style_bg_color(m, lv_color_lighten(mc, 30), 0);
+        lv_obj_set_style_bg_grad_color(m, lv_color_darken(mc, 40), 0);
+        lv_obj_set_style_bg_grad_dir(m, LV_GRAD_DIR_VER, 0);
+        lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+        if(minis[i].icon) {
+            lv_obj_t *img = lv_image_create(m);
+            lv_image_set_src(img, minis[i].icon);
+            lv_image_set_scale(img, 256 * 22 / 56);
+            lv_obj_set_style_image_recolor(img, lv_color_white(), 0);
+            lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+            lv_obj_center(img);
+        } else {
+            lv_obj_t *tx = lv_label_create(m);
+            lv_label_set_text(tx, minis[i].initial ? minis[i].initial : "?");
+            lv_obj_set_style_text_font(tx, BF_FONT_S, 0);
+            lv_obj_set_style_text_color(tx, lv_color_white(), 0);
+            lv_obj_center(tx);
+        }
+    }
+    /* quantos apps: um selo no canto (pasta vazia: sem selo, os 4 lugares vazios já dizem) */
+    if(n_apps <= 0) return t;
+    char num[12];
+    snprintf(num, sizeof num, "%d", n_apps);
+    lv_obj_t *badge = lv_label_create(t);
+    lv_label_set_text(badge, num);
+    lv_obj_add_flag(badge, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_style_text_font(badge, BF_FONT_S, 0);
+    lv_obj_set_style_text_color(badge, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(badge, c, 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(badge, 7, 0);
+    lv_obj_set_style_pad_ver(badge, 1, 0);
+    lv_obj_align(badge, LV_ALIGN_TOP_RIGHT, -26, 8);
     return t;
 }

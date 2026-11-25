@@ -82,6 +82,7 @@ typedef struct {
 #define BF_SYMBOL_HDD       "\xEF\x82\xA0"  /* F0A0 */
 #define BF_SYMBOL_ROT_LEFT  "\xEF\x8B\xAA"  /* F2EA undo-alt: girar anti-horário */
 #define BF_SYMBOL_ROT_RIGHT "\xEF\x8B\xB9"  /* F2F9 redo-alt: girar horário */
+#define BF_SYMBOL_LOCK      "\xEF\x80\xA3"  /* F023 lock: página segura (Internet) */
 
 /* Temas de cores (Ajustes > Aparência). Os neutros (fundo, cartões, bordas)
  * levam um toque de "tint"; "glow" é a luz do degradê do papel de parede. */

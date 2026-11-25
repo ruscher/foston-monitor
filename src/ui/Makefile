@@ -14,7 +14,7 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.4.0
+VERSION   := 0.5.0
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
@@ -95,7 +95,7 @@ APP_OBJS   := $(patsubst %.c,$(BUILD)/%.o,$(APP_SRCS) $(BIGGPS_SRCS))
 LVGL_OBJS  := $(patsubst %.c,$(BUILD)/%.o,$(LVGL_SRCS) $(ASSET_SRCS) $(EXTRA_SRCS))
 DEPS       := $(APP_OBJS:.o=.d)
 
-.PHONY: all sim headless target target-hostcheck screenshots run clean size
+.PHONY: all sim headless target target-hostcheck screenshots run clean size test
 
 all: $(BIN)
 
@@ -151,6 +151,33 @@ screenshots: sim
 	@printf 'ls -la /data\n$$ dmesg | tail -n 20\ncat /proc/cpuinfo\n' > build/shotdata/history.txt
 	@mkdir -p $(SHOT_DIR) && rm -f $(SHOT_DIR)/*.png
 	BIGFOSTON_DATA=build/shotdata ./build/sim/bigfoston-shell --screenshot $(SHOT_DIR)
+
+# testes de unidade no PC (ASan/UBSan)
+HOST_CC ?= gcc
+test:
+	@rm -rf build/test/webdata && mkdir -p build/test/webdata
+	$(HOST_CC) -std=gnu11 -O1 -g -fsanitize=address,undefined -w -c third_party/lodepng/lodepng.c -o build/test/lodepng.o
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_webdata.c core/webdata.c -o build/test/test_webdata
+	./build/test/test_webdata build/test/webdata
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_lz4dec.c core/lz4dec.c -llz4 -o build/test/test_lz4dec
+	./build/test/test_lz4dec
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_kbdmap.c core/kbdmap.c -o build/test/test_kbdmap
+	./build/test/test_kbdmap
+	@rm -rf build/test/padmap && mkdir -p build/test/padmap
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_padmap.c core/padmap.c -o build/test/test_padmap
+	./build/test/test_padmap build/test/padmap
+	@rm -rf build/test/pkg && mkdir -p build/test/pkg
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ithird_party/lodepng \
+		tests/test_pkg.c core/pkg.c build/test/lodepng.o -o build/test/test_pkg
+	./build/test/test_pkg $(CURDIR)/build/test/pkg
+	@rm -rf build/test/appgroups && mkdir -p build/test/appgroups
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_appgroups.c core/appgroups.c -o build/test/test_appgroups
+	./build/test/test_appgroups build/test/appgroups
 
 run: sim
 	./build/sim/bigfoston-shell

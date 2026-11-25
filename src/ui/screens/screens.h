@@ -9,7 +9,8 @@ extern const bf_screen_def_t scr_home_def, scr_settings_def, scr_sysinfo_def, sc
        scr_monitor_def, scr_calibrate_def, scr_backlight_def, scr_volume_def,
        scr_language_def, scr_date_def, scr_power_def, scr_reset_def, scr_ssh_def,
        scr_advanced_def, scr_feature_def, scr_music_def, scr_files_def, scr_term_def, scr_book_def,
-       scr_appearance_def, scr_bigscreen_def, scr_gallery_def, scr_gps_def, scr_map_def, scr_perf_def, scr_bluetooth_def, scr_phone_def, scr_tv_def, scr_fm_def;
+       scr_appearance_def, scr_bigscreen_def, scr_gallery_def, scr_gps_def, scr_map_def, scr_perf_def, scr_bluetooth_def, scr_phone_def, scr_tv_def, scr_fm_def, scr_web_def, scr_perfmode_def,
+       scr_keyboard_def, scr_appgroup_def, scr_scc_def, scr_brp_def;
 
 /* Argumento de SCR_FEATURE: funções ainda sem implementação/hardware. */
 typedef enum {
@@ -26,6 +27,9 @@ typedef enum {
 void home_glass_create(lv_obj_t *parent);
 void home_glass_destroy(void);
 
+/* Argumento de SCR_WEB: WEB_ARG_APP0 + n abre o WebApp n (tela de apps) */
+#define WEB_ARG_APP0 1000
+
 /* Argumento de SCR_RUN */
 #define RUN_ARG_NORMAL   0
 #define RUN_ARG_TERMINAL 1
@@ -38,6 +42,7 @@ void scr_calibrate_demo_step(int step);
 void scr_gallery_demo(int step); /* 0 miniaturas, 1 abre a 1ª foto, 2 fecha, 3 controles, 4 gira, 5 zoom, 6 Voltar */
 void scr_music_demo(int step);   /* 0 tocar a 1ª faixa, 1 lista, 2 tela cheia, 3 parar, 4 opções, 9 fonte Bluetooth */
 void scr_tv_demo(int step);
+void scr_web_demo(const char *what);   /* Internet: "+start", "+menu", "+marks", URL... */
 void scr_fm_demo(int step);      /* Rádio FM: 0 normal, 1 digitar a frequência, 2 diagnóstico */
 bool scr_tv_volume(void);        /* ícone de som na TV: barra no rodapé (true se tratou) */      /* TV: 0 assistindo, 1 canais, 2 gravações, 3 busca, 4 AV */
 void scr_phone_demo(int tab);   /* Telefone: 0 discador, 1 contatos, 2 recentes, 3 mensagens */
@@ -65,13 +70,17 @@ void music_service_init(void);             /* timer de fundo (fim de faixa, font
  * de settings()->home_apps) */
 int         home_app_count(void);
 const char *home_app_name(int i);
+const char *home_app_key(int i);      /* ID estável ("music", "tv"...) */
 const lv_image_dsc_t *home_app_icon(int i);
 uint32_t    home_app_color(int i);
 bool        home_app_is_settings(int i);
 void        home_app_open(int i);
 void scr_files_demo(const char *path);    /* NULL: locais */
+void files_open_dir(const char *dir);     /* abre os Arquivos nesta pasta */
 void scr_term_demo_type(const char *s);   /* digita no shell do Terminal */
+void scr_scc_demo_tab(int t);             /* SC Controller: 0..2 abas; 3 registra, 4 salva, 5 esquece */
 void scr_book_demo(const char *path);     /* NULL: biblioteca */
 void book_open_file(const char *path);     /* Arquivos -> Livros */
 
+void scr_brp_demo(const char *line);     /* roteiro de capturas: linhas do motor */
 #endif

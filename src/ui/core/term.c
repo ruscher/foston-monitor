@@ -222,7 +222,8 @@ static void csi(term_t *t, char f)
         if(!t->priv) break;
         for(int i = 0; i < t->nparams; i++) {
             int v = t->params[i];
-            if(v == 25) t->cursor_visible = on;
+            if(v == 1) t->app_cursor = on;
+            else if(v == 25) t->cursor_visible = on;
             else if(v == 47 || v == 1047) set_alt(t, on);
             else if(v == 1049) {
                 if(on) { t->saved_x = t->cx; t->saved_y = t->cy; }

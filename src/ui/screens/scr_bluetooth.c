@@ -5,6 +5,8 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/btstat.h"
+#include "../core/perfmode.h"
+#include "../core/perfui.h"
 #include "../widgets/page.h"
 #include "../widgets/dialog.h"
 #include <stdio.h>
@@ -17,7 +19,7 @@ static lv_obj_t *sw, *st_lbl, *btn_vis, *btn_scan, *lbl_vis, *lbl_scan, *pl_card
                 *pl_play, *list, *msg;
 static lv_timer_t *tick;
 static bt_info_t cur;
-static char list_sig[BT_MAXDEV * 24 + 64];
+static char list_sig[BT_MAXDEV * 56 + 64];
 static char busy_addr[18];                /* aparelho com comando em andamento */
 static time_t switched_at;                /* quando o usuário ligou */
 static char forget_addr[18];
@@ -73,6 +75,10 @@ static void on_dev_action(lv_event_t *e)
         dialog_open(LV_SYMBOL_TRASH, pal()->danger, t, tr(S_BT_FORGET_BODY), btns, 2, -1, 1, forget_answer, NULL);
         return;
     }
+    if(!strcmp(what, "internet")) {                  /* liga/desliga a internet por este celular */
+        bt_cmd("internet %s %d", d->addr, d->inet_want ? 0 : 1);
+        return;
+    }
     if(bt_cmd("%s %s", what, d->addr)) snprintf(busy_addr, sizeof busy_addr, "%s", d->addr);
 }
 
@@ -118,7 +124,17 @@ static void build_list(void)
         const char *st = busy ? tr(S_BT_BUSY) : d->connected ? tr(S_BT_CONNECTED) : d->paired ? tr(S_BT_PAIRED)
                                                                                            : tr(S_BT_FOUND);
         bf_label(col, st, BF_FONT_S, d->connected ? lv_color_hex(C_BT) : p->text_dim);
+        if(d->nap && d->paired && d->connected) {      /* internet pelo celular (PAN) */
+            char it[120];
+            if(!d->inet_want) snprintf(it, sizeof it, "%s", tr(S_BT_INET_OFF));
+            else if(d->inet_on && d->inet_ip[0]) snprintf(it, sizeof it, tr(S_BT_INET_ON), d->inet_ip);
+            else snprintf(it, sizeof it, "%s", tr(d->inet_on ? S_BT_INET_DHCP : S_BT_INET_WAIT));
+            lv_obj_t *il = bf_label(col, it, BF_FONT_S, d->inet_on && d->inet_ip[0] ? p->success : p->text_dim);
+            bf_label_ellipsis(il, 300);
+        }
         lv_obj_t *b;
+        if(d->nap && d->paired && d->connected)
+            small_button(row, BF_SYMBOL_GLOBE, NULL, d->inet_want ? 1 : 0, "internet", i);
         if(!d->paired) b = small_button(row, NULL, tr(S_BT_PAIR), 1, "pair", i);
         else if(d->connected) b = small_button(row, NULL, tr(S_BT_DISCONNECT), 0, "disconnect", i);
         else b = small_button(row, NULL, tr(S_BT_CONNECT), 1, "connect", i);
@@ -174,8 +190,9 @@ static void refresh(void)
     char sig[sizeof list_sig];
     int k = snprintf(sig, sizeof sig, "%d%s;", cur.powered, busy_addr);
     for(int i = 0; i < cur.ndev && k < (int)sizeof sig - 32; i++)
-        k += snprintf(sig + k, sizeof sig - (size_t)k, "%s%d%d%.8s;", cur.dev[i].addr, cur.dev[i].paired,
-                      cur.dev[i].connected, cur.dev[i].name);
+        k += snprintf(sig + k, sizeof sig - (size_t)k, "%s%d%d%.8s%d%d%.15s;", cur.dev[i].addr, cur.dev[i].paired,
+                      cur.dev[i].connected, cur.dev[i].name, cur.dev[i].inet_want, cur.dev[i].inet_on,
+                      cur.dev[i].inet_ip);
     if(strcmp(sig, list_sig)) {
         snprintf(list_sig, sizeof list_sig, "%s", sig);
         build_list();
@@ -192,6 +209,56 @@ static lv_obj_t *action_button(lv_obj_t *parent, const char *sym, lv_event_cb_t 
     return b;
 }
 
+/* ---------------------------------------------------------------- pausado pelo modo performance */
+
+static void create(lv_obj_t *parent, int arg);
+static lv_obj_t *paused_pg, *paused_parent;
+static int paused_wait;
+
+/* o Bluetooth voltou (ou o modo desligou e passou tempo bastante): refaz a página de verdade */
+static void paused_check(lv_timer_t *t)
+{
+    (void)t;
+    if(perfmode_paused() & PM_SVC_BT) { paused_wait = 0; return; }
+    bt_info_t b;
+    bt_read(&b);
+    if(!b.available && ++paused_wait < 10) return;
+    lv_timer_delete(tick);
+    tick = NULL;
+    lv_obj_t *par = paused_parent;
+    lv_obj_delete(paused_pg);
+    paused_pg = NULL;
+    create(par, 0);
+}
+
+static void paused_off(lv_event_t *e) { (void)e; perfui_disable(); }
+
+static void paused_page(lv_obj_t *parent, lv_obj_t *pg)
+{
+    const bf_palette_t *p = pal();
+    page_header(pg, LV_SYMBOL_BLUETOOTH, lv_color_hex(C_BT), tr(S_APP_BLUETOOTH), tr(S_BT_SUB));
+    lv_obj_t *c = bf_card(pg);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_border_color(c, lv_color_hex(0xe66100), 0);
+    lv_obj_set_style_border_side(c, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(c, 4, 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, BF_SP_S, 0);
+    char title[96];
+    snprintf(title, sizeof title, LV_SYMBOL_CHARGE "  %s", tr(S_PERFM_PAUSED));
+    bf_label(c, title, BF_FONT_M, lv_color_hex(0xe66100));
+    lv_obj_t *m = bf_label(c, tr(S_PERFM_PAUSED_LONG), BF_FONT_S, p->text_dim);
+    lv_obj_set_width(m, LV_PCT(100));
+    lv_label_set_long_mode(m, LV_LABEL_LONG_WRAP);
+    lv_obj_t *b = bf_button(c, LV_SYMBOL_CHARGE, tr(S_PERFM_NOW_OFF), 1);
+    lv_obj_set_height(b, 52);
+    lv_obj_add_event_cb(b, paused_off, LV_EVENT_CLICKED, NULL);
+    paused_pg = pg;
+    paused_parent = parent;
+    paused_wait = 0;
+    tick = lv_timer_create(paused_check, 1000, NULL);
+}
+
 static void create(lv_obj_t *parent, int arg)
 {
     (void)arg;
@@ -200,6 +267,10 @@ static void create(lv_obj_t *parent, int arg)
     switched_at = 0;
     lv_obj_t *pg = page_create(parent);
     bt_read(&cur);
+    if(!cur.available && (perfmode_paused() & PM_SVC_BT)) {
+        paused_page(parent, pg);
+        return;
+    }
     if(!cur.available) {
         page_header(pg, LV_SYMBOL_BLUETOOTH, lv_color_hex(C_BT), tr(S_APP_BLUETOOTH), tr(S_BT_SUB));
         page_unavailable(pg, tr(S_BT_NOAGENT));
@@ -260,6 +331,7 @@ static void destroy(void)
 {
     if(tick) lv_timer_delete(tick);
     tick = NULL;
+    paused_pg = paused_parent = NULL;
 }
 
 const bf_screen_def_t scr_bluetooth_def = { create, destroy, S_APP_BLUETOOTH, NULL };

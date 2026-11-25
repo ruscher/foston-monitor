@@ -5,12 +5,15 @@
  * $BIGFOSTON_RUN_USER (padrão "bigfoston"); root só com BIGFOSTON_ALLOW_ROOT=1.
  * A sessão continua ao sair da tela (um timer global lê o PTY); a grade é
  * desenhada por um único objeto que só redesenha as linhas que mudaram.
- * Teclado próprio: letras/números, símbolos, Esc, Tab, Ctrl (fixo), setas. */
+ * Teclado próprio: letras/números, símbolos, Esc, Tab, Ctrl (fixo), setas. Com um teclado
+ * físico (core/hwkbd.c) todas as teclas vão para o shell e o da tela some na primeira. */
 #define _DEFAULT_SOURCE
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/term.h"
 #include "../core/runner.h"
+#include "../core/hwkbd.h"
+#include <linux/input.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pty.h>
@@ -271,10 +274,10 @@ static void kb_event(lv_event_t *e)
     else if(!strcmp(k, LV_SYMBOL_NEW_LINE)) seq = "\r";
     else if(!strcmp(k, "Esc")) seq = "\x1b";
     else if(!strcmp(k, "Tab")) seq = "\t";
-    else if(!strcmp(k, LV_SYMBOL_UP)) seq = "\x1b[A";
-    else if(!strcmp(k, LV_SYMBOL_DOWN)) seq = "\x1b[B";
-    else if(!strcmp(k, LV_SYMBOL_RIGHT)) seq = "\x1b[C";
-    else if(!strcmp(k, LV_SYMBOL_LEFT)) seq = "\x1b[D";
+    else if(!strcmp(k, LV_SYMBOL_UP)) seq = term.app_cursor ? "\x1bOA" : "\x1b[A";
+    else if(!strcmp(k, LV_SYMBOL_DOWN)) seq = term.app_cursor ? "\x1bOB" : "\x1b[B";
+    else if(!strcmp(k, LV_SYMBOL_RIGHT)) seq = term.app_cursor ? "\x1bOC" : "\x1b[C";
+    else if(!strcmp(k, LV_SYMBOL_LEFT)) seq = term.app_cursor ? "\x1bOD" : "\x1b[D";
     else {
         snprintf(one, sizeof one, "%s", k);
         if(one[0] && !one[1]) {
@@ -300,6 +303,76 @@ static void kb_event(lv_event_t *e)
             if(!strcmp(t, "Shift") || !strcmp(t, "Ctrl")) lv_buttonmatrix_clear_button_ctrl(kb, i, LV_BUTTONMATRIX_CTRL_CHECKED);
         }
     }
+}
+
+/* teclado físico: a tecla vira os bytes que um terminal VT100 mandaria */
+static bool hw_key(const hwkey_t *k)
+{
+    if(ended) { if(!k->repeat) restart_shell(); return true; }
+    if(kb_shown && kb) {                              /* digitando no teclado de verdade: mais linhas */
+        kb_shown = false;
+        lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        fit_grid();
+    }
+    char buf[16];
+    const char *seq = NULL;
+    bool ac = term.app_cursor;
+    switch(k->code) {
+    case KEY_ENTER: seq = "\r"; break;
+    case KEY_BACKSPACE: seq = (k->mods & HK_ALT) ? "\x1b\x7f" : "\x7f"; break;
+    case KEY_TAB: seq = (k->mods & HK_SHIFT) ? "\x1b[Z" : "\t"; break;
+    case KEY_ESC: seq = "\x1b"; break;
+    case KEY_UP: seq = ac ? "\x1bOA" : "\x1b[A"; break;
+    case KEY_DOWN: seq = ac ? "\x1bOB" : "\x1b[B"; break;
+    case KEY_RIGHT: seq = ac ? "\x1bOC" : "\x1b[C"; break;
+    case KEY_LEFT: seq = ac ? "\x1bOD" : "\x1b[D"; break;
+    case KEY_HOME: seq = "\x1b[1~"; break;
+    case KEY_END: seq = "\x1b[4~"; break;
+    case KEY_INSERT: seq = "\x1b[2~"; break;
+    case KEY_DELETE: seq = "\x1b[3~"; break;
+    case KEY_PAGEUP: seq = "\x1b[5~"; break;
+    case KEY_PAGEDOWN: seq = "\x1b[6~"; break;
+    case KEY_F1: seq = "\x1bOP"; break;
+    case KEY_F2: seq = "\x1bOQ"; break;
+    case KEY_F3: seq = "\x1bOR"; break;
+    case KEY_F4: seq = "\x1bOS"; break;
+    default: break;
+    }
+    if(!seq && k->text[0]) seq = k->text;
+    if(!seq && (k->mods & (HK_CTRL | HK_ALT))) {
+        /* Ctrl+letra = 1..26; Ctrl+[ \ ] espaço; Alt+tecla = ESC antes */
+        static const char letters[] = "qwertyuiopasdfghjklzxcvbnm";
+        static const uint16_t codes[] = { KEY_Q, KEY_W, KEY_E, KEY_R, KEY_T, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
+                                          KEY_A, KEY_S, KEY_D, KEY_F, KEY_G, KEY_H, KEY_J, KEY_K, KEY_L,
+                                          KEY_Z, KEY_X, KEY_C, KEY_V, KEY_B, KEY_N, KEY_M };
+        char c = 0;
+        for(size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) if(codes[i] == k->code) c = letters[i];
+        if(!c && k->code >= KEY_1 && k->code <= KEY_0) c = "1234567890"[k->code - KEY_1];
+        if(!c && k->code == KEY_SPACE) c = ' ';
+        if(!c && k->code == KEY_MINUS) c = '-';
+        if(!c && k->code == KEY_DOT) c = '.';
+        if(!c && k->code == KEY_SLASH) c = '/';
+        if(!c) return false;
+        int n = 0;
+        if(k->mods & HK_ALT) buf[n++] = 0x1b;
+        if(k->mods & HK_CTRL) {
+            if(c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
+            else if(c == ' ' || c == '2') c = 0;
+            else if(c == '3') c = 0x1b;
+            else if(c == '4') c = 0x1c;
+            else if(c == '5') c = 0x1d;
+            else if(c == '6') c = 0x1e;
+            else if(c == '7' || c == '/' || c == '-') c = 0x1f;
+            else if(c == '8') c = 0x7f;
+        }
+        else if(k->mods & HK_SHIFT && c >= 'a' && c <= 'z') c = (char)(c - 32);
+        buf[n++] = c;
+        send_bytes(buf, n);
+        return true;
+    }
+    if(!seq) return false;
+    send_bytes(seq, (int)strlen(seq));
+    return true;
 }
 
 static void grid_click(lv_event_t *e)
@@ -375,11 +448,13 @@ static void create(lv_obj_t *parent, int arg)
     }
     if(ended) lv_obj_remove_flag(ended_lbl, LV_OBJ_FLAG_HIDDEN);
     fit_grid();
+    hwkbd_set_handler(hw_key);
 }
 
 static void destroy(void)
 {
     /* a sessão continua; só a interface some */
+    hwkbd_set_handler(NULL);
     if(kb) { lv_obj_delete(kb); kb = NULL; }
     grid = ended_lbl = NULL;
     shift = ctrl = false;

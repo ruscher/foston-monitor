@@ -16,6 +16,7 @@
 #include "../core/btstat.h"
 #include "../core/gpsstat.h"
 #include "../core/phonestat.h"
+#include "../core/perfmode.h"
 #include "../widgets/glass.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
@@ -48,9 +49,16 @@ static void fmt_ms(char *out, size_t n, int ms)
 
 /* ---------------------------------------------------------------- relógio */
 
+static void open_date(lv_event_t *e) { (void)e; nav_go(SCR_DATE, 0); }
+
 static void clock_card(lv_obj_t *p)
 {
     lv_obj_t *c = glass_card(p, 30, 21, 446, 88, 24);      /* folga à direita da data */
+    /* um toque abre Ajustes > Data e hora */
+    lv_obj_add_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(c, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(c, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(c, open_date, LV_EVENT_CLICKED, NULL);
     clk = glass_label(c, "--:--", BF_FONT_CLOCK, GL_WHITE);
     lv_obj_align(clk, LV_ALIGN_LEFT_MID, 22, 2);
     lv_obj_t *div = lv_obj_create(c);
@@ -216,7 +224,9 @@ static void conn_tick(void)
     for(int i = 0; i < b.ndev; i++)
         if(b.dev[i].connected) { if(!nconn) dev = b.dev[i].name; nconn++; }
     char devb[96];
-    if(!b.available) st = tr(S_GL_UNAVAILABLE);
+    unsigned paused = perfmode_paused();
+    if(!b.available && (paused & PM_SVC_BT)) st = tr(S_PERFM_PAUSED);
+    else if(!b.available) st = tr(S_GL_UNAVAILABLE);
     else if(!b.powered) st = tr(S_BT_ST_OFF);
     else if(nconn) {
         st = tr(S_BT_CONNECTED);
@@ -250,7 +260,8 @@ static void conn_tick(void)
     gps_read(&g);
     int lvl = -1;                         /* sem barras quando não há medida */
     bf_str_t gs;
-    if(!gps_available()) gs = S_GL_UNAVAILABLE;
+    if(paused & PM_SVC_GPS) gs = S_PERFM_PAUSED;
+    else if(!gps_available()) gs = S_GL_UNAVAILABLE;
     else if(!gps_enabled() && !g.running) gs = S_GPS_DISABLED;
     else if(g.state <= GPS_STARTING) gs = S_GPS_STARTING;
     else if(g.state == GPS_SEARCHING) { gs = g.view ? S_GL_GPS_SEARCH : S_GL_GPS_NOSIG; lvl = 0; }

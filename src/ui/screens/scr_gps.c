@@ -4,6 +4,7 @@
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/gpsstat.h"
+#include "../core/perfmode.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -131,8 +132,10 @@ static void refresh(void)
     lv_color_t dot = cur.state >= GPS_FIX2D ? lv_color_hex(C_GPS) :
                      cur.state >= GPS_STARTING ? lv_color_hex(0xf5a524) : p->text_dim;
     lv_obj_set_style_bg_color(st_dot, dot, 0);
-    set_text(st_lbl, tr(gps_enabled() || cur.running ? names[cur.state] : S_GPS_DISABLED));
-    if(!gps_available()) set_text(st_sub, tr(S_GPS_NO_DLL));
+    bool paused = perfmode_paused() & PM_SVC_GPS;
+    set_text(st_lbl, tr(paused ? S_PERFM_PAUSED_SHORT : gps_enabled() || cur.running ? names[cur.state] : S_GPS_DISABLED));
+    if(paused) set_text(st_sub, tr(S_PERFM_PAUSED_LONG));
+    else if(!gps_available()) set_text(st_sub, tr(S_GPS_NO_DLL));
     else {
         snprintf(b, sizeof b, tr(S_GPS_SATS), cur.used, cur.view);
         set_text(st_sub, cur.running ? b : "");

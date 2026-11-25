@@ -1,9 +1,11 @@
 /* scr_home.c — tela Início, em um de três modos (Ajustes > Aparência):
  *   Grade     ícones grandes, paginada (deslizar ou setas)
- *   Painel    relógio grande, bateria, "Tocando agora" e atalhos
+ *   Painel    relógio grande, bateria, "Tocando agora", atalhos e Apps (todos os apps e grupos)
  *   Quiosque  a grade só com os apps escolhidos (sem Ajustes; ver bottombar.c)
  *   Foston Glass  cartões de vidro e dock (scr_home_glass.c)
- * Com o argumento HOME_ARG_APPS, a grade com todos os apps (botão Apps do Foston Glass). */
+ * Com o argumento HOME_ARG_APPS, a grade com todos os apps (Apps do Foston Glass e do Painel).
+ * A grade mostra a organização do usuário (core/appgroups.c, launcher.c): apps e pastas na
+ * ordem escolhida; segurar 2 s abre o menu de grupos (screens/launcher_ui.c). */
 #include "screens.h"
 #include "../core/theme.h"
 #include "../widgets/battery.h"
@@ -14,6 +16,11 @@
 #include "../core/player.h"
 #include "../core/cover.h"
 #include "../widgets/tile.h"
+#include "../widgets/dialog.h"
+#include "../core/webdata.h"
+#include "../core/apps.h"
+#include "../core/launcher.h"
+#include "launcher_ui.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
 #include <string.h>
@@ -25,31 +32,35 @@ typedef struct {
     uint32_t color;
     bf_screen_t scr;
     int arg;
+    const char *key;        /* ID estável na organização dos grupos ("sys:<key>"): nunca mudar */
 } app_t;
 
 /* A ordem é a dos bits de settings()->home_apps: só acrescentar no fim. */
 static const app_t apps[] = {
-    { &bf_icon_multimedia, S_APP_MULTIMEDIA, 0xe5534b, SCR_MUSIC, 0 },
-    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_TV,      0 },
-    { &bf_icon_bluetooth,  S_APP_BLUETOOTH,  0x3584e4, SCR_BLUETOOTH, 0 },
-    { &bf_icon_book,       S_APP_BOOK,       0xc98b2c, SCR_BOOK, 0 },
-    { &bf_icon_gps,        S_APP_GPS,        0x2ec27e, SCR_MAP, 0 },
-    { &bf_icon_files,      S_APP_FILES,      0xe0a40c, SCR_FILES, 0 },
-    { &bf_icon_terminal,   S_APP_TERMINAL,   0x4b5363, SCR_TERM, 0 },
-    { &bf_icon_run,        S_APP_RUN,        0x1fb5cc, SCR_RUN,     RUN_ARG_NORMAL },
-    { &bf_icon_bigscreen,  S_APP_BIGSCREEN,  0x2a6fd0, SCR_BIGSCREEN, 0 },
-    { &bf_icon_monitor,    S_APP_MONITOR,    0x26a269, SCR_MONITOR, 0 },
-    { &bf_icon_settings,   S_APP_SETTINGS,   0x6c7383, SCR_SETTINGS, 0 },
-    { &bf_icon_gallery,    S_APP_GALLERY,    0xd6409f, SCR_GALLERY, 0 },
-    { &bf_icon_phone,      S_APP_PHONE,      0x2ec27e, SCR_PHONE, 0 },
-    { &bf_icon_fm,         S_GL_RADIO,       0x7a6ff0, SCR_FM, 0 },
+    { &bf_icon_multimedia, S_APP_MULTIMEDIA, 0xe5534b, SCR_MUSIC, 0, "music" },
+    { &bf_icon_tv,         S_APP_TV,         0x9b6ad6, SCR_TV,      0, "tv" },
+    { &bf_icon_bluetooth,  S_APP_BLUETOOTH,  0x3584e4, SCR_BLUETOOTH, 0, "bluetooth" },
+    { &bf_icon_book,       S_APP_BOOK,       0xc98b2c, SCR_BOOK, 0, "book" },
+    { &bf_icon_gps,        S_APP_GPS,        0x2ec27e, SCR_MAP, 0, "gps" },
+    { &bf_icon_files,      S_APP_FILES,      0xe0a40c, SCR_FILES, 0, "files" },
+    { &bf_icon_terminal,   S_APP_TERMINAL,   0x4b5363, SCR_TERM, 0, "terminal" },
+    { &bf_icon_run,        S_APP_RUN,        0x1fb5cc, SCR_RUN,     RUN_ARG_NORMAL, "run" },
+    { &bf_icon_bigscreen,  S_APP_BIGSCREEN,  0x2a6fd0, SCR_BIGSCREEN, 0, "bigscreen" },
+    { &bf_icon_monitor,    S_APP_MONITOR,    0x26a269, SCR_MONITOR, 0, "monitor" },
+    { &bf_icon_settings,   S_APP_SETTINGS,   0x6c7383, SCR_SETTINGS, 0, "settings" },
+    { &bf_icon_gallery,    S_APP_GALLERY,    0xd6409f, SCR_GALLERY, 0, "gallery" },
+    { &bf_icon_phone,      S_APP_PHONE,      0x2ec27e, SCR_PHONE, 0, "phone" },
+    { &bf_icon_fm,         S_GL_RADIO,       0x7a6ff0, SCR_FM, 0, "fm" },
+    { &bf_icon_web,        S_APP_WEB,        0x3584e4, SCR_WEB, 0, "web" },
 };
 #define N_APPS    (int)(sizeof apps / sizeof apps[0])
 #define PER_PAGE  8
-#define MAX_PAGES ((N_APPS + PER_PAGE - 1) / PER_PAGE)
+#define MAX_ITEMS 192                       /* itens do nível principal da grade */
+#define MAX_PAGES (MAX_ITEMS / PER_PAGE)
 #define I_SETTINGS 10
 
 int home_app_count(void) { return N_APPS; }
+const char *home_app_key(int i) { return i >= 0 && i < N_APPS ? apps[i].key : ""; }
 const char *home_app_name(int i) { return tr(apps[i].label); }
 const lv_image_dsc_t *home_app_icon(int i) { return apps[i].icon; }
 uint32_t home_app_color(int i) { return apps[i].color; }
@@ -61,6 +72,7 @@ static void app_click(lv_event_t *e) { home_app_open((int)(intptr_t)lv_event_get
 /* ================================================================== grade */
 
 static lv_obj_t *tv, *arrow_l, *arrow_r, *dots[MAX_PAGES];
+static void fill_page_now(int pg);
 static int page, n_pages;  /* página lembrada entre visitas */
 
 static void sync_page(void)
@@ -82,6 +94,7 @@ static void tv_changed(lv_event_t *e)
     (void)e;
     lv_obj_t *t = lv_tileview_get_tile_active(tv);
     page = (int)lv_obj_get_x(t) / BF_SCREEN_W;
+    fill_page_now(page);
     sync_page();
 }
 
@@ -89,6 +102,7 @@ void scr_home_show_page(int pg)
 {
     if(!tv || pg < 0 || pg >= n_pages) return;
     page = pg;
+    fill_page_now(pg);
     lv_tileview_set_tile_by_index(tv, (uint32_t)pg, 0, LV_ANIM_OFF);
     sync_page();
 }
@@ -98,6 +112,7 @@ static void arrow_click(lv_event_t *e)
     int np = page + (int)(intptr_t)lv_event_get_user_data(e);
     if(np < 0 || np >= n_pages) return;
     page = np;
+    fill_page_now(np);
     lv_tileview_set_tile_by_index(tv, (uint32_t)np, 0, fx_anim());
     sync_page();
 }
@@ -117,12 +132,76 @@ static lv_obj_t *arrow(lv_obj_t *parent, const char *sym, int dir)
     return b;
 }
 
+static li_item_t items[MAX_ITEMS];
+
+/* Preenchimento aos poucos: a página à vista nasce na hora; as outras, 2 ícones a cada 15 ms
+ * (vizinhas primeiro), sem prender o laço da interface. Com 40 pastas, criar tudo de uma vez
+ * levava ~840 ms no ARM1176. */
+static lv_obj_t *page_grid[MAX_PAGES];
+static int fill_order[MAX_PAGES], page_done[MAX_PAGES], n_fill, fill_pos, n_items;
+static bool fill_kiosk;
+static int kiosk_list[32];
+static unsigned fill_serial;
+static lv_timer_t *fill_t;
+
+static void add_tile(int k, bool animate)
+{
+    int pg = k / PER_PAGE;
+    lv_obj_t *t;
+    if(fill_kiosk) {
+        int i = kiosk_list[k];
+        t = tile_create(page_grid[pg], apps[i].icon, tr(apps[i].label), apps[i].color, app_click, (void *)(intptr_t)i);
+    } else {
+        /* toque abre; segurar 2 s abre o menu (criar grupo, enviar, mover...) */
+        t = launcher_tile(page_grid[pg], &items[k]);
+        lui_bind_tile(t, &items[k], 0);
+    }
+    /* entrada: os ícones da página visível sobem em sequência */
+    if(animate) fx_slide_in(t, 0, 24, (uint32_t)(k - pg * PER_PAGE) * 30, 220);
+}
+
+static void fill_stop(void)
+{
+    if(fill_t) { lv_timer_delete(fill_t); fill_t = NULL; }
+}
+
+static int page_count(int pg) { int r = n_items - pg * PER_PAGE; return r < 0 ? 0 : r > PER_PAGE ? PER_PAGE : r; }
+
+static bool fill_stale(void) { return !fill_kiosk && ag_serial() != fill_serial; }   /* a tela será refeita */
+
+static void fill_tick(lv_timer_t *t)
+{
+    (void)t;
+    if(fill_stale()) { fill_stop(); return; }
+    for(int done = 0; done < 2;) {
+        if(fill_pos >= n_fill) { fill_stop(); return; }
+        int pg = fill_order[fill_pos];
+        if(page_done[pg] >= page_count(pg)) { fill_pos++; continue; }
+        add_tile(pg * PER_PAGE + page_done[pg]++, false);
+        done++;
+    }
+}
+
+/* a página chegou à vista antes da vez dela: completa agora */
+static void fill_page_now(int pg)
+{
+    if(pg < 0 || pg >= n_pages || !page_grid[pg] || fill_stale()) return;
+    while(page_done[pg] < page_count(pg)) add_tile(pg * PER_PAGE + page_done[pg]++, false);
+}
+
 static void create_grid(lv_obj_t *parent, bool kiosk)
 {
     const bf_palette_t *p = pal();
-    int list[N_APPS], n = 0;
-    for(int i = 0; i < N_APPS; i++)
-        if(!kiosk || ((settings()->home_apps >> i & 1u) && i != I_SETTINGS)) list[n++] = i;
+    int n = 0;
+    fill_stop();
+    fill_kiosk = kiosk;
+    if(kiosk) {                                   /* o quiosque mostra só os apps escolhidos, sem grupos */
+        for(int i = 0; i < N_APPS; i++)
+            if((settings()->home_apps >> i & 1u) && i != I_SETTINGS) kiosk_list[n++] = i;
+    } else {                                      /* a organização do usuário (core/appgroups.c) */
+        launcher_sync();
+        n = launcher_items(0, items, MAX_ITEMS);
+    }
     if(!n) {                           /* quiosque sem apps escolhidos */
         lv_obj_t *l = bf_label(parent, tr(S_HOME_KIOSK_EMPTY), BF_FONT_M, p->text_dim);
         lv_obj_set_width(l, 600);
@@ -133,7 +212,7 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
         return;
     }
     n_pages = (n + PER_PAGE - 1) / PER_PAGE;
-    if(page >= n_pages) page = 0;
+    if(page >= n_pages) page = n_pages - 1;
 
     tv = lv_tileview_create(parent);
     lv_obj_set_size(tv, BF_SCREEN_W, BF_CONTENT_H - 30);
@@ -149,14 +228,22 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
         lv_obj_set_style_pad_row(grid, 16, 0);
         lv_obj_set_style_pad_column(grid, 16, 0);
         lv_obj_add_flag(grid, LV_OBJ_FLAG_EVENT_BUBBLE);
-        for(int k = pg * PER_PAGE; k < n && k < (pg + 1) * PER_PAGE; k++) {
-            int i = list[k];
-            lv_obj_t *t = tile_create(grid, apps[i].icon, tr(apps[i].label), apps[i].color, app_click,
-                                      (void *)(intptr_t)i);
-            /* entrada: os ícones da página visível sobem em sequência */
-            if(pg == page) fx_slide_in(t, 0, 24, (uint32_t)(k - pg * PER_PAGE) * 30, 220);
-        }
+        page_grid[pg] = grid;
     }
+    n_items = n;
+    memset(page_done, 0, sizeof page_done);
+    for(int k = page * PER_PAGE; k < n && k < (page + 1) * PER_PAGE; k++) add_tile(k, true);
+    page_done[page] = page_count(page);
+    /* as outras páginas: as vizinhas primeiro */
+    fill_pos = 0;
+    int m = 0;
+    for(int d = 1; d < n_pages; d++) {
+        if(page + d < n_pages) fill_order[m++] = page + d;
+        if(page - d >= 0) fill_order[m++] = page - d;
+    }
+    n_fill = m;
+    fill_serial = ag_serial();
+    if(m) fill_t = lv_timer_create(fill_tick, 15, NULL);
     lv_obj_add_event_cb(tv, tv_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
     arrow_l = arrow(parent, LV_SYMBOL_LEFT, -1);
@@ -176,12 +263,18 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
         lv_obj_set_style_radius(dots[i], 4, 0);
         lv_obj_set_style_bg_color(dots[i], p->text_dim, 0);
     }
-    if(n_pages < 2) lv_obj_add_flag(dotrow, LV_OBJ_FLAG_HIDDEN);
+    if(n_pages < 2 || lui_moving()) lv_obj_add_flag(dotrow, LV_OBJ_FLAG_HIDDEN);
     lv_tileview_set_tile_by_index(tv, (uint32_t)page, 0, LV_ANIM_OFF);
     sync_page();
+    if(!kiosk) {
+        lui_search_button(parent);                /* lupa no canto: buscar app pelo nome */
+        lui_move_bar(parent, 0);                  /* modo mover: a faixa no rodapé */
+    }
 }
 
 /* ================================================================= painel */
+
+static void open_date(lv_event_t *e) { (void)e; nav_go(SCR_DATE, 0); }
 
 static lv_timer_t *panel_timer;
 static lv_obj_t *clk_lbl, *ampm_lbl, *date_lbl, *bat_icon, *bat_lbl, *song_lbl, *artist_lbl, *bar, *play_lbl;
@@ -309,12 +402,15 @@ static lv_obj_t *media_btn(lv_obj_t *parent, const char *sym, int cmd, bool prim
     return lv_obj_get_child(b, 0);
 }
 
-static void shortcut(lv_obj_t *parent, int i)
+#define SC_W 102                          /* 6 atalhos + Apps em 768 px */
+
+/* o botão de um atalho (cartão do Painel); o conteúdo fica com quem chama */
+static lv_obj_t *shortcut_box(lv_obj_t *parent)
 {
     const bf_palette_t *p = pal();
     lv_obj_t *b = lv_button_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, 118, 112);
+    lv_obj_set_size(b, SC_W, 112);
     lv_obj_set_style_radius(b, BF_RADIUS_L, 0);
     lv_obj_set_style_bg_color(b, p->surface, 0);
     lv_obj_set_style_bg_opa(b, p->dark ? LV_OPA_70 : LV_OPA_80, 0);
@@ -326,6 +422,13 @@ static void shortcut(lv_obj_t *parent, int i)
     lv_obj_set_flex_flow(b, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(b, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(b, 6, 0);
+    return b;
+}
+
+static void shortcut(lv_obj_t *parent, int i)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *b = shortcut_box(parent);
     lv_obj_add_event_cb(b, app_click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
     lv_color_t c = lv_color_hex(apps[i].color);
     lv_obj_t *sq = lv_obj_create(b);
@@ -344,7 +447,41 @@ static void shortcut(lv_obj_t *parent, int i)
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
     lv_obj_center(img);
     lv_obj_t *l = bf_label(b, tr(apps[i].label), BF_FONT_S, p->text);
-    bf_label_ellipsis(l, 110);
+    bf_label_ellipsis(l, SC_W - 8);
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+/* Apps: todos os aplicativos e grupos (a mesma grade do Foston Glass e da Grade). O ícone é a
+ * grade 2x2 na cor de destaque do tema, para se destacar dos atalhos */
+static void open_apps(lv_event_t *e) { (void)e; nav_go(SCR_HOME, HOME_ARG_APPS); }
+
+static void apps_shortcut(lv_obj_t *parent)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *b = shortcut_box(parent);
+    lv_obj_set_style_border_color(b, p->accent, 0);
+    lv_obj_set_style_border_opa(b, LV_OPA_60, 0);
+    lv_obj_add_event_cb(b, open_apps, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *sq = lv_obj_create(b);
+    lv_obj_remove_style_all(sq);
+    lv_obj_set_size(sq, 56, 56);
+    lv_obj_set_style_radius(sq, 16, 0);
+    lv_obj_set_style_bg_color(sq, lv_color_lighten(p->accent, 20), 0);
+    lv_obj_set_style_bg_grad_color(sq, lv_color_darken(p->primary, 30), 0);
+    lv_obj_set_style_bg_grad_dir(sq, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_opa(sq, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(sq, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    for(int k = 0; k < 4; k++) {                  /* 2x2 quadradinhos brancos */
+        lv_obj_t *q = lv_obj_create(sq);
+        lv_obj_remove_style_all(q);
+        lv_obj_set_size(q, 15, 15);
+        lv_obj_set_style_radius(q, 5, 0);
+        lv_obj_set_style_bg_color(q, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(q, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(q, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(q, LV_ALIGN_CENTER, k % 2 ? 9 : -9, k / 2 ? 9 : -9);
+    }
+    lv_obj_t *l = bf_label(b, tr(S_GL_APPS), BF_FONT_S, p->text);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
 }
 
@@ -367,15 +504,26 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(c, 6, 0);
-    lv_obj_t *row = bf_plain(c);
+    /* hora e data: um toque abre Ajustes > Data e hora (a bateria embaixo continua só informação) */
+    lv_obj_t *when = bf_plain(c);
+    lv_obj_set_size(when, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(when, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(when, 6, 0);
+    lv_obj_set_style_radius(when, BF_RADIUS_M, 0);
+    lv_obj_set_style_bg_color(when, p->surface2, LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(when, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_add_flag(when, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(when, open_date, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *row = bf_plain(when);
     lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_set_style_pad_column(row, BF_SP_S, 0);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_CLICKABLE);
     clk_lbl = bf_label(row, "", BF_FONT_CLOCK, p->text);
     ampm_lbl = bf_label(row, "", BF_FONT_M, p->text_dim);
     lv_obj_set_style_pad_bottom(ampm_lbl, 14, 0);
-    date_lbl = bf_label(c, "", BF_FONT_M, p->text);
+    date_lbl = bf_label(when, "", BF_FONT_M, p->text);
     bf_label_ellipsis(date_lbl, LV_PCT(100));
     lv_obj_t *brow = bf_plain(c);
     lv_obj_set_size(brow, LV_PCT(100), LV_SIZE_CONTENT);
@@ -446,15 +594,16 @@ static void create_panel(lv_obj_t *parent)
     lv_obj_t *sc = bf_plain(root);
     lv_obj_set_size(sc, LV_PCT(100), 112);
     lv_obj_set_flex_flow(sc, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(sc, 8, 0);
     int n = 0;
     for(int i = 0; i < N_APPS && n < 6; i++)
         if(settings()->home_apps >> i & 1u) { shortcut(sc, i); n++; }
     if(!n) bf_label(sc, tr(S_HOME_NO_SHORTCUTS), BF_FONT_S, p->text_dim);
-    else if(n < 6) {                  /* poucos atalhos: juntos à esquerda */
-        lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(sc, 10, 0);
-    }
+    lv_obj_t *gap = bf_plain(sc);                 /* Apps sempre no canto direito */
+    lv_obj_set_height(gap, 1);
+    lv_obj_set_flex_grow(gap, 1);
+    apps_shortcut(sc);
     fx_slide_in(sc, 0, 24, 60, 220);
 
     panel_tick(NULL);
@@ -467,6 +616,7 @@ static void create(lv_obj_t *parent, int arg)
 {
     tv = NULL;
     int m = settings()->home_mode;
+    if(arg != HOME_ARG_APPS && m != BF_HOME_GRID && lui_moving()) lui_move_cancel();   /* saiu da grade */
     if(arg == HOME_ARG_APPS) create_grid(parent, false);     /* Apps: todos os aplicativos */
     else if(m == BF_HOME_GLASS) home_glass_create(parent);
     else if(m == BF_HOME_PANEL) create_panel(parent);
@@ -476,6 +626,7 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     home_glass_destroy();
+    fill_stop();
     if(panel_timer) { lv_timer_delete(panel_timer); panel_timer = NULL; }
     tv = NULL;
     clk_lbl = ampm_lbl = date_lbl = bat_icon = bat_lbl = song_lbl = artist_lbl = bar = play_lbl = NULL;

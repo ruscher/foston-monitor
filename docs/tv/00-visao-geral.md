@@ -108,5 +108,19 @@ busca_fim, fim, parado, erro_*), `freq`, `locked`, `snr`, `rssi`, `ts_kbps`, `fp
 
 `bftvd 479.142857` no FOSTON: 13,9 qps mostrados, 2 quadros atrasados, sem perda de TS, ~70 % de CPU.
 
+**24/11/2026:** os canais passaram a mandar 29,97 qps (o SBT em H.264 Main com quadros B). Três
+falhas do player foram corrigidas:
+- TS perdido a cada segundo pelo `stats()`;
+- fila de 1 s a 30 qps;
+- SPI lento depois do download do firmware.
+
+Entrou também a escada de decodificação. Ver
+[../energia-e-desempenho/03-tv-fluidez.md](../energia-e-desempenho/03-tv-fluidez.md).
+
 O ffmpeg e a fdk-aac são compilados à parte (firmware/build/ffmpeg-tv, toolchain `out-cxx` com C++)
 e o player fica no cartão: a memória interna não tem espaço para eles.
+
+**Tela cheia (24/11/2026):** abria e fechava na hora. O laço saía dela se a camada de cima tivesse
+mais de um objeto, e a etiqueta do modo performance (escondida na TV, mas sempre presente) contava.
+Agora só um objeto *visível* a faz sair. Tocar na imagem abre a tela cheia; tocar em qualquer
+lugar volta.

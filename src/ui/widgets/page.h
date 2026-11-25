@@ -24,4 +24,7 @@ lv_obj_t *page_round_icon(lv_obj_t *parent, const char *symbol, lv_color_t color
  * o rótulo do valor é atualizado automaticamente. */
 lv_obj_t *page_slider_card(lv_obj_t *parent, const char *label, const char *sym_lo,
                            const char *sym_hi, int min, int value, lv_event_cb_t cb, void *ud);
+/* Cartão de escolha (uma de várias): título, explicação embaixo e ✓ no escolhido. */
+lv_obj_t *page_choice(lv_obj_t *parent, const char *symbol, const char *title, const char *sub, bool selected,
+                      lv_event_cb_t cb, void *ud);
 #endif

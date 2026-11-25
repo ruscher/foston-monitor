@@ -81,7 +81,29 @@ O shell é estático e não fala D-Bus; o `bfbt-agent` (libdbus, 0,9 MB de RAM) 
 - **Agente "DisplayYesNo"**: o pedido de pareamento aparece em qualquer tela do shell, com o
   código em letras grandes para comparar com o celular; Aceitar marca o aparelho como
   confiável. Serviços de aparelhos pareados e confiáveis são autorizados sem perguntar.
-  Aparelhos antigos que pedem digitar um PIN são recusados.
+- **Teclados** (HID): o BlueZ pede para o FOSTON mostrar um código (`DisplayPasskey`, chamado
+  de novo a cada tecla); o shell abre "Digite o código no teclado" com os números grandes e só
+  Cancelar (`CancelPairing`). Teclados antigos (antes do 2.1, `RequestPinCode`) recebem um PIN
+  de 6 dígitos sorteado e mostrado do mesmo jeito; outros aparelhos antigos, o PIN de fábrica
+  `0000`. O que o usuário pareia fica **confiável** (sem isso o BlueZ recusa a reconexão do
+  teclado quando ele acorda); teclados e mouses já pareados sem a marca são marcados uma vez.
+  Pareamentos vão para o cartão (`S35bluetooth save`) 1,5 s depois de parear ou esquecer,
+  não só ao desligar o Bluetooth. Teclados e mouses ficam fora da reconexão automática
+  (eles mesmos reconectam ao apertar uma tecla; a tentativa só atrasaria o celular ~5 s).
+  O kernel cria o `/dev/input/eventN` pelo `uhid`; o shell lê (ver
+  [Interface: teclado físico](../09-interface-ux-ui.md#teclado-físico)).
+- **Periféricos** (classe 0x05: teclado, mouse, controle de jogo): depois do `Pair` o agente
+  chama `Connect`. O `Pair` só cria o vínculo; o canal HID abre com o `Connect`, e o
+  DualShock 4 espera o computador conectar logo depois de parear: sem isso ficava
+  "Pareado" e desligava (24/11/2026). Para teclados que já conectaram sozinhos o `Connect`
+  não faz nada. A troca de papel do enlace (o celular mestre, para o AFH do áudio) não é
+  pedida para eles: o FOSTON segue mestre, sem virar escravo de várias piconets. Controles
+  em [Interface: controle de jogo](../09-interface-ux-ui.md#controle-de-jogo).
+- **DualShock 4**: o descritor HID do SDP não descreve o relatório 0x11 que o controle manda
+  pelo Bluetooth; sem o `hid-playstation` nenhum botão chegava. O `bfbt-agent --fix-hid`
+  corrige o descritor no cache do BlueZ (S35bluetooth, antes do `bluetoothd`) e, depois de
+  parear um DS4, corrige e reinicia o `bluetoothd`
+  ([detalhes](../jogos-e-pacotes/03-mapa-de-controles.md#dualshock-4-pelo-bluetooth-o-relatório-0x11-24112026)).
 - **Estado** em `/run/bigfoston-bt` (`chave=valor`; `dev=endereço|pareado|conectado|confiável|rssi|ícone|nome`,
   `req=`, `player=estado|título|artista|aparelho`, `result=operação|ok/erro/andamento|erro`).
 - **Comandos** no FIFO `/run/bigfoston-bt.cmd`: `on`, `off`, `visible 0|1`, `scan 0|1`,
@@ -103,5 +125,7 @@ o teste no aparelho com o dedo está pendente.
 - Teste do app no aparelho (pareamento novo pela tela, música pelos botões).
 - Saída de áudio do BigFoston para fones e caixas (A2DP fonte): o shell toca por OSS
   (mpg123), precisa de uma rota para o BlueALSA.
-- Viva-voz (HFP/SCO) e microfone; HID (teclado, mouse, controle).
+- Viva-voz (HFP/SCO) e microfone; mouse Bluetooth (o cursor do controle já existe).
+- Usar a luz, a vibração e a bateria do DualShock/DualSense, agora que o kernel tem o
+  `hid-playstation` (24/11/2026; +12 KB no zImage).
 - Decidir se o firmware oficial passa para bibliotecas compartilhadas.

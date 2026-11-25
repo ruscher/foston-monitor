@@ -36,6 +36,28 @@ typedef struct {
     int  music_bg;      /* 0 cor do tema, 1 cor da capa, 2 papel de parede */
     bool music_light;   /* tela cheia em modo claro */
     bool gallery_sort;  /* Galeria: false recentes primeiro, true por nome */
+    bool web_js;        /* Internet: JavaScript (Duktape, limitado e lento no ARMv6) */
+    bool web_no_images; /* Internet: economizar dados (sem imagens) */
+    int  web_search;    /* Internet: mecanismo de pesquisa (core/webdata.c) */
+    int  web_zoom;      /* Internet: zoom em % (50..200) */
+    bool web_pc;        /* Internet: navegação completa pelo Chromium do PC (bfweb-pc.py) */
+    bool web_fs_sharp;  /* Internet: vídeo em tela cheia na resolução inteira (padrão: meia, mais fluido) */
+    /* Modo performance (Ajustes > Modo performance; core/perfui.c) */
+    bool perf_auto;     /* liga sozinho quando um vídeo toca no Internet */
+    int  perf_enter_s;  /* segundos de vídeo tocando antes de ligar (0, 2, 5, 10) */
+    int  perf_exit_s;   /* segundos com o vídeo parado antes de desligar (5, 10, 30, 60) */
+    unsigned perf_svc;  /* o que pausar: PM_SVC_* (perfmode.h) */
+    bool perf_quiet;    /* sem sons de toque e animações enquanto ligado */
+    bool perf_prio;     /* a interface com prioridade maior enquanto ligado */
+    bool perf_tag;      /* etiqueta flutuante "Performance" no canto */
+    bool perf_modal;    /* janela com barra de progresso ao ligar e desligar */
+    bool perf_pad;      /* liga sozinho com um controle de jogo conectado */
+    bool perf_tv;       /* liga sozinho com a TV aberta */
+    bool perf_stream;   /* liga sozinho com a imagem do Big Remote Play */
+    bool perf_wall;     /* sem papel de parede enquanto ligado (fundo liso: menos a desenhar) */
+    bool perf_always;   /* o plano de energia mantém o modo ligado (pausa só GPS e tarefas) */
+    int  power_plan;    /* BF_PLAN_*: Ajustes > Potência (core/powerplan.c) */
+    int  fx_level;      /* BF_FX_*: efeitos visuais do sistema (Ajustes > Desempenho) */
     int  book_font;     /* Livros: 0..2 tamanho da letra */
     int  book_space;    /* 0..2 espaçamento entre linhas */
     int  book_margin;   /* 0..2 margens */
@@ -43,9 +65,12 @@ typedef struct {
     bool nav_voice;     /* Big GPS: instruções faladas */
     int  map_detail;    /* Big GPS: BF_DETAIL_* (Ajustes > Desempenho) */
     bool map_avoid_toll; /* Big GPS: rotas de carro e moto sem pedágio quando houver o arquivo */
+    int  kbd_layout;    /* teclado físico: BF_KBD_* (core/hwkbd.h); 0 = pelo idioma */
 } bf_settings_t;
 
 enum { BF_MODE_DARK, BF_MODE_LIGHT, BF_MODE_AUTO, BF_MODE__N };
+enum { BF_PLAN_ECO, BF_PLAN_BAL, BF_PLAN_PERF, BF_PLAN__N };
+enum { BF_FX_FULL, BF_FX_REDUCED, BF_FX_MIN, BF_FX__N };
 /* detalhe do mapa: automático escolhe pela situação e pelo tempo de cada quadro */
 enum { BF_DETAIL_AUTO, BF_DETAIL_ECONOMIC, BF_DETAIL_BALANCED, BF_DETAIL_DETAILED, BF_DETAIL__N };
 enum { BF_HOME_GRID, BF_HOME_PANEL, BF_HOME_KIOSK, BF_HOME_GLASS, BF_HOME__N };   /* só cresce no fim */

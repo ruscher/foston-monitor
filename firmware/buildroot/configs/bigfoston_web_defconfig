@@ -1,0 +1,51 @@
+# BigFoston Web: bibliotecas do navegador (docs/web-browser/08-buildroot-integration.md).
+# Não gera o firmware: só a staging com libcurl/OpenSSL/imagens/fontes que
+# tools/bigfoston/build-web.sh usa para compilar o motor. Tudo vai para o cartão
+# (BigFoston/web), nunca para o initrd (que já está no limite da NAND).
+# O toolchain é o do próprio firmware (firmware/build/out/host), como externo:
+# mesmo GCC, mesmo musl, mesma ABI do aparelho, sem recompilar o toolchain.
+#   make -C firmware/build/buildroot-2026.02.3 O=../out-web \
+#        BR2_EXTERNAL=../../buildroot bigfoston_web_defconfig && make -C ... O=../out-web
+BR2_arm=y
+BR2_arm1176jz_s=y
+BR2_ARM_EABI=y
+BR2_ARM_SOFT_FLOAT=y
+BR2_ARM_INSTRUCTIONS_ARM=y
+BR2_TARGET_OPTIMIZATION="-mno-unaligned-access"
+BR2_DL_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/../build/dl"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_BIGFOSTON_PATH)/patches"
+BR2_OPTIMIZE_S=y
+BR2_SSP_STRONG=y
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_PREINSTALLED=y
+BR2_TOOLCHAIN_EXTERNAL_PATH="$(BR2_EXTERNAL_BIGFOSTON_PATH)/../build/out/host"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="$(ARCH)-buildroot-linux-musleabi"
+BR2_TOOLCHAIN_EXTERNAL_GCC_14=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_6_12=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_MUSL=y
+BR2_TOOLCHAIN_EXTERNAL_HAS_SSP_STRONG=y
+BR2_INIT_NONE=y
+BR2_SYSTEM_BIN_SH_NONE=y
+# BR2_PACKAGE_BUSYBOX is not set
+BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_LIBCURL=y
+BR2_PACKAGE_LIBCURL_OPENSSL=y
+# mensagens de erro de verdade ("Could not resolve hostname"): o NetSurf as mostra e traduz
+BR2_PACKAGE_LIBCURL_VERBOSE=y
+# BR2_PACKAGE_LIBCURL_CURL is not set
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_LIBOPENSSL=y
+BR2_PACKAGE_EXPAT=y
+BR2_PACKAGE_ZLIB=y
+BR2_PACKAGE_LIBPNG=y
+BR2_PACKAGE_JPEG=y
+BR2_PACKAGE_JPEG_TURBO=y
+BR2_PACKAGE_WEBP=y
+BR2_PACKAGE_FREETYPE=y
+BR2_PACKAGE_DEJAVU=y
+BR2_PACKAGE_HOST_GPERF=y
+BR2_PACKAGE_HOST_BISON=y
+BR2_PACKAGE_HOST_FLEX=y
+BR2_PACKAGE_HOST_PKGCONF=y
+# BR2_TARGET_ROOTFS_TAR is not set

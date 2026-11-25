@@ -10,6 +10,9 @@ typedef struct {
     char addr[18], icon[24], name[64];
     bool paired, connected, trusted;
     int rssi;                         /* 0 = desconhecido */
+    bool nap;                         /* compartilha a internet (Tethering Bluetooth) */
+    bool inet_want, inet_on;          /* internet por ele: ligada pelo usuário / conectada */
+    char inet_ip[24];                 /* endereço na bnep0 ("" = ainda sem) */
 } bt_dev_t;
 
 typedef struct {

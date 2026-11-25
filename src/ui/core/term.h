@@ -22,6 +22,7 @@ typedef struct {
     int cols, rows;
     int cx, cy;                       /* cursor */
     bool cursor_visible;
+    bool app_cursor;                  /* ESC[?1h: setas mandam ESC O A (vi, less) */
     term_cell_t cell[TERM_MAX_ROWS][TERM_MAX_COLS];
     bool dirty[TERM_MAX_ROWS];
     /* interno */
