@@ -1,7 +1,7 @@
 ################################################################################
 # bigfoston-shell: graphical shell (src/ui, LVGL 9.2.2)
 ################################################################################
-BIGFOSTON_SHELL_VERSION = 0.5.0
+BIGFOSTON_SHELL_VERSION = 0.5.1
 BIGFOSTON_SHELL_SITE = $(BR2_EXTERNAL_BIGFOSTON_PATH)/../../src/ui
 BIGFOSTON_SHELL_SITE_METHOD = local
 BIGFOSTON_SHELL_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = --exclude build
