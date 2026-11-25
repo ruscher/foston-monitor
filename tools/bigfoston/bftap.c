@@ -1,7 +1,8 @@
 /* bftap — toca na tela do FOSTON a partir do terminal, para testar a interface no aparelho.
  *
  *   bftap X Y [MS]        toque em (X, Y) da tela 800x480, segurando MS ms (padrão 80)
- *   bftap -d X1 Y1 X2 Y2  arrasta de (X1, Y1) até (X2, Y2)
+ *   bftap -d X1 Y1 X2 Y2 [HOLD]  arrasta de (X1, Y1) até (X2, Y2); HOLD ms parado antes
+ *                         de mover (toque longo e arrasto, como o pino do Big GPS)
  *
  * Escreve eventos no evdev do touchscreen (o kernel repassa a quem lê, como um toque de
  * verdade). As coordenadas brutas saem da inversão da calibração do shell
@@ -71,6 +72,7 @@ int main(int argc, char **argv)
     if(argc >= 6 && !strcmp(argv[1], "-d")) {
         int x1 = atoi(argv[2]), y1 = atoi(argv[3]), x2 = atoi(argv[4]), y2 = atoi(argv[5]);
         point(x1, y1, 1);
+        if(argc >= 7) ms(atoi(argv[6]));
         for(int i = 1; i <= 12; i++) { ms(25); point(x1 + (x2 - x1) * i / 12, y1 + (y2 - y1) * i / 12, -1); }
         ms(40);
         point(x2, y2, 0);
@@ -80,7 +82,7 @@ int main(int argc, char **argv)
         ms(argc >= 4 ? atoi(argv[3]) : 80);
         point(x, y, 0);
     } else {
-        fprintf(stderr, "uso: bftap X Y [MS] | bftap -d X1 Y1 X2 Y2\n");
+        fprintf(stderr, "uso: bftap X Y [MS] | bftap -d X1 Y1 X2 Y2 [HOLD]\n");
         return 2;
     }
     close(fd);

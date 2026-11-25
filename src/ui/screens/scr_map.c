@@ -1404,6 +1404,13 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     lv_obj_t *fb = bf_button(head, LV_SYMBOL_SAVE, tr(S_MAP_SAVE_FAV), 0);
     lv_obj_set_height(fb, 40);
     lv_obj_add_event_cb(fb, fav_save_cb, LV_EVENT_CLICKED, NULL);
+    {
+        double lon, lat;
+        char line[160];
+        bgr_world_to_lonlat(x, y, &lon, &lat);
+        snprintf(line, sizeof line, "%.5f, %.5f · %s", lat, lon, tr(S_MAP_PIN_HINT));
+        bf_label(sh, line, BF_FONT_S, pal()->text_dim);
+    }
     bf_label(sh, tr(S_MAP_DEST_HINT), BF_FONT_S, pal()->text_dim);
     lv_obj_t *row = sheet_row(sh);
     static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
@@ -1970,6 +1977,46 @@ static void set_follow(bool on)
     }
 }
 
+/* ------------------------------------------------------ pino arrastável
+ * Toque simples, toque longo e arrasto (tela resistiva de um ponto): segurar o pino do
+ * destino o solta do mapa; ele segue o dedo com a ponta um pouco acima (o dedo não a cobre);
+ * perto da borda o mapa rola; ao soltar, o painel do destino volta com o ponto novo. */
+#define PIN_LIFT 36                    /* a ponta fica 36 px acima do dedo */
+#define PIN_TOP 50                     /* a ponta não sobe além disso: o pino inteiro aparece */
+static bool pin_hit, pin_drag, pin_moved;
+static lv_point_t pin_grab;
+
+static bool pin_touched(lv_point_t p)
+{
+    if(!N.has_dest || N.navigating || !dmark || lv_obj_has_flag(dmark, LV_OBJ_FLAG_HIDDEN)) return false;
+    int x = lv_obj_get_x(dmark) + 24, y = lv_obj_get_y(dmark) + 46;    /* ponta */
+    return p.x >= x - 30 && p.x <= x + 30 && p.y >= y - 56 && p.y <= y + 16;
+}
+
+static void pin_move(lv_point_t p)
+{
+    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+    int px = p.x, py = p.y - PIN_LIFT;
+    /* na borda o mapa anda junto — só depois que o pino de fato saiu do lugar (pegar um pino
+     * que já está perto da borda não faz o mapa correr) */
+    if(!pin_moved) pin_moved = abs(p.x - pin_grab.x) + abs(p.y - pin_grab.y) > 16;
+    int ex = px < 40 ? -8 : px > MAP_W - 40 ? 8 : 0, ey = py < PIN_TOP + 10 ? -8 : py > MAP_H - 40 ? 8 : 0;
+    if(pin_moved && (ex || ey)) {
+        bgr_view_t v = cur;
+        anchor(&v.ox, &v.oy);
+        bgr_screen_to_world(&v, &s, v.ox + ex, v.oy + ey, &cur.cx, &cur.cy);
+        set_follow(false);
+        update_offset();
+        if(!render_busy()) request();
+    }
+    if(py < PIN_TOP) py = PIN_TOP;
+    uint32_t x, y;
+    bgr_screen_to_world(&shown, &s, px - off_x, py - off_y, &x, &y);
+    N.dx = x;
+    N.dy = y;
+    update_dest_marker();
+}
+
 static void press_cb(lv_event_t *e)
 {
     lv_event_code_t c = lv_event_get_code(e);
@@ -1981,6 +2028,10 @@ static void press_cb(lv_event_t *e)
         drag_start = p;
         drag_view = cur;
         dragging = false;
+        pin_drag = false;
+        pin_hit = pin_touched(p);
+    } else if(c == LV_EVENT_PRESSING && pin_drag) {
+        pin_move(p);
     } else if(c == LV_EVENT_PRESSING) {
         int dx = p.x - drag_start.x, dy = p.y - drag_start.y;
         if(!dragging && dx * dx + dy * dy < 64) return;
@@ -1996,12 +2047,28 @@ static void press_cb(lv_event_t *e)
         request();
     } else if(c == LV_EVENT_LONG_PRESSED) {
         if(dragging || N.navigating || !R.started) return;
+        if(pin_hit) {                                 /* segurou o pino: passa a arrastá-lo */
+            pin_drag = true;
+            pin_moved = false;
+            pin_grab = p;
+            close_sheet();
+            lv_image_set_scale(dmark, 320);
+            lv_image_set_pivot(dmark, 24, 46);
+            pin_move(p);
+            return;
+        }
         rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
         uint32_t x, y;
         bgr_screen_to_world(&shown, &s, p.x - off_x, p.y - off_y, &x, &y);
         open_dest_sheet(x, y);
     } else if(c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
         dragging = false;
+        if(pin_drag) {                                /* soltou: novo destino, oferece a rota de novo */
+            if(c == LV_EVENT_RELEASED) pin_move(p);   /* o último ponto do dedo */
+            pin_drag = false;
+            lv_image_set_scale(dmark, LV_SCALE_NONE);
+            open_dest_sheet(N.dx, N.dy);
+        }
     }
 }
 

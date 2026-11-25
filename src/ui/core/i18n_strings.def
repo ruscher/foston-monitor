@@ -613,6 +613,7 @@ X(S_MAP_NOFIX,      "map.nofix",      "Sem posição", "No position", "Sin posic
 X(S_MAP_LAST,       "map.last",       "Última posição conhecida", "Last known position", "Última posición conocida")
 X(S_MAP_DEST,       "map.dest",       "Destino", "Destination", "Destino")
 X(S_MAP_DEST_HINT,  "map.dest_hint",  "Escolha como vai até o ponto marcado", "Choose how to get to the marked point", "Elija cómo ir al punto marcado")
+X(S_MAP_PIN_HINT,   "map.pin_hint",   "Toque e segure o pino para movê-lo", "Touch and hold the pin to move it", "Mantenga pulsado el pin para moverlo")
 X(S_MAP_CAR,        "map.car",        "Carro", "Car", "Coche")
 X(S_MAP_MOTO,       "map.moto",       "Moto", "Motorcycle", "Moto")
 X(S_MAP_BIKE,       "map.bike",       "Bicicleta", "Bicycle", "Bicicleta")
