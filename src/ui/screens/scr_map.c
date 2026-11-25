@@ -22,6 +22,7 @@
 #include "../biggps/bgicons.h"
 #include "../biggps/bgsearch.h"
 #include "../biggps/bgmotion.h"
+#include "../biggps/bgalert.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -284,6 +285,98 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
     }
 }
 
+/* ------------------------------------------------ pontos de alerta no quadro
+ * Pequenos e desenhados com o rasterizador (sem imagem nem SVG por quadro). Cada tipo só
+ * aparece a partir de um zoom, e no máximo MAXAL por quadro: nada de centenas de ícones. */
+#define MAXAL 160
+static void quad(rast_surface_t *s, int x0, int y0, int x1, int y1, uint16_t c)
+{
+    const int S = RAST_SUB;
+    int32_t q[] = { x0 * S, y0 * S, x1 * S, y0 * S, x1 * S, y1 * S, x0 * S, y1 * S };
+    int n4 = 4;
+    rast_fill(s, q, &n4, 1, c);
+}
+
+static void icon_signal(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    quad(s, x - 6, y - 12, x + 6, y + 12, rgb565(0xffffff));
+    quad(s, x - 5, y - 11, x + 5, y + 11, rgb565(0x2b2f36));
+    rast_disc(s, x * S, (y - 6) * S, 3 * S, rgb565(0xe5484d));     /* sem estado real: as três luzes */
+    rast_disc(s, x * S, y * S, 3 * S, rgb565(0xf5b83d));
+    rast_disc(s, x * S, (y + 6) * S, 3 * S, rgb565(0x30a46c));
+}
+
+static void icon_camera(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    rast_disc(s, x * S, y * S, 12 * S, rgb565(0xffffff));
+    rast_disc(s, x * S, y * S, 11 * S, rgb565(0xd93025));
+    rast_disc(s, x * S, y * S, 8 * S, rgb565(0xffffff));
+    quad(s, x - 5, y - 3, x + 3, y + 4, rgb565(0x202124));
+    int32_t lens[] = { (x + 3) * S, (y - 1) * S, (x + 6) * S, (y - 3) * S, (x + 6) * S, (y + 4) * S, (x + 3) * S, (y + 2) * S };
+    int n4 = 4;
+    rast_fill(s, lens, &n4, 1, rgb565(0x202124));
+}
+
+static void icon_bump(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    int32_t out[] = { x * S, (y - 12) * S, (x + 12) * S, (y + 9) * S, (x - 12) * S, (y + 9) * S };
+    int32_t in[] = { x * S, (y - 8) * S, (x + 8) * S, (y + 6) * S, (x - 8) * S, (y + 6) * S };
+    int n3 = 3;
+    rast_fill(s, out, &n3, 1, rgb565(0x202124));
+    rast_fill(s, in, &n3, 1, rgb565(0xf5b83d));
+    rast_disc(s, x * S, (y + 5) * S, 4 * S, rgb565(0x202124));     /* a lombada */
+    quad(s, x - 7, y + 5, x + 7, y + 7, rgb565(0x202124));
+}
+
+static void icon_rail(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    int32_t a[] = { (x - 9) * S, (y - 9) * S, (x + 9) * S, (y + 9) * S }, b[] = { (x + 9) * S, (y - 9) * S, (x - 9) * S, (y + 9) * S };
+    rast_line(s, a, 2, 7 * S, rgb565(0x202124), 0);
+    rast_line(s, b, 2, 7 * S, rgb565(0x202124), 0);
+    rast_line(s, a, 2, 4 * S, rgb565(0xffffff), 0);
+    rast_line(s, b, 2, 4 * S, rgb565(0xffffff), 0);
+}
+
+static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t *p)
+{
+    int z = v->zoom256 >> 8;
+    if(!p || z < 13) return;
+    uint32_t x0 = UINT32_MAX, y0 = UINT32_MAX, x1 = 0, y1 = 0;
+    static const int cx[4] = { 0, MAP_W, 0, MAP_W }, cy[4] = { 0, 0, MAP_H, MAP_H };
+    for(int i = 0; i < 4; i++) {                       /* caixa do quadro (girado) no mundo */
+        uint32_t wx, wy;
+        bgr_screen_to_world(v, s, cx[i], cy[i], &wx, &wy);
+        if(wx < x0) x0 = wx;
+        if(wx > x1) x1 = wx;
+        if(wy < y0) y0 = wy;
+        if(wy > y1) y1 = wy;
+    }
+    static const bga_entry_t *found[2048];
+    int n = bga_query(p, x0, y0, x1, y1, found, 2048), drawn = 0;
+    /* radares primeiro (os mais importantes), depois passagens de nível, lombadas, semáforos */
+    static const int order[] = { BGA_CAMERA, BGA_RAIL, BGA_BUMP, BGA_SIGNAL };
+    static const int minz[BGA_KINDS] = { 99, 15, 13, 15, 14 };
+    for(int o = 0; o < 4 && drawn < MAXAL; o++) {
+        int k = order[o];
+        if(z < minz[k]) continue;
+        for(int i = 0; i < n && drawn < MAXAL; i++) {
+            if(found[i]->kind != k) continue;
+            int sx, sy;
+            bgr_world_to_screen(v, s, found[i]->x, found[i]->y, &sx, &sy);
+            if(sx < -14 || sy < -14 || sx > MAP_W + 14 || sy > MAP_H + 14) continue;
+            if(k == BGA_SIGNAL) icon_signal(s, sx, sy);
+            else if(k == BGA_CAMERA) icon_camera(s, sx, sy);
+            else if(k == BGA_BUMP) icon_bump(s, sx, sy);
+            else icon_rail(s, sx, sy);
+            drawn++;
+        }
+    }
+}
+
 /* ------------------------------------------------ thread de renderização */
 static struct {
     pthread_t th;
@@ -299,6 +392,9 @@ static struct {
     bgm_pack_t *pack;
     uint32_t *route;           /* rota a desenhar (pontos x,y no mundo), dono: interface */
     int route_n;
+    int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
+    uint32_t route_px, route_py;
+    bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
 } R = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *worker(void *arg)
@@ -330,6 +426,8 @@ static void *worker(void *arg)
             else rn = 0;
         }
         if(rn) memcpy(rcopy, R.route, (size_t)rn * 2 * sizeof *rcopy);
+        int rk = R.route_k < rn - 1 ? R.route_k : -1;
+        uint32_t rpx = R.route_px, rpy = R.route_py;
         pthread_mutex_unlock(&R.mu);
 
         rast_surface_t s = { R.buf[back], MAP_W, MAP_H, MAP_W };
@@ -337,9 +435,23 @@ static void *worker(void *arg)
         int n = bgr_render(R.pack, &v, &s, tmp, MAXLBL, &st);
         if(rn >= 2) {
             int z = v.zoom256 >> 8, w = z >= 16 ? 8 : z >= 14 ? 6 : 4;
-            bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, rgb565(v.night ? 0x4c8bf5 : 0x1a73e8),
-                              (w + 3) * RAST_SUB, rgb565(v.night ? 0x0d2b5e : 0x0b3d91));
+            uint16_t blue = rgb565(v.night ? 0x4c8bf5 : 0x1a73e8), edge = rgb565(v.night ? 0x0d2b5e : 0x0b3d91);
+            if(rk >= 0) {
+                /* trecho já percorrido mais claro; o que falta em azul forte */
+                uint32_t kx = rcopy[2 * rk + 2], ky = rcopy[2 * rk + 3];
+                rcopy[2 * rk + 2] = rpx; rcopy[2 * rk + 3] = rpy;
+                bgr_draw_polyline(&v, &s, rcopy, rk + 2, w * RAST_SUB, rgb565(v.night ? 0x5b6f8f : 0x9fbbe6),
+                                  (w + 3) * RAST_SUB, rgb565(v.night ? 0x2a3447 : 0x7a93bd));
+                rcopy[2 * rk + 2] = kx; rcopy[2 * rk + 3] = ky;
+                kx = rcopy[2 * rk]; ky = rcopy[2 * rk + 1];
+                rcopy[2 * rk] = rpx; rcopy[2 * rk + 1] = rpy;
+                bgr_draw_polyline(&v, &s, rcopy + 2 * rk, rn - rk, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
+                rcopy[2 * rk] = kx; rcopy[2 * rk + 1] = ky;
+            } else {
+                bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
+            }
         }
+        draw_alerts(&v, &s, R.alerts);              /* por cima da rota: o radar na via aparece */
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
             l->x = tmp[i].x; l->y = tmp[i].y; l->angle = tmp[i].angle;
@@ -400,7 +512,11 @@ static struct {
     int said_next, said_far, said_near;
     bool prev_heading_up;
     char dest_name[64];
+    bga_hit_t *al;             /* alertas na rota (radar, lombada, passagem de nível) */
+    int nal, al_next, al_said;
 } N;
+static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
+static uint32_t last_say_ms;
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
 static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
@@ -457,6 +573,25 @@ static int render_busy(void)
     return b;
 }
 
+/* até onde a rota já foi percorrida (o quadro seguinte a desenha mais clara) */
+static void route_progress(void)
+{
+    int k = -1;
+    uint32_t px = 0, py = 0;
+    if(N.navigating && MO.fix_on_route && MO.xy && MO.npts >= 2) {
+        int lo = 0, hi = MO.npts - 1;
+        while(hi - lo > 1) { int mid = (lo + hi) / 2; if(MO.cum_dm[mid] <= MO.s) lo = mid; else hi = mid; }
+        k = lo;
+        px = (uint32_t)llround(MO.x);
+        py = (uint32_t)llround(MO.y);
+    }
+    pthread_mutex_lock(&R.mu);
+    R.route_k = k;
+    R.route_px = px;
+    R.route_py = py;
+    pthread_mutex_unlock(&R.mu);
+}
+
 static int cam_rot(void)
 {
     return heading_up ? -(int)lround(MO.has_disp ? MO.cam : pos_course) : 0;
@@ -471,7 +606,8 @@ static void anim_step(bool fix)
     uint64_t now = perf_now_us();
     int moved = bgmo_step(&MO, now);
     if(!moved && !fix) return;
-    if(!follow) { update_marker(); return; }
+    if(!follow) { route_progress(); update_marker(); return; }
+    route_progress();
     cur.cx = (uint32_t)llround(MO.x);
     cur.cy = (uint32_t)llround(MO.y);
     cur.rot = cam_rot();
@@ -852,6 +988,7 @@ static void set_route_overlay(const uint32_t *xy, int n)
     free(R.route);
     R.route = copy;
     R.route_n = n;
+    R.route_k = -1;
     pthread_mutex_unlock(&R.mu);
 }
 
@@ -886,6 +1023,7 @@ static void fit_route(void)
 static void say(const char *text)
 {
     fprintf(stderr, "biggps: voz: %s\n", text);
+    last_say_ms = (uint32_t)(perf_now_us() / 1000);
     if(settings()->nav_voice) voice_say(text);
 }
 
@@ -936,6 +1074,65 @@ static void announce(void)
         snprintf(full, sizeof full, "Em %s, %s", spoken_dist(st->next_dm, d, sizeof d), t);
         say(full);
     }
+}
+
+/* ------------------------------------------------------- alertas na rota
+ * Radar, lombada e passagem de nível que estão na rota à frente: voz uma vez, com
+ * antecedência pela velocidade, e um chip enquanto se aproxima. Semáforos só no mapa (seriam
+ * avisos demais). O limite só é dito quando o próprio ponto do OSM o informa. */
+
+static void route_alerts(void)
+{
+    free(N.al);
+    N.al = NULL;
+    N.nal = N.al_next = 0;
+    N.al_said = -1;
+    if(!R.alerts || N.route.npts < 2) return;
+    uint64_t t0 = perf_now_us();
+    int n;
+    bga_hit_t *h = bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n);
+    int w = 0;
+    for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
+    N.al = h;
+    N.nal = w;
+    fprintf(stderr, "biggps: %d alertas na rota (de %d pontos com semáforos) em %u ms\n", w, n,
+            (unsigned)((perf_now_us() - t0) / 1000));
+}
+
+static void alert_check(void)
+{
+    if(!N.nal || !N.st.valid) { if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    uint32_t at = N.st.progress_dm;
+    while(N.al_next < N.nal && N.al[N.al_next].at_dm + 50 < at) N.al_next++;   /* passou (5 m de folga) */
+    if(N.al_next >= N.nal) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    const bga_hit_t *a = &N.al[N.al_next];
+    double v = pos_speed / 3.6;
+    if(v < 8) v = 8;
+    uint32_t dist = a->at_dm > at ? (a->at_dm - at) / 10 : 0;
+    uint32_t warn = a->kind == BGA_CAMERA ? (uint32_t)fmax(300, v * 15) : (uint32_t)fmax(120, v * 8);
+    if(!settings()->map_alerts || dist > warn) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    char t[96];
+    const char *name = tr(a->kind == BGA_CAMERA ? S_MAP_AL_CAMERA : a->kind == BGA_BUMP ? S_MAP_AL_BUMP : S_MAP_AL_RAIL);
+    if(a->kind == BGA_CAMERA && a->maxspeed) snprintf(t, sizeof t, "%s · %u m · %u km/h", name, dist, a->maxspeed);
+    else snprintf(t, sizeof t, "%s · %u m", name, dist);
+    lv_label_set_text(al_lbl, t);
+    lv_obj_remove_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    if(N.al_said == N.al_next) return;
+    /* não fala por cima de uma manobra que acabou de ser dita */
+    uint32_t now = (uint32_t)(perf_now_us() / 1000);
+    if(now - last_say_ms < 2500) return;
+    N.al_said = N.al_next;
+    char d[48], full[160];
+    if(a->kind == BGA_CAMERA) {
+        if(dist >= 150) snprintf(full, sizeof full, "Radar a %s", spoken_dist(dist * 10, d, sizeof d));
+        else snprintf(full, sizeof full, "Radar à frente");
+        if(a->maxspeed) {
+            size_t o = strlen(full);
+            snprintf(full + o, sizeof full - o, ", limite de %u quilômetros por hora", a->maxspeed);
+        }
+    } else if(a->kind == BGA_BUMP) snprintf(full, sizeof full, "Lombada à frente");
+    else snprintf(full, sizeof full, "Passagem de nível à frente");
+    say(full);
 }
 
 static void update_banner(void)
@@ -1003,6 +1200,10 @@ static void close_sheet(void)
 static void end_navigation(void)
 {
     N.navigating = N.simulate = N.rerouting = N.active = N.has_dest = N.waiting = 0;
+    free(N.al);
+    N.al = NULL;
+    N.nal = 0;
+    if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
     memset(&N.st, 0, sizeof N.st);
     set_route_overlay(NULL, 0);
@@ -1139,6 +1340,12 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name);
 
 static void open_dest_sheet(uint32_t x, uint32_t y) { open_dest_sheet_named(x, y, NULL); }
 
+static void alerts_sw_cb(lv_event_t *e)
+{
+    settings()->map_alerts = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_save();
+}
+
 static void avoid_toll_cb(lv_event_t *e)
 {
     settings()->map_avoid_toll = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
@@ -1198,6 +1405,17 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
         lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
     }
+    if(R.alerts) {                                 /* avisos de radar e lombada na rota */
+        lv_obj_t *ar = sheet_row(sh);
+        lv_obj_set_flex_align(ar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *sw = lv_switch_create(ar);
+        lv_obj_set_size(sw, 64, 34);
+        if(settings()->map_alerts) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(sw, alerts_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_t *l = bf_label(ar, tr(S_MAP_AL_SWITCH), BF_FONT_M, pal()->text);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
+    }
 }
 
 static void route_result(bgrt_res_t *r)
@@ -1217,6 +1435,7 @@ static void route_result(bgrt_res_t *r)
     snprintf(N.dest_name, sizeof N.dest_name, "%s", r->dest_name);
     N.active = 1;
     set_route_overlay(N.route.xy, N.route.npts);
+    route_alerts();
     if(N.rerouting) {
         N.rerouting = 0;
         N.said_next = -1;
@@ -1269,6 +1488,7 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         if(N.st.valid) { cx = N.st.x; cy = N.st.y; }           /* a câmera segue o ponto na via */
         if(N.st.off_route && !N.rerouting && !N.waiting && !N.simulate) route_request(N.profile, true);
         announce();
+        alert_check();
         update_banner();
         update_botbar();
         if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
@@ -2026,6 +2246,31 @@ static int find_maps(char paths[][1024], int max)
     return 0;
 }
 
+/* pontos de alerta: o .bga mais novo em big-gps/alertas (opcional; sem ele o mapa funciona igual) */
+static bga_pack_t *open_alerts(void)
+{
+    const char *base = getenv("BIGFOSTON_BIGGPS");
+    if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
+    char dir[512], path[1024], err[256];
+    snprintf(dir, sizeof dir, "%s/alertas", base);
+    DIR *dp = opendir(dir);
+    if(!dp) return NULL;
+    bga_pack_t *best = NULL;
+    struct dirent *de;
+    while((de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bga") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        bga_pack_t *p = bga_open(path, err, sizeof err);
+        if(!p) { fprintf(stderr, "biggps: %s\n", err); continue; }
+        if(!best || bga_built(p) > bga_built(best)) { bga_close(best); best = p; }
+        else bga_close(p);
+    }
+    closedir(dp);
+    if(best) fprintf(stderr, "biggps: %u pontos de alerta\n", bga_count(best));
+    return best;
+}
+
 static void show_message(const char *title, const char *sub)
 {
     msg = bf_card(ov);
@@ -2174,8 +2419,14 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_bg_color(sim_chip, lv_color_hex(0xd93025), 0);
     lv_obj_set_style_bg_opa(sim_chip, LV_OPA_COVER, 0);
     bf_label(sim_chip, tr(S_MAP_SIMULATING), BF_FONT_S, lv_color_white());
-    lv_obj_align(sim_chip, LV_ALIGN_TOP_MID, 6, 124);
+    lv_obj_align(sim_chip, LV_ALIGN_TOP_RIGHT, -96, 124);
     lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
+
+    al_chip = chip(ov);                           /* radar / lombada à frente */
+    lv_obj_set_style_bg_color(al_chip, lv_color_hex(0xf5b83d), 0);
+    al_lbl = bf_label(al_chip, "", BF_FONT_M, lv_color_hex(0x202124));
+    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 92, 124);
+    lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
 
     set_follow(follow);
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
@@ -2189,6 +2440,7 @@ static void create(lv_obj_t *parent, int arg)
         tick = lv_timer_create(tick_cb, 100, NULL);
         return;
     }
+    R.alerts = open_alerts();
     R.pack = bgm_open(paths[0], err, sizeof err);
     for(int i = 1; R.pack && i < nmaps; i++)
         if(bgm_add(R.pack, paths[i], err, sizeof err)) fprintf(stderr, "biggps: %s\n", err);
@@ -2306,6 +2558,7 @@ static void destroy(void)
     voice_stop();
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
+    free(N.al);
     memset(&N, 0, sizeof N);
     bgmo_reset(&MO);
     free(R.route);
@@ -2317,6 +2570,9 @@ static void destroy(void)
     if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
+    bga_close(R.alerts);
+    R.alerts = NULL;
+    al_chip = al_lbl = NULL;
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
     voice_lbl = search_btn = NULL;
