@@ -14,7 +14,7 @@ abre o menu (enviar para outro grupo, tirar do grupo, mover, desinstalar...).
 
 **Jogos aparece sempre** na primeira vez, mesmo vazio. Vazio, a tela do grupo explica como
 instalar e tem o botão Abrir Arquivos. Os outros grupos de categoria nascem quando o
-primeiro app daquela categoria é instalado. O modo quiosque não mostra grupos.
+primeiro app daquela categoria é instalado. No modo quiosque os grupos ficam no ícone Apps, sem menus de organizar.
 
 Desde os grupos personalizados, as categorias são grupos comuns com uma `key`: o usuário pode
 renomear, recolorir, reordenar ou excluir, e criar os próprios grupos com qualquer app (do

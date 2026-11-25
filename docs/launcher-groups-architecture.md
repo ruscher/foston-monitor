@@ -32,7 +32,7 @@ menu, no modo mover o toque coloca o app ali) e `lui_move_bar()` para a faixa do
 | Grade | a própria tela inicial | mesma grade da tela Apps |
 | Painel | ícone **Apps** novo, no canto direito da fileira de atalhos | abre a grade (`SCR_HOME`, `HOME_ARG_APPS`) |
 | Foston Glass | botão Apps do dock (já existia) | abre a mesma grade |
-| Quiosque | não mostra grupos nem menu | de propósito: o quiosque é travado nos apps escolhidos |
+| Quiosque | ícone **Apps** no fim dos apps escolhidos: a mesma grade, com os grupos | travado: sem o Ajustes (só segurando 2 s na barra), sem menus de organizar e sem Opções no grupo (`launcher_kiosk()`) |
 
 Os atalhos do Painel e os apps do Quiosque continuam vindo de `home_apps` (Ajustes >
 Aparência > Apps escolhidos): são favoritos, independentes dos grupos. Pôr um app num grupo

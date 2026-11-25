@@ -30,7 +30,7 @@ jogos instalados depois continuam indo para ela.
 
 ## Testes
 
-Unidade 64/64, interface no simulador 55/55 (toque de verdade via ponteiro do LVGL, também
+Unidade 64/64, interface no simulador 61/61 (toque de verdade via ponteiro do LVGL, também
 com ASan/UBSan), suíte inteira sem falhas, e o fluxo principal no FOSTON real: toque longo,
 criar com acento, enviar, remover, excluir, Painel > Apps, Glass, busca, mover, reinício do
 processo e carga com 41 pastas. Tabela completa em [testes](launcher-groups-tests.md).
@@ -40,7 +40,8 @@ processo e carga com 41 pastas. Tabela completa em [testes](launcher-groups-test
 - **Sem arrastar de verdade**: num resistivo de um ponto, numa grade paginada em que o
   deslizar já troca de página e o dedo parado abre o menu, o arrastar disputaria o mesmo
   gesto. O modo mover faz tudo que o arrastar faria, com toques simples.
-- **Quiosque sem menu de grupos**: é o modo travado nos apps escolhidos.
+- **Quiosque**: os apps escolhidos e, no fim, o ícone **Apps** com todos os apps e grupos; lá o
+  Ajustes fica escondido (continua só segurando 2 s na barra) e não há menus de organizar.
 - **Atalhos do Painel independentes**: continuam sendo os "favoritos" de Aparência; um app
   num grupo continua no atalho.
 - **Soltar entre 0,7 s e 2 s não abre o app**: quem segurou e viu o anel estava pedindo o

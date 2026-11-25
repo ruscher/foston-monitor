@@ -744,6 +744,28 @@ static void group_tests(void)
         gcheck("Quiosque: sem menu de grupos", !ctxmenu_is_open());
         nav_home(); pump(300);
     }
+    shot("50v-quiosque-com-apps");
+    gcheck("Quiosque: ícone Apps no fim", tile_pt(tr(S_GL_APPS), &pt));
+    touch(pt, 120); pump(500);
+    gcheck("Quiosque: Apps abre a grade com todos", nav_current().scr == SCR_HOME &&
+           nav_current().arg == HOME_ARG_APPS && find_label(lv_screen_active(), "Educação") &&
+           find_label(lv_screen_active(), tr(S_APP_TV)));
+    gcheck("Quiosque: Ajustes fora da grade", !find_label(app_content(), tr(S_APP_SETTINGS)));   /* a barra tem "Ajustes" */
+    shot("50w-quiosque-apps-grade");
+    tile_pt(tr(S_APP_TV), &pt);
+    touch(pt, 2200); pump(100);
+    /* no quiosque segurar é como tocar (igual aos ícones da tela do quiosque): abre, sem menu */
+    gcheck("Quiosque: segurar não abre o menu de organizar", !ctxmenu_is_open() && nav_current().scr == SCR_TV);
+    go(SCR_HOME, HOME_ARG_APPS); pump(400);
+    tile_pt("Educação", &pt);
+    touch(pt, 120); pump(500);
+    gcheck("Quiosque: pasta abre, sem Opções", nav_current().scr == SCR_APPGROUP &&
+           !find_label(lv_screen_active(), tr(S_LG_OPTIONS)));
+    go(SCR_HOME, HOME_ARG_APPS); pump(300);
+    lui_search(); pump(100);
+    gcheck("Quiosque: a busca não acha o Ajustes", namebox_demo_submit(tr(S_APP_SETTINGS)) != NULL);
+    namebox_close(); pump(100);
+    nav_home(); pump(300);
     s->home_mode = BF_HOME_GRID;
     app_rebuild_now(); pump(50);
     nav_home(); pump(400);

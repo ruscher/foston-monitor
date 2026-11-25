@@ -77,12 +77,15 @@ static void create(lv_obj_t *parent, int arg)
     char sub[160], cnt[40];
     if(n_in == 1) snprintf(cnt, sizeof cnt, "%s", tr(S_LG_COUNT1));
     else snprintf(cnt, sizeof cnt, tr(S_LG_COUNTN), n_in);
-    if(n_in) snprintf(sub, sizeof sub, "%s  ·  %s", cnt, tr(S_LG_GRP_HINT));
+    if(n_in && launcher_kiosk()) snprintf(sub, sizeof sub, "%s", cnt);
+    else if(n_in) snprintf(sub, sizeof sub, "%s  ·  %s", cnt, tr(S_LG_GRP_HINT));
     else snprintf(sub, sizeof sub, "%s", tr(S_LG_EMPTY));
     bf_label(col, sub, BF_FONT_S, p->text_dim);
-    lv_obj_t *opt = bf_button(head, LV_SYMBOL_SETTINGS, tr(S_LG_OPTIONS), 0);
-    lv_obj_set_height(opt, 52);
-    lv_obj_add_event_cb(opt, options_click, LV_EVENT_CLICKED, NULL);
+    if(!launcher_kiosk()) {                        /* quiosque: o grupo só se abre, não se organiza */
+        lv_obj_t *opt = bf_button(head, LV_SYMBOL_SETTINGS, tr(S_LG_OPTIONS), 0);
+        lv_obj_set_height(opt, 52);
+        lv_obj_add_event_cb(opt, options_click, LV_EVENT_CLICKED, NULL);
+    }
 
     if(n_in) {
         lv_obj_t *grid = bf_plain(pg);
@@ -102,7 +105,7 @@ static void create(lv_obj_t *parent, int arg)
         }
     }
 
-    if(category || !n_in) {
+    if(category || (!n_in && !launcher_kiosk())) {
         /* grupo de categoria: como instalar mais; grupo do usuário vazio: como enviar apps */
         lv_obj_t *card = bf_card(pg);
         lv_obj_set_size(card, LV_PCT(100), LV_SIZE_CONTENT);

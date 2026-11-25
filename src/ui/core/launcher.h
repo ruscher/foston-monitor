@@ -28,6 +28,8 @@ void launcher_reopen(void);
 void launcher_load(void);
 /* os itens visíveis de um pai (0 = principal, ou o id do grupo), em ordem; devolve quantos */
 int launcher_items(int parent, li_item_t *out, int max);
+/* modo quiosque: a grade de Apps sem o Ajustes e sem os menus de organização */
+bool launcher_kiosk(void);
 bool launcher_resolve(const char *id, li_item_t *out);
 
 const char *launcher_name(const li_item_t *it, char *buf, size_t n);

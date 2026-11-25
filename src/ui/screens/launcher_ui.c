@@ -728,6 +728,8 @@ static void bind_free(lv_event_t *e)
     free(b);
 }
 
+static void locked_tap(lv_event_t *e) { tile_tap(NULL, lv_event_get_user_data(e)); }
+
 void lui_bind_tile(lv_obj_t *tile, const li_item_t *it, int parent)
 {
     bind_t *b = malloc(sizeof *b);
@@ -736,6 +738,10 @@ void lui_bind_tile(lv_obj_t *tile, const li_item_t *it, int parent)
     b->parent = parent;
     if(!b->id) { free(b); return; }
     lv_obj_add_event_cb(tile, bind_free, LV_EVENT_DELETE, b);
+    if(launcher_kiosk()) {                         /* quiosque: só abrir, sem organizar */
+        lv_obj_add_event_cb(tile, locked_tap, LV_EVENT_CLICKED, b);
+        return;
+    }
     hold_attach(tile, tile_tap, tile_hold, b);
     if(mv_on && !strcmp(mv_id, it->id)) hold_select(tile, true);   /* o que está sendo movido */
 }
