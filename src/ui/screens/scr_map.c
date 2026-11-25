@@ -498,6 +498,8 @@ static unsigned gps_ms;
 static bgmo_t MO;
 static lv_timer_t *anim;
 static uint64_t anim_req_us;
+static int zoom_goal = -1;     /* zoom pela velocidade na navegação: muda aos poucos; -1 = nenhum */
+#define ZOOM_STEP 26           /* ~0,1 nível por quadro do motor */
 #define ANIM_MS 50
 
 /* navegação */
@@ -600,17 +602,24 @@ static int cam_rot(void)
 /* um passo da animação: posição e câmera do instante atual; pede quadro novo ao motor só
  * quando a imagem deslocada já não basta (16 px de deslocamento, 2° de giro, outro zoom, ou
  * 1 s com o quadro fora do centro) e o motor está livre */
+static void update_scale(void);
+
 static void anim_step(bool fix)
 {
     if(!have_pos || !MO.has_disp) return;
     uint64_t now = perf_now_us();
     int moved = bgmo_step(&MO, now);
-    if(!moved && !fix) return;
+    if(!moved && !fix && (zoom_goal < 0 || zoom_goal == cur.zoom256 || !follow)) return;
     if(!follow) { route_progress(); update_marker(); return; }
     route_progress();
     cur.cx = (uint32_t)llround(MO.x);
     cur.cy = (uint32_t)llround(MO.y);
     cur.rot = cam_rot();
+    if(zoom_goal > 0 && zoom_goal != cur.zoom256 && !render_busy()) {
+        int d = zoom_goal - cur.zoom256;
+        cur.zoom256 += d > ZOOM_STEP ? ZOOM_STEP : d < -ZOOM_STEP ? -ZOOM_STEP : d;
+        update_scale();
+    }
     if(!have_shown) { if(!render_busy()) { request(); anim_req_us = now; } return; }
     update_offset();
     int dr = abs(shown.rot - cur.rot) % 360;
@@ -1234,6 +1243,7 @@ static void end_navigation(void)
     heading_up = N.prev_heading_up;
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
     cur.rot = 0;
+    zoom_goal = -1;
     update_marker();
     request();
 }
@@ -1524,7 +1534,10 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
         /* zoom pela velocidade: mais longe na estrada */
         int z = N.profile >= BGR_BIKE ? 17 * 256 : speed > 80 ? 15 * 256 + 128 : speed > 50 ? 16 * 256 : 16 * 256 + 128;
-        if(follow && z != cur.zoom256) { cur.zoom256 = z; update_scale(); }
+        /* anim_step chega lá aos poucos; um zoom feito à mão vale até a velocidade mudar de faixa */
+        static int last_z;
+        if(follow && z != last_z) zoom_goal = z;
+        last_z = z;
     }
     (void)cx; (void)cy;
     /* a câmera e o marcador seguem a posição animada (anim_cb); parado, o ruído do GPS
@@ -1971,6 +1984,7 @@ static void tick_cb(lv_timer_t *t)
 static void set_follow(bool on)
 {
     follow = on;
+    if(!on) zoom_goal = -1;                         /* o usuário assumiu o mapa */
     if(follow_btn) {
         lv_obj_set_style_bg_color(follow_btn, on ? lv_color_hex(C_POS) : pal()->surface, 0);
         lv_obj_set_style_text_color(follow_btn, on ? lv_color_white() : pal()->text, 0);
@@ -2079,6 +2093,7 @@ static void zoom_cb(lv_event_t *e)
     if(z < BGR_ZOOM_MIN) z = BGR_ZOOM_MIN;
     if(z > BGR_ZOOM_MAX) z = BGR_ZOOM_MAX;
     if(z == cur.zoom256) return;
+    zoom_goal = -1;                                  /* zoom escolhido à mão vale até a próxima mudança de velocidade */
     cur.zoom256 = z;
     update_scale();
     request();

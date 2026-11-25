@@ -32,3 +32,17 @@ redesenhos que não mudavam nada.
 
 Ainda não medido (fases seguintes): com Bluetooth A2DP tocando, com a voz falando, no
 cache frio e no tema claro, e um percurso real gravado.
+
+## 25/11/2026 — com alertas, voz Faber e zoom gradual
+
+Mesmo roteiro, mesmo aparelho, pacote de alertas do Brasil (169 mil pontos) e voz Faber no cartão.
+
+| Fase | Quadros/s | CPU | Motor p50 / p95 | Laço p95 | RSS |
+|---|---|---|---|---|---|
+| Seguir | 19,6 | 44 % | 208 / 319 ms (desenho 193 ms; antes 162: ícones de semáforo e lombada no centro) | 44 ms | 8,7 MB |
+| Navegação | 15,5 | 46 % | 104 / 463 ms | 79 ms | 15,3 MB (+0,8 MB: arquivos mapeados) |
+| Arrasto | 17,6 | 82 % | — | 86 ms | |
+| Rotação | 5,9 | 61 % | 112 / 147 ms | 62 ms | |
+
+Sem regressão de fluidez. O zoom pela velocidade agora muda ~0,1 nível por quadro do motor,
+em vez de saltar de uma vez.

@@ -44,7 +44,8 @@ anim_cb (20 Hz) ──► bgmo_step ──► posição animada + rumo do carro 
 - O giro da câmera aparece em degraus de até ~2–6°, a cada quadro novo do motor (~100–200 ms
   em navegação). Girar a imagem pronta a cada passo custaria uma transformação de
   800×480 por software (fase 3/5, a medir).
-- A troca de zoom pela velocidade (16,5 → 16 → 15,5) ainda é instantânea: espera o quadro
-  novo, sem escalar a imagem anterior.
+- A troca de zoom pela velocidade (16,5 → 16 → 15,5) anda em passos de ~0,1 nível, um por
+  quadro do motor (`zoom_goal`, `ZOOM_STEP`). Entre um passo e outro a imagem não é escalada.
+  Um zoom feito à mão vale até a velocidade mudar de faixa.
 - As bordas expostas no deslocamento são pintadas com a cor de fundo até o quadro novo chegar.
   Desenhar o mapa com margem resolveria, ao custo de mais área por quadro.
