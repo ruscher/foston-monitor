@@ -17,7 +17,9 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include "screens.h"
 #include "../core/theme.h"
 #include "../core/i18n.h"
@@ -840,7 +842,7 @@ static void create(lv_obj_t *parent, int arg)
     host_err[0] = host_ver[0] = 0;
     session_video = right_next = drag_mode = false;
     quality_load();
-    char err[160] = "";
+    char err[sizeof host_err] = "";
     if(!eng_start(err, sizeof err)) snprintf(host_err, sizeof host_err, "%s", err[0] ? err : "motor");
     io_t = lv_timer_create(io_tick, 30, NULL);
     pad_t = lv_timer_create(pad_tick, 8, NULL);
