@@ -240,4 +240,29 @@ def verify_card(storage: Storage, card: Card, report: Report) -> list[str]:
     return problems
 
 
-__all__ = ["Installer", "Step", "Cancelled", "card_state", "verify_card", "ManifestError", "StorageError"]
+# o que o instalador põe no cartão (só isso é removido ao limpar o cartão)
+OWN_FILES = ("bfagent.exe", "bfagent.exe.sha256", "bfagent.exe.old", "bfagent.exe.new", "install.json")
+OWN_DIRS = ("update", "update.tmp")
+
+
+def remove_from_card(mount: str) -> list[str]:
+    """Tira do cartão só o que o instalador gravou (agente, atualização pendente, install.json).
+    Ficam: BigFoston/data (ajustes do shell), recuperacao, update.ok/update.bad, update.log e
+    tudo fora de BigFoston/. Devolve o que foi removido."""
+    base = os.path.join(mount, DIR)
+    removed = []
+    for name in OWN_FILES:
+        p = os.path.join(base, name)
+        if os.path.isfile(p) and not os.path.islink(p):
+            os.remove(p)
+            removed.append(name)
+    for name in OWN_DIRS:
+        p = os.path.join(base, name)
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+            removed.append(name + "/")
+    os.sync()
+    return removed
+
+
+__all__ = ["remove_from_card", "Installer", "Step", "Cancelled", "card_state", "verify_card", "ManifestError", "StorageError"]

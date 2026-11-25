@@ -112,6 +112,16 @@ class UDisksStorage(Storage):
         cards.sort(key=lambda c: (c.system_disk, not c.removable, c.device))
         return cards
 
+    def watch(self, callback) -> int:
+        """Chama callback() (na thread principal do GLib) quando um disco entra ou sai."""
+        def on_signal(*_args):
+            callback()
+        return self.bus.signal_subscribe(BUS, "org.freedesktop.DBus.ObjectManager", None, ROOT, None,
+                                         Gio.DBusSignalFlags.NONE, on_signal)
+
+    def unwatch(self, sub: int) -> None:
+        self.bus.signal_unsubscribe(sub)
+
     def list_cards(self) -> list[Card]:
         return self._cards(self._objects())
 

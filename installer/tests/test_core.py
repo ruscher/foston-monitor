@@ -294,3 +294,35 @@ def test_verify_card_detects_damage(sd, release_dir):
         f.write(b"\0\0\0")
     problems = inst.verify_card(DirStorage(sd, card()), card(), lambda s: None)
     assert problems == ["zImage está diferente do que foi preparado (corrompido)."]
+
+
+# ------------------------------------------------------------------ backup
+
+def test_backup_bigfoston_and_verify(sd, tmp_path):
+    from bigfoston_installer.core import backup as bk
+    dest_parent = str(tmp_path / "pc")
+    os.makedirs(dest_parent)
+    b = bk.Backup(card(), sd, dest_parent, bk.SCOPE_BIGFOSTON, lambda s: None)
+    out = b.run()
+    meta = json.load(open(os.path.join(out, "backup.json")))
+    assert sorted(meta["files"]) == ["BigFoston/bfagent.exe", "BigFoston/data/settings.conf"]
+    assert bk.verify(out) == []
+    with open(os.path.join(out, "files", "BigFoston", "data", "settings.conf"), "a") as f:
+        f.write("x")
+    assert bk.verify(out) == ["BigFoston/data/settings.conf: diferente do original"]
+
+
+def test_backup_all_and_not_on_card(sd, tmp_path):
+    from bigfoston_installer.core import backup as bk
+    with pytest.raises(StorageError, match="próprio cartão"):
+        bk.Backup(card(), sd, os.path.join(sd, "BigFoston"), bk.SCOPE_ALL, lambda s: None)
+    out = bk.Backup(card(), sd, str(tmp_path), bk.SCOPE_ALL, lambda s: None).run()
+    assert "iGO/mapa.fbl" in json.load(open(os.path.join(out, "backup.json")))["files"]
+
+
+def test_remove_from_card_keeps_user_files(sd, release_dir):
+    run_install(sd, release_dir)[1]()
+    removed = inst.remove_from_card(sd)
+    assert set(removed) == {"bfagent.exe", "bfagent.exe.sha256", "bfagent.exe.old", "install.json", "update/"}
+    assert sorted(os.listdir(os.path.join(sd, "BigFoston"))) == ["data"]
+    assert os.path.isfile(os.path.join(sd, "iGO", "mapa.fbl"))
