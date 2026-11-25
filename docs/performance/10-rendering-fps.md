@@ -19,7 +19,8 @@ navegação (rota de demonstração simulada). Posições simuladas, nunca a do 
 
 O LVGL só desenha quando algo muda (o timer de desenho pausa sozinho). Em movimento contínuo
 o piso é ~40 ms por quadro de tela inteira (banda de memória, [08](08-lvgl-optimization.md)):
-~17-19 quadros/s no arrasto. Na navegação, com 1 posição GPS por segundo, a tela redesenha
-quando o quadro do motor chega (50-170 ms no econômico) e a interface fica livre no resto do
-tempo (laço p95 2 ms). Não há limite artificial de quadros: menos quadros não economizariam
+~17-19 quadros/s no arrasto. Na navegação, até a 0.5.1, a tela só redesenhava quando o quadro do
+motor chegava, uma vez por segundo: era o "2 FPS" percebido. Desde o Big GPS 2.0 a posição e a
+câmera andam a 20 Hz entre as posições do GPS, deslizando o quadro pronto
+([docs/big-gps-2/04-arquitetura-renderizacao.md](../big-gps-2/04-arquitetura-renderizacao.md)). Não há limite artificial de quadros: menos quadros não economizariam
 nada quando nada muda, e no arrasto a taxa já é limitada pela memória.

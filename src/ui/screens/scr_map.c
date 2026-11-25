@@ -21,6 +21,7 @@
 #include "../biggps/bgrouter.h"
 #include "../biggps/bgicons.h"
 #include "../biggps/bgsearch.h"
+#include "../biggps/bgmotion.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -288,7 +289,7 @@ static struct {
     pthread_t th;
     pthread_mutex_t mu;
     pthread_cond_t cv;
-    int started, stop, has_req, done;
+    int started, stop, has_req, done, busy;
     bgr_view_t req, done_view;
     uint16_t *buf[2];
     int front;                 /* a interface mostra buf[front] */
@@ -320,6 +321,7 @@ static void *worker(void *arg)
         if(R.stop) break;
         bgr_view_t v = R.req;
         R.has_req = 0;
+        R.busy = 1;
         int back = !R.front;
         int rn = R.route_n;                         /* cópia da rota: a interface pode trocá-la */
         if(rn > rcap) {
@@ -352,6 +354,7 @@ static void *worker(void *arg)
         R.us_fetch = st.us_fetch;
         R.us_draw = st.us_draw;
         R.done = 1;
+        R.busy = 0;
         fprintf(stderr, "biggps: quadro z%.1f em %u ms (%u tiles, %u feições)\n", v.zoom256 / 256.0, R.ms, st.tiles, st.feats);
     }
     pthread_mutex_unlock(&R.mu);
@@ -371,11 +374,19 @@ static bool have_pos, pos_live;
 static double pos_lat, pos_lon, pos_course, pos_speed;
 static placed_t placed[MAXLBL];
 static int nplaced;
-static int off_x, off_y;       /* deslocamento da imagem enquanto o quadro novo não chega */
+static int off_x, off_y;
+static int swap_serial;        /* muda a cada quadro novo do motor na tela */       /* deslocamento da imagem enquanto o quadro novo não chega */
 static lv_point_t drag_start;
 static bgr_view_t drag_view;
 static bool dragging;
 static unsigned gps_ms;
+/* movimento entre as posições do GPS (biggps/bgmotion.h): a câmera e o marcador andam a
+ * 20 Hz deslizando o quadro pronto; o motor só desenha um quadro novo quando a imagem
+ * deslocada já não basta (docs/big-gps-2/04-arquitetura-renderizacao.md) */
+static bgmo_t MO;
+static lv_timer_t *anim;
+static uint64_t anim_req_us;
+#define ANIM_MS 50
 
 /* navegação */
 static struct {
@@ -396,6 +407,7 @@ static lv_image_dsc_t icon_dsc;
 static uint16_t icon_px[80 * 80];
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
+static void anim_step(bool fix);
 static void anchor(int *ax, int *ay)
 {
     *ax = MAP_W / 2;
@@ -435,19 +447,71 @@ static void request(void)
 }
 
 static void update_marker(void);
+static void update_offset(void);
+
+static int render_busy(void)
+{
+    pthread_mutex_lock(&R.mu);
+    int b = R.has_req || R.busy || R.done;
+    pthread_mutex_unlock(&R.mu);
+    return b;
+}
+
+static int cam_rot(void)
+{
+    return heading_up ? -(int)lround(MO.has_disp ? MO.cam : pos_course) : 0;
+}
+
+/* um passo da animação: posição e câmera do instante atual; pede quadro novo ao motor só
+ * quando a imagem deslocada já não basta (16 px de deslocamento, 2° de giro, outro zoom, ou
+ * 1 s com o quadro fora do centro) e o motor está livre */
+static void anim_step(bool fix)
+{
+    if(!have_pos || !MO.has_disp) return;
+    uint64_t now = perf_now_us();
+    int moved = bgmo_step(&MO, now);
+    if(!moved && !fix) return;
+    if(!follow) { update_marker(); return; }
+    cur.cx = (uint32_t)llround(MO.x);
+    cur.cy = (uint32_t)llround(MO.y);
+    cur.rot = cam_rot();
+    if(!have_shown) { if(!render_busy()) { request(); anim_req_us = now; } return; }
+    update_offset();
+    int dr = abs(shown.rot - cur.rot) % 360;
+    if(dr > 180) dr = 360 - dr;
+    int far = abs(off_x) + abs(off_y);
+    bool need = shown.zoom256 != cur.zoom256 || dr >= 2 || far >= 16 || (far && now - anim_req_us > 1000000);
+    if(need && !render_busy()) { request(); anim_req_us = now; }
+}
+
+static void anim_cb(lv_timer_t *t)
+{
+    (void)t;
+    if(!dragging) anim_step(false);
+}
 
 /* desloca a imagem atual para mostrar 'cur' enquanto o quadro novo é desenhado */
 static void update_offset(void)
 {
     if(!have_shown) return;
     off_x = off_y = 0;
-    if(shown.zoom256 == cur.zoom256 && shown.rot == cur.rot && shown.ox == cur.ox && shown.oy == cur.oy) {
+    int drot = abs(shown.rot - cur.rot) % 360;
+    if(drot > 180) drot = 360 - drot;
+    /* giro pequeno (a câmera virando aos poucos): desloca pelo centro, o quadro novo acerta o resto */
+    if(shown.zoom256 == cur.zoom256 && drot <= 12 && shown.ox == cur.ox && shown.oy == cur.oy) {
         rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
         int sx, sy;
         bgr_world_to_screen(&shown, &s, cur.cx, cur.cy, &sx, &sy);
         off_x = shown.ox - sx;
         off_y = shown.oy - sy;
     }
+    /* nada mudou em pixels (o carro anda menos de 1 px por passo da animação): não
+     * redesenha a tela inteira à toa — só o marcador, se ele girou */
+    static int last_x = INT32_MIN, last_y, last_img;
+    if(off_x == last_x && off_y == last_y && last_img == swap_serial) { update_marker(); return; }
+    last_x = off_x;
+    last_y = off_y;
+    last_img = swap_serial;
     lv_obj_set_pos(img, off_x, off_y);
     lv_obj_invalidate(layer);
     for(int i = 0; i < nrot; i++)
@@ -655,17 +719,19 @@ static void update_marker(void)
     uint32_t wx, wy;
     int sx, sy;
     rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
-    bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
+    if(MO.has_disp) { wx = (uint32_t)llround(MO.x); wy = (uint32_t)llround(MO.y); }   /* posição animada */
+    else bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
     bgr_world_to_screen(&shown, &s, wx, wy, &sx, &sy);
     sx += off_x;
     sy += off_y;
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
-    bool moving = pos_live && pos_speed >= 3.0;
+    bool moving = pos_live && !MO.stale && pos_speed >= 3.0;
+    double head = MO.has_disp && MO.head >= 0 ? MO.head : pos_course;
     const lv_image_dsc_t *d = moving ? &mk_dsc[0] : pos_live ? &mk_dsc[1] : &mk_dsc[2];
     if(lv_image_get_src(mark) != d) lv_image_set_src(mark, d);
     if(moving) {
         lv_image_set_pivot(mark, 24, 30);
-        lv_image_set_rotation(mark, (int32_t)lround(fmod(pos_course + shown.rot + 720.0, 360.0) * 10));
+        lv_image_set_rotation(mark, (int32_t)lround(fmod(head + shown.rot + 720.0, 360.0) * 10));
         lv_obj_set_pos(mark, sx - 24, sy - 30);
     } else {
         lv_image_set_rotation(mark, 0);
@@ -779,6 +845,9 @@ static void set_route_overlay(const uint32_t *xy, int n)
         if(copy) memcpy(copy, xy, (size_t)n * 2 * sizeof *copy);
         else n = 0;
     } else n = 0;
+    /* o marcador anda pela geometria da rota (só N.route tem as distâncias) */
+    if(n >= 2 && xy == N.route.xy) bgmo_set_route(&MO, N.route.xy, N.route.cum_dm, N.route.npts);
+    else bgmo_set_route(&MO, NULL, NULL, 0);
     pthread_mutex_lock(&R.mu);
     free(R.route);
     R.route = copy;
@@ -1207,25 +1276,12 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         int z = N.profile >= BGR_BIKE ? 17 * 256 : speed > 80 ? 15 * 256 + 128 : speed > 50 ? 16 * 256 : 16 * 256 + 128;
         if(follow && z != cur.zoom256) { cur.zoom256 = z; update_scale(); }
     }
-    if(follow) {
-        /* parado (posição oscilando alguns metros): só redesenha se o centro andar 2 px ou
-         * o mapa girar 2 graus — poupa CPU com o GPS ligado e o aparelho quieto */
-        int rot = heading_up ? -(int)lround(pos_course) : 0;
-        rast_surface_t sf = { NULL, MAP_W, MAP_H, MAP_W };
-        int sx, sy;
-        bgr_view_t v = cur;
-        anchor(&v.ox, &v.oy);
-        bgr_world_to_screen(&v, &sf, cx, cy, &sx, &sy);
-        int dr = abs(rot - cur.rot) % 360;
-        if(dr > 180) dr = 360 - dr;
-        if(abs(sx - v.ox) >= 2 || abs(sy - v.oy) >= 2 || dr >= 2 || !have_shown) {
-            cur.cx = cx;
-            cur.cy = cy;
-            cur.rot = rot;
-            request();
-        }
-    }
-    update_marker();
+    (void)cx; (void)cy;
+    /* a câmera e o marcador seguem a posição animada (anim_cb); parado, o ruído do GPS
+     * não mexe no mapa (bgmotion ignora menos de 6 m) */
+    bgmo_fix(&MO, perf_now_us(), x, y, speed, speed >= 3 ? pos_course : -1,
+             N.navigating && N.st.valid, N.st.progress_dm);
+    anim_step(true);
 }
 
 /* simulação: avança 1 s pela rota na velocidade dos trechos */
@@ -1645,6 +1701,7 @@ static void tick_cb(lv_timer_t *t)
     }
     pthread_mutex_unlock(&R.mu);
     if(swapped) {
+        swap_serial++;
         lv_image_set_src(img, &dsc[R.front]);
         update_offset();
         lv_obj_invalidate(img);
@@ -1723,7 +1780,7 @@ static void follow_cb(lv_event_t *e)
     set_follow(true);
     if(have_pos) {
         bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
-        cur.rot = heading_up ? -(int)lround(pos_course) : 0;
+        cur.rot = cam_rot();
         request();
     }
 }
@@ -1733,7 +1790,7 @@ static void rot_cb(lv_event_t *e)
     (void)e;
     heading_up = !heading_up;
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
-    cur.rot = heading_up && follow ? -(int)lround(pos_course) : 0;
+    cur.rot = follow ? cam_rot() : 0;
     request();
 }
 
@@ -2204,8 +2261,9 @@ static void create(lv_obj_t *parent, int arg)
             closedir(dp);
         }
     }
-    R.stop = R.has_req = R.done = 0;
+    R.stop = R.has_req = R.done = R.busy = 0;
     R.front = 0;
+    bgmo_reset(&MO);
     int rc = pthread_create(&R.th, NULL, worker, NULL);
     if(rc == 0) R.started = 1;
     else fprintf(stderr, "biggps: pthread_create: %s\n", strerror(rc));
@@ -2213,6 +2271,7 @@ static void create(lv_obj_t *parent, int arg)
     gps_update();
     request();
     tick = lv_timer_create(tick_cb, 100, NULL);
+    anim = lv_timer_create(anim_cb, ANIM_MS, NULL);
     bench_start();
     /* teste no aparelho sem toque (docs/big-gps): BIGGPS_DEMO=1 marca o destino da
      * demonstração e, 6 s depois, simula o percurso */
@@ -2230,6 +2289,7 @@ static void destroy(void)
     demo_alive = false;
     if(bench_tm) { lv_timer_delete(bench_tm); bench_tm = NULL; }
     if(tick) { lv_timer_delete(tick); tick = NULL; }
+    if(anim) { lv_timer_delete(anim); anim = NULL; }
     if(R.started) {
         pthread_mutex_lock(&R.mu);
         R.stop = 1;
@@ -2247,6 +2307,7 @@ static void destroy(void)
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
     memset(&N, 0, sizeof N);
+    bgmo_reset(&MO);
     free(R.route);
     R.route = NULL;
     R.route_n = 0;
