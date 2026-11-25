@@ -28,7 +28,7 @@ cd src/ui && make test
 `core/screenshot.c`, função `group_tests()`: cria um dispositivo de ponteiro do LVGL que
 lê um "dedo" virtual. Os toques passam pelo mesmo caminho do aparelho (PRESSED, PRESSING,
 rolagem, RELEASED, CLICKED), com limite de rolagem de 16 px como o toque calibrado.
-**55/55**, também no build com ASan/UBSan, sem erro de memória.
+**61/61**, também no build com ASan/UBSan, sem erro de memória.
 
 ```
 cd src/ui && make sim
@@ -37,7 +37,7 @@ BIGFOSTON_TEST_GROUPS_ONLY=1 BIGFOSTON_DATA=/tmp/dados ./build/sim/bigfoston-she
 BIGFOSTON_TEST_BFAPP=$PWD/../../pkg/apps/sc-controller.bfapp make screenshots
 ```
 
-A suíte inteira terminou com teclado 0 falhas, controle 0, pacotes 0, grupos 55/55 e 182
+A suíte inteira terminou com teclado 0 falhas, controle 0, pacotes 0, grupos 61/61 e 184
 capturas; `screenshot_run` agora devolve erro se algum teste de grupo falhar.
 
 ## 3. No FOSTON real (25/11/2026)
@@ -72,7 +72,7 @@ limite de 0,7 s foram escolhidos para isso, mas valem uma conferência com a mã
 | 14 | reiniciar mantém | ✓ reabrir | ✓ reler o arquivo | ✓ processo reiniciado; **desligar e ligar não foi feito** (reinício remoto bloqueado nesta sessão) |
 | 15 | Apps no Painel | — | ✓ | ✓ |
 | 16 | grupos no Foston Glass | — | ✓ | ✓ menu da pasta, novo grupo em vidro |
-| 17 | outros temas | — | ✓ Quiosque sem menu, tema claro | — |
+| 17 | outros temas | — | ✓ Quiosque (Apps abre a grade sem Ajustes, sem menus, pasta sem Opções, busca sem Ajustes), tema claro | — |
 | 18 | rolar sem abrir menu | — | ✓ arrastar 120 px | ✓ arrastar 150 px |
 | 19 | cancelar o toque longo | — | ✓ soltar com 1 s | só o arrastar |
 | 20 | resistivo de um ponto | — | — | ✓ (toque injetado no driver, ver limite acima) |

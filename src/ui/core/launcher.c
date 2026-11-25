@@ -134,6 +134,11 @@ void launcher_sync(void)
     free(ids);
 }
 
+bool launcher_kiosk(void) { return settings()->home_mode == BF_HOME_KIOSK; }
+
+/* no quiosque o Ajustes só abre segurando 2 s na barra: fora da grade, das pastas e da busca */
+static bool shown(const char *id) { return !(launcher_kiosk() && !strcmp(id, "sys:settings")); }
+
 int launcher_items(int parent, li_item_t *out, int max)
 {
     int total = ag_children(parent, NULL, 0);
@@ -143,7 +148,7 @@ int launcher_items(int parent, li_item_t *out, int max)
     ag_children(parent, v, total);
     int n = 0;
     for(int i = 0; i < total && n < max; i++)
-        if(launcher_resolve(v[i], &out[n])) n++;           /* o que não existe agora: escondido */
+        if(shown(v[i]) && launcher_resolve(v[i], &out[n])) n++;   /* o que não existe agora: escondido */
     free(v);
     return n;
 }
@@ -180,7 +185,7 @@ int launcher_group_size(int gid)
     if(!v) return 0;
     ag_children(gid, v, total);
     int n = 0;
-    for(int i = 0; i < total; i++) if(launcher_resolve(v[i], tmp)) n++;
+    for(int i = 0; i < total; i++) if(shown(v[i]) && launcher_resolve(v[i], tmp)) n++;
     free(v);
     return n;
 }

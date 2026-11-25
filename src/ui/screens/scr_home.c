@@ -140,9 +140,41 @@ static li_item_t items[MAX_ITEMS];
 static lv_obj_t *page_grid[MAX_PAGES];
 static int fill_order[MAX_PAGES], page_done[MAX_PAGES], n_fill, fill_pos, n_items;
 static bool fill_kiosk;
-static int kiosk_list[32];
+static int kiosk_list[32];                /* índices da tabela; -1 = o ícone Apps */
 static unsigned fill_serial;
 static lv_timer_t *fill_t;
+
+static void open_apps(lv_event_t *e) { (void)e; nav_go(SCR_HOME, HOME_ARG_APPS); }
+
+/* os quatro quadradinhos brancos do ícone Apps (lado q, espaço gap), centrados em sq */
+static void apps_squares(lv_obj_t *sq, int q, int gap)
+{
+    for(int k = 0; k < 4; k++) {
+        lv_obj_t *m = lv_obj_create(sq);
+        lv_obj_remove_style_all(m);
+        lv_obj_set_size(m, q, q);
+        lv_obj_set_style_radius(m, q / 3, 0);
+        lv_obj_set_style_bg_color(m, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(m, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(m, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(m, LV_ALIGN_CENTER, k % 2 ? (q + gap) / 2 : -(q + gap) / 2, k / 2 ? (q + gap) / 2 : -(q + gap) / 2);
+    }
+}
+
+/* Apps no quiosque: o último ícone, abre a grade com todos os apps e grupos */
+static lv_obj_t *apps_tile(lv_obj_t *grid)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *t = tile_create_text(grid, "", tr(S_GL_APPS), 0x3584e4, open_apps, NULL);
+    lv_obj_t *sq = lv_obj_get_child(t, 0);
+    lv_obj_clean(sq);
+    lv_obj_set_style_bg_color(sq, lv_color_lighten(p->accent, 20), 0);
+    lv_obj_set_style_bg_grad_color(sq, lv_color_darken(p->primary, 30), 0);
+    apps_squares(sq, 22, 10);
+    lv_obj_set_style_border_color(t, p->accent, 0);
+    lv_obj_set_style_border_opa(t, LV_OPA_60, 0);
+    return t;
+}
 
 static void add_tile(int k, bool animate)
 {
@@ -150,7 +182,8 @@ static void add_tile(int k, bool animate)
     lv_obj_t *t;
     if(fill_kiosk) {
         int i = kiosk_list[k];
-        t = tile_create(page_grid[pg], apps[i].icon, tr(apps[i].label), apps[i].color, app_click, (void *)(intptr_t)i);
+        if(i < 0) t = apps_tile(page_grid[pg]);
+        else t = tile_create(page_grid[pg], apps[i].icon, tr(apps[i].label), apps[i].color, app_click, (void *)(intptr_t)i);
     } else {
         /* toque abre; segurar 2 s abre o menu (criar grupo, enviar, mover...) */
         t = launcher_tile(page_grid[pg], &items[k]);
@@ -198,6 +231,7 @@ static void create_grid(lv_obj_t *parent, bool kiosk)
     if(kiosk) {                                   /* o quiosque mostra só os apps escolhidos, sem grupos */
         for(int i = 0; i < N_APPS; i++)
             if((settings()->home_apps >> i & 1u) && i != I_SETTINGS) kiosk_list[n++] = i;
+        kiosk_list[n++] = -1;                     /* Apps: todos os apps e grupos */
     } else {                                      /* a organização do usuário (core/appgroups.c) */
         launcher_sync();
         n = launcher_items(0, items, MAX_ITEMS);
@@ -453,8 +487,6 @@ static void shortcut(lv_obj_t *parent, int i)
 
 /* Apps: todos os aplicativos e grupos (a mesma grade do Foston Glass e da Grade). O ícone é a
  * grade 2x2 na cor de destaque do tema, para se destacar dos atalhos */
-static void open_apps(lv_event_t *e) { (void)e; nav_go(SCR_HOME, HOME_ARG_APPS); }
-
 static void apps_shortcut(lv_obj_t *parent)
 {
     const bf_palette_t *p = pal();
@@ -471,16 +503,7 @@ static void apps_shortcut(lv_obj_t *parent)
     lv_obj_set_style_bg_grad_dir(sq, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_bg_opa(sq, LV_OPA_COVER, 0);
     lv_obj_remove_flag(sq, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    for(int k = 0; k < 4; k++) {                  /* 2x2 quadradinhos brancos */
-        lv_obj_t *q = lv_obj_create(sq);
-        lv_obj_remove_style_all(q);
-        lv_obj_set_size(q, 15, 15);
-        lv_obj_set_style_radius(q, 5, 0);
-        lv_obj_set_style_bg_color(q, lv_color_white(), 0);
-        lv_obj_set_style_bg_opa(q, LV_OPA_COVER, 0);
-        lv_obj_remove_flag(q, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(q, LV_ALIGN_CENTER, k % 2 ? 9 : -9, k / 2 ? 9 : -9);
-    }
+    apps_squares(sq, 15, 3);                      /* 2x2 quadradinhos brancos */
     lv_obj_t *l = bf_label(b, tr(S_GL_APPS), BF_FONT_S, p->text);
     lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
 }
