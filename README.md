@@ -10,7 +10,7 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
-![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.5.0-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
+![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.5.1-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -18,7 +18,7 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
-[🐧 BigFoston OS](#-bigfoston-os-050-linux-no-próprio-aparelho) •
+[🐧 BigFoston OS](#-bigfoston-os-051-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -54,12 +54,18 @@
 
 ---
 
-## 🐧 BigFoston OS 0.5.0: Linux no próprio aparelho
+## 🐧 BigFoston OS 0.5.1: Linux no próprio aparelho
 
 Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
 BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
 tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
 Brasil, rotas e voz; Bluetooth com o celular, Telefone, TV digital e transmissor FM.
+
+**Novidades da 0.5.1:**
+
+| | O que mudou | Estado |
+|---|---|---|
+| 🔐 | **Quiosque com o ícone Apps**: no fim dos apps escolhidos, abre a grade com todos os apps e grupos, sem o Ajustes (que continua só segurando 2 s na barra) e sem os menus de organizar | funcionando no aparelho (atualização aplicada pelo cartão) |
 
 **Novidades da 0.5.0:**
 
