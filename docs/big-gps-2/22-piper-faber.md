@@ -6,24 +6,30 @@ O Big GPS fala **só** com a voz neural Piper **pt_BR-faber-medium**. As frases 
 PC** com o modelo Faber e tocadas no FOSTON. Se o pacote de voz não estiver no cartão, não há
 voz (o botão de som some). Nunca entra outra voz no lugar, nem para completar uma frase.
 
-## Por que a síntese não roda no aparelho
+## Por que a síntese não roda no aparelho (medido em 25/11/2026)
 
-| | |
-|---|---|
-| Modelo | `pt_BR-faber-medium.onnx`, 63.201.294 bytes (VITS "medium", float32) |
-| No PC (BigLinux) | 3,6 s de fala em 0,43 s de relógio e 1,5 s de CPU (`piper-tts`, AVX, vários núcleos) |
-| FOSTON | ARM1176 a ~400 MHz, **sem FPU usada** (soft-float) e sem NEON; 118 MB de RAM, ~91 MB livres com o shell |
+| Medida | Valor | Como |
+|---|---|---|
+| Custo da Faber | **2,8 bilhões de multiplicações-somas por segundo de fala** (92 % em `Conv`) | ONNX Runtime 1.32 no PC com profiling; as formas reais de cada nó dão as contas |
+| FOSTON, float32 | **3,0 milhões/s** | `macbench` (laço de produto escalar, `-O2 -march=armv6`) no aparelho |
+| FOSTON, int16 | 36,3 milhões/s | o mesmo laço em inteiros |
+| FPU | ausente: `CONFIG_VFP` desligado no kernel, sem `vfp` no `/proc/cpuinfo` | |
+| Swap | desligada (decisão em [docs/performance/06-swap-sd.md](../performance/06-swap-sd.md)) | `free`, `/proc/swaps` |
 
-O modelo é todo em ponto flutuante de 32 bits. Sem FPU, cada multiplicação-soma vira chamadas
-de software de dezenas de ciclos. Em ordem de grandeza, a mesma frase que leva 1,5 s de CPU num
-núcleo x86 com AVX levaria **horas** no ARM1176. Além disso, só o modelo (63 MB) mais o
-ONNX Runtime ocupariam quase toda a RAM livre ao lado do mapa. Não há ONNX Runtime
-compilado para ARMv6 soft-float neste projeto. Compilar um só para confirmar o óbvio
-custaria dias.
+Contas:
+- **Modelo como é (float32):** 2.800 / 3,0 ≈ **930 s de CPU por segundo de fala**. Uma frase de
+  2,5 s ("Em 300 metros, vire à direita") levaria **~39 minutos** com o processador a 100 %.
+- **Se o modelo fosse convertido para inteiros de 16 bits:** isso exigiria um motor de inferência
+  próprio e perderia qualidade. Seriam 2.800 / 36 ≈ 77 s por segundo de fala, ~3 minutos por
+  frase. Mesmo dobrando com instruções DSP (`SMLAD`), seria ~1,5 minuto por frase, com o mapa
+  parado.
+- **Swap ou RAM** não mudam essas contas: o limite é o cálculo, não a memória. Com swap no
+  cartão ficaria ainda mais lento, porque os 63 MB de pesos seriam relidos do SD a cada frase.
+- Se o MT3351 tiver VFP desligada no kernel (não confirmado), o ganho seria de algumas dezenas
+  de vezes. Ainda assim seriam dezenas de segundos por segundo de fala.
 
-Por isso, **inferência local: não viável**. Isso não é uma medição no aparelho, e sim uma
-estimativa pelos números acima. Uma quantização para int8 reduziria o tamanho, mas não
-resolveria o tempo. A geração no PC continua usando o modelo original, sem perda.
+Por isso, **inferência local: inviável**, agora por medição e não por estimativa. A voz é a
+mesma Faber, gerada pelo mesmo modelo no PC.
 
 ## Como funciona
 
