@@ -1020,11 +1020,20 @@ static void fit_route(void)
 }
 
 /* voz: eSpeak NG (core/voice), se ligada nos ajustes e instalada no cartão */
-static void say(const char *text)
+/* text: o que se lê no registro; parts: os trechos da voz Faber separados por '|' */
+static void say(const char *text, const char *parts)
 {
     fprintf(stderr, "biggps: voz: %s\n", text);
     last_say_ms = (uint32_t)(perf_now_us() / 1000);
-    if(settings()->nav_voice) voice_say(text);
+    if(settings()->nav_voice) voice_say(parts);
+}
+
+/* "Vire à direita|na Rua X" da manobra */
+static void man_parts(const bgn_man_t *m, char *out, int n)
+{
+    char v[96], r[96];
+    bgn_voice_parts(m, v, sizeof v, r, sizeof r);
+    snprintf(out, (size_t)n, r[0] ? "%s|%s" : "%s", v, r);
 }
 
 static const char *spoken_dist(uint32_t dm, char *buf, int n)
@@ -1061,18 +1070,25 @@ static void announce(void)
     if(!N.said_near && dist <= near) {
         N.said_near = N.said_far = 1;
         /* "e depois" quando a manobra seguinte vem logo em seguida */
+        char p1[200], p2[200], parts[420];
+        man_parts(m, p1, sizeof p1);
         if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE) {
             char t2[160];
             bgn_text(&N.route.man[st->next + 1], t2, sizeof t2);
             lower_first(t2);
             snprintf(full, sizeof full, "%s, e depois %s", t, t2);
-            say(full);
-        } else say(t);
+            man_parts(&N.route.man[st->next + 1], p2, sizeof p2);
+            snprintf(parts, sizeof parts, "%s|e depois|%s", p1, p2);
+            say(full, parts);
+        } else say(t, p1);
     } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE) {
         N.said_far = 1;
         lower_first(t);
         snprintf(full, sizeof full, "Em %s, %s", spoken_dist(st->next_dm, d, sizeof d), t);
-        say(full);
+        char p1[200], parts[260];
+        man_parts(m, p1, sizeof p1);
+        snprintf(parts, sizeof parts, "Em %s|%s", d, p1);
+        say(full, parts);
     }
 }
 
@@ -1122,17 +1138,19 @@ static void alert_check(void)
     uint32_t now = (uint32_t)(perf_now_us() / 1000);
     if(now - last_say_ms < 2500) return;
     N.al_said = N.al_next;
-    char d[48], full[160];
+    char d[48], full[160], parts[160];
     if(a->kind == BGA_CAMERA) {
         if(dist >= 150) snprintf(full, sizeof full, "Radar a %s", spoken_dist(dist * 10, d, sizeof d));
         else snprintf(full, sizeof full, "Radar à frente");
+        snprintf(parts, sizeof parts, "%s", full);
         if(a->maxspeed) {
-            size_t o = strlen(full);
+            size_t o = strlen(full), q = strlen(parts);
             snprintf(full + o, sizeof full - o, ", limite de %u quilômetros por hora", a->maxspeed);
+            snprintf(parts + q, sizeof parts - q, "|limite de %u quilômetros por hora", a->maxspeed);
         }
-    } else if(a->kind == BGA_BUMP) snprintf(full, sizeof full, "Lombada à frente");
-    else snprintf(full, sizeof full, "Passagem de nível à frente");
-    say(full);
+    } else snprintf(full, sizeof full, "%s", a->kind == BGA_BUMP ? "Lombada à frente" : "Passagem de nível à frente");
+    if(a->kind != BGA_CAMERA) snprintf(parts, sizeof parts, "%s", full);
+    say(full, parts);
 }
 
 static void update_banner(void)
@@ -1249,7 +1267,12 @@ static void start_navigation(bool simulate)
     cur.zoom256 = N.profile >= BGR_BIKE ? 17 * 256 : 16 * 256 + 128;
     update_scale();
     char t[160];
-    if(N.route.nman) { bgn_text(&N.route.man[0], t, sizeof t); say(t); }
+    if(N.route.nman) {
+        char p1[200];
+        bgn_text(&N.route.man[0], t, sizeof t);
+        man_parts(&N.route.man[0], p1, sizeof p1);
+        say(t, p1);
+    }
     if(simulate) on_fix(N.route.xy[0], N.route.xy[1], 0, -1, true);
     else if(have_pos) {
         uint32_t x, y;
@@ -1439,7 +1462,7 @@ static void route_result(bgrt_res_t *r)
     if(N.rerouting) {
         N.rerouting = 0;
         N.said_next = -1;
-        say(tr(S_MAP_REROUTE));
+        say(tr(S_MAP_REROUTE), "Recalculando a rota");
         return;
     }
     /* visão geral com resumo */

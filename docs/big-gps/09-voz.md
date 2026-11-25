@@ -1,5 +1,9 @@
 # Big GPS — voz em português
 
+> **Substituído no Big GPS 2.0:** a voz agora é só a Piper pt_BR-faber-medium, pré-gerada no PC
+> ([docs/big-gps-2/22-piper-faber.md](../big-gps-2/22-piper-faber.md)). O eSpeak NG descrito abaixo saiu
+> do firmware e não é mais lido do cartão.
+
 Código: [src/ui/core/voice.c](../../src/ui/core/voice.c) (fala), agendamento em
 [src/ui/screens/scr_map.c](../../src/ui/screens/scr_map.c) (`announce`), textos em
 [src/ui/biggps/bgnav.c](../../src/ui/biggps/bgnav.c) (`bgn_text`), pacote

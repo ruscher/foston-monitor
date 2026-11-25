@@ -56,6 +56,11 @@ void bgn_update(bgn_route_t *r, uint32_t x, uint32_t y, double speed_kmh, double
 /* Text for a maneuver in Portuguese (for the screen and the voice), e.g.
  * "Vire à direita na Rua X", "Na rotatória, pegue a 2ª saída". */
 const char *bgn_text(const bgn_man_t *m, char *buf, int n);
+/* The same maneuver in the pieces the pre-generated voice has (core/voice.h): the maneuver
+ * ("Vire à direita", "Na rotatória, pegue a 2ª saída") and the road with its preposition
+ * ("na Rua X", "para a DF-440"; empty when there is no name).  Departure is always
+ * "Siga em frente". */
+void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn);
 /* Distance as spoken/shown in Portuguese: "300 m", "1,2 km". */
 const char *bgn_dist_text(uint32_t dm, char *buf, int n);
 

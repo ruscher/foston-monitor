@@ -326,7 +326,23 @@ static const char *prep(const char *name)
     return "na";
 }
 
-const char *bgn_text(const bgn_man_t *m, char *buf, int n)
+static const char *verb_of(int type);
+
+void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn)
+{
+    road[0] = 0;
+    if (m->type == BGN_ROUNDABOUT) {
+        snprintf(verb, (size_t)vn, "Na rotatória, pegue a %dª saída", m->exit);
+        if (m->name[0]) snprintf(road, (size_t)rn, "para %c %s", prep(m->name)[1], m->name);
+    } else if (m->type == BGN_DEPART) {
+        snprintf(verb, (size_t)vn, "Siga em frente");
+    } else {
+        snprintf(verb, (size_t)vn, "%s", verb_of(m->type));
+        if (m->type != BGN_ARRIVE && m->name[0]) snprintf(road, (size_t)rn, "%s %s", prep(m->name), m->name);
+    }
+}
+
+static const char *verb_of(int type)
 {
     static const char *verb[] = {
         [BGN_DEPART] = "Siga", [BGN_STRAIGHT] = "Continue em frente", [BGN_SLIGHT_RIGHT] = "Vire levemente à direita",
@@ -336,7 +352,12 @@ const char *bgn_text(const bgn_man_t *m, char *buf, int n)
         [BGN_KEEP_LEFT] = "Mantenha-se à esquerda", [BGN_RAMP_RIGHT] = "Pegue o acesso à direita",
         [BGN_RAMP_LEFT] = "Pegue o acesso à esquerda", [BGN_ROUNDABOUT] = "Na rotatória", [BGN_ARRIVE] = "Você chegou ao destino",
     };
-    const char *v = m->type <= BGN_ARRIVE ? verb[m->type] : "";
+    return type >= 0 && type <= BGN_ARRIVE ? verb[type] : "";
+}
+
+const char *bgn_text(const bgn_man_t *m, char *buf, int n)
+{
+    const char *v = verb_of(m->type);
     if (m->type == BGN_ROUNDABOUT) {
         if (m->name[0]) snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída para %c %s", m->exit, prep(m->name)[1], m->name);
         else snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída", m->exit);

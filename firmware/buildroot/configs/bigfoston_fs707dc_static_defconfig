@@ -47,7 +47,7 @@ BR2_PACKAGE_BIGFOSTON_SHELL=y
 BR2_PACKAGE_BIGFOSTON_GPS=y
 BR2_PACKAGE_BIGFOSTON_BT=y
 BR2_PACKAGE_BIGFOSTON_FM=y
-BR2_PACKAGE_BIGFOSTON_ESPEAK_NG=y
+# BR2_PACKAGE_BIGFOSTON_ESPEAK_NG is not set
 BR2_ROOTFS_USERS_TABLES="$(BR2_EXTERNAL_BIGFOSTON_PATH)/board/foston-fs707dc/users.table"
 # audio without alsa-lib (static build: every user would carry its own ~600 KB copy;
 # tinyalsa needs shared libs): mpg123 plays through the kernel OSS emulation and the

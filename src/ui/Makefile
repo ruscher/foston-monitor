@@ -20,7 +20,7 @@ LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
 APP_SRCS  := main.c $(wildcard core/*.c) $(wildcard screens/*.c) $(wildcard widgets/*.c)
 # Big GPS engine (biggps/README.md): hot loops, built with -O2 even on the target
-BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c biggps/bgmotion.c biggps/bgalert.c
+BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c biggps/bgmotion.c biggps/bgalert.c biggps/bgvoice.c
 ASSET_SRCS:= $(wildcard assets/fonts/*.c) $(wildcard assets/icons/*.c) $(wildcard assets/logo/*.c)
 
 INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iassets/icons -Iassets/logo
@@ -184,6 +184,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_bgalert.c biggps/bgalert.c -lm -o build/test/test_bgalert
 	./build/test/test_bgalert build/test
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgvoice.c biggps/bgvoice.c -lm -o build/test/test_bgvoice
+	./build/test/test_bgvoice
 
 run: sim
 	./build/sim/bigfoston-shell
