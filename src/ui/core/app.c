@@ -6,6 +6,7 @@
 #include "../screens/screens.h"
 #include "app.h"
 #include "nav.h"
+#include "../screens/launcher_ui.h"
 #include "theme.h"
 #include "settings.h"
 #include "status.h"
@@ -143,6 +144,7 @@ void app_init(lv_display_t *d)
     theme_init(disp);
     build();
     nav_init(content);
+    lui_init();                   /* grupos de apps: redesenha a grade quando a organização muda */
     nav_show_now();
     tick = lv_timer_create(tick_cb, 1000, NULL);
     music_service_init();               /* música do celular reconhecida sem abrir a Multimídia */

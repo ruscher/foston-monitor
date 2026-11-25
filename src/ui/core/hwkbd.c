@@ -14,6 +14,7 @@
 #include "powerkey.h"
 #include "i18n.h"
 #include "../widgets/dialog.h"
+#include "../widgets/ctxmenu.h"
 #include "../widgets/volpop.h"
 #include "../assets/icons/bf_icons.h"
 #include "lvgl.h"
@@ -318,6 +319,7 @@ void hwkbd_dispatch(const hwkey_t *k)
     if(media_key(k)) return;
     lv_obj_t *kb, *ta = target(&kb);
     if(ta && type_into(ta, kb, k)) return;
+    if(!k->repeat && k->code == KEY_ESC && ctxmenu_close()) return;   /* menu de grupos aberto */
     if(!k->repeat && (k->code == KEY_ENTER || k->code == KEY_ESC) && !(k->mods & (HK_CTRL | HK_ALT)) &&
        dialog_key(k->code == KEY_ENTER)) return;
     if(handler && handler(k)) return;

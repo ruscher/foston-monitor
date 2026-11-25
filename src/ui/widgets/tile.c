@@ -97,8 +97,9 @@ lv_obj_t *tile_create_folder(lv_obj_t *parent, const char *label, uint32_t color
     lv_obj_set_style_border_width(sq, 1, 0);
     lv_obj_set_style_border_color(sq, lv_color_lighten(c, 60), 0);
     lv_obj_set_style_border_opa(sq, LV_OPA_40, 0);
-    lv_obj_set_style_pad_all(sq, 7, 0);
-    lv_obj_set_style_pad_gap(sq, 6, 0);
+    /* 2x2 miniaturas de 30 cabem em 80: 1 (borda) + 6 + 30 + 5 + 30 + 6 + 1 = 79 */
+    lv_obj_set_style_pad_all(sq, 6, 0);
+    lv_obj_set_style_pad_gap(sq, 5, 0);
     lv_obj_set_flex_flow(sq, LV_FLEX_FLOW_ROW_WRAP);
     for(int i = 0; i < 4; i++) {
         lv_obj_t *m = lv_obj_create(sq);
@@ -131,8 +132,9 @@ lv_obj_t *tile_create_folder(lv_obj_t *parent, const char *label, uint32_t color
             lv_obj_center(tx);
         }
     }
-    /* quantos apps: um selo no canto */
-    char num[8];
+    /* quantos apps: um selo no canto (pasta vazia: sem selo, os 4 lugares vazios já dizem) */
+    if(n_apps <= 0) return t;
+    char num[12];
     snprintf(num, sizeof num, "%d", n_apps);
     lv_obj_t *badge = lv_label_create(t);
     lv_label_set_text(badge, num);

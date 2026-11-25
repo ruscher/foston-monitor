@@ -2,7 +2,8 @@
  * por grupo (Categories= do .desktop), os ícones, abrir, instalar e desinstalar.
  *
  * Instalar: Arquivos -> tocar no .bfapp, o FIFO de controle ("install CAMINHO") ou
- * tools/bigfoston/bfapp.py install. Desinstalar: segurar o ícone dentro do grupo.
+ * tools/bigfoston/bfapp.py install. O app novo entra no grupo da categoria (core/launcher.c).
+ * Desinstalar: segurar o ícone 2 s > Desinstalar (o app sai também dos grupos).
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */

@@ -174,6 +174,10 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ithird_party/lodepng \
 		tests/test_pkg.c core/pkg.c build/test/lodepng.o -o build/test/test_pkg
 	./build/test/test_pkg $(CURDIR)/build/test/pkg
+	@rm -rf build/test/appgroups && mkdir -p build/test/appgroups
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_appgroups.c core/appgroups.c -o build/test/test_appgroups
+	./build/test/test_appgroups build/test/appgroups
 
 run: sim
 	./build/sim/bigfoston-shell

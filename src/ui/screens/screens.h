@@ -70,6 +70,7 @@ void music_service_init(void);             /* timer de fundo (fim de faixa, font
  * de settings()->home_apps) */
 int         home_app_count(void);
 const char *home_app_name(int i);
+const char *home_app_key(int i);      /* ID estável ("music", "tv"...) */
 const lv_image_dsc_t *home_app_icon(int i);
 uint32_t    home_app_color(int i);
 bool        home_app_is_settings(int i);

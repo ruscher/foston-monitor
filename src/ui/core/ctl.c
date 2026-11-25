@@ -4,6 +4,8 @@
 #include "hwkbd.h"
 #include "perfui.h"
 #include "apps.h"
+#include "launcher.h"
+#include "../screens/launcher_ui.h"
 #include "powerplan.h"
 #include "perf.h"
 #include "../screens/screens.h"
@@ -50,7 +52,17 @@ static void command(char *l)
         if(c == SCR_POWER || c == SCR_PERF || c == SCR_PERFMODE) nav_show_now();   /* o ✓ no lugar */
     }
     else if(!strcmp(l, "app keyboard")) nav_go(SCR_KEYBOARD, 0);
-    else if(!strncmp(l, "group ", 6)) nav_go(SCR_APPGROUP, atoi(l + 6));
+    else if(!strncmp(l, "group ", 6)) {           /* "group 3" (id) ou "group games" (categoria) */
+        launcher_load();
+        const ag_group_t *g = (l[6] >= '0' && l[6] <= '9') ? ag_group_get(atoi(l + 6)) : ag_group_by_key(l + 6);
+        if(g) nav_go(SCR_APPGROUP, g->id);
+    }
+    else if(!strncmp(l, "menu ", 5)) {            /* menu de um item: "menu sys:tv" (testes no aparelho) */
+        launcher_load();
+        int par = ag_parent(l + 5);
+        lui_item_menu(NULL, l + 5, par > 0 ? par : 0);
+    }
+    else if(!strncmp(l, "pick ", 5)) lui_demo_pick(atoi(l + 5));
     else if(!strcmp(l, "app sc-controller")) nav_go(SCR_SCC, 0);
     else if(!strcmp(l, "app big-remote-play")) nav_go(SCR_BRP, 0);
     else if(!strcmp(l, "perfstat reset")) perf_reset();

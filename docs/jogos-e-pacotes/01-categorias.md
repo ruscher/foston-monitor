@@ -9,12 +9,17 @@ instalados vira uma **pasta**:
 - um selo com o número de apps;
 - o nome do grupo embaixo.
 
-Tocar abre a tela do grupo (`SCR_APPGROUP`). Nela, tocar num app abre o app e segurar
-oferece desinstalar.
+Tocar abre a tela do grupo (`SCR_APPGROUP`). Nela, tocar num app abre o app; segurar 2 s
+abre o menu (enviar para outro grupo, tirar do grupo, mover, desinstalar...).
 
-**Jogos aparece sempre**, mesmo vazio. Vazio, a tela do grupo diz "Nenhum app em Jogos
-ainda", explica como instalar e tem o botão Abrir Arquivos. Os outros grupos só aparecem
-quando têm um app. O modo quiosque não mostra grupos.
+**Jogos aparece sempre** na primeira vez, mesmo vazio. Vazio, a tela do grupo explica como
+instalar e tem o botão Abrir Arquivos. Os outros grupos de categoria nascem quando o
+primeiro app daquela categoria é instalado. O modo quiosque não mostra grupos.
+
+Desde os grupos personalizados, as categorias são grupos comuns com uma `key`: o usuário pode
+renomear, recolorir, reordenar ou excluir, e criar os próprios grupos com qualquer app (do
+sistema, pacote ou WebApp). A categoria só decide **para onde vai um pacote recém-instalado**.
+Ver [launcher-groups-architecture.md](../launcher-groups-architecture.md).
 
 ## Categoria → grupo
 

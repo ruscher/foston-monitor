@@ -89,5 +89,8 @@ Montar duas vezes deu o mesmo SHA-256.
 | `install CAMINHO` | instala sem perguntar e mostra o aviso flutuante |
 | `install-ask CAMINHO` | abre o "Instalar?" |
 | `uninstall ID` | desinstala |
-| `group N` | abre o grupo N (0 = Jogos) |
+| `group N` | abre o grupo de id N (`core/appgroups.c`) |
+| `group games` | abre o grupo da categoria Jogos (`media`, `tools`... para as outras) |
+| `menu ID` | abre o menu de toque longo do app (`sys:tv`, `pkg:sc-controller`...) |
+| `pick N` | escolhe a opção N do menu aberto (`M_*`/`G_*` em `screens/launcher_ui.h`) |
 | `app sc-controller` | abre o SC Controller |

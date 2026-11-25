@@ -15,6 +15,7 @@
 #include "../widgets/dialog.h"
 #include "../screens/screens.h"
 #include "i18n.h"
+#include "launcher.h"
 #include "../assets/icons/bf_icons.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -194,6 +195,16 @@ static pkg_err_t install(const char *file)
     return e;
 }
 
+/* o grupo onde o app instalado ficou (o da categoria, ou o que o usuário escolheu antes) */
+static const char *where(const char *pkg_id)
+{
+    char id[100];
+    launcher_id_pkg(id, sizeof id, pkg_id);
+    launcher_sync();
+    int g = ag_parent(id);
+    return g > 0 ? launcher_group_name(g) : tr(S_GL_APPS);
+}
+
 /* sem diálogo (FIFO de controle): o aviso flutuante diz onde o app ficou */
 bool apps_install_now(const char *file)
 {
@@ -203,7 +214,7 @@ bool apps_install_now(const char *file)
         char t[120];
         snprintf(t, sizeof t, tr(pinfo.installed ? S_PKG_UPDATED : S_PKG_DONE), pinfo.name);
         osd_show(apps_icon(a) ? apps_icon(a) : desktop_group_icon(apps_group_of(a)), apps_color(a), t,
-                 desktop_group_name(apps_group_of(a)));
+                 where(a->id));
     }
     return true;
 }
@@ -214,11 +225,9 @@ static void install_answer(int b, void *ud)
     if(b != 1) return;
     pkg_err_t e = install(pending);
     if(e) { fail_dialog(e); return; }
-    const bf_app_entry_t *a = apps_find(pinfo.id);
-    bf_group_t g = a ? apps_group_of(a) : desktop_group(pinfo.categories);
     char title[120], body[200];
     snprintf(title, sizeof title, tr(pinfo.installed ? S_PKG_UPDATED : S_PKG_DONE), pinfo.name);
-    snprintf(body, sizeof body, tr(S_PKG_DONE_BODY), desktop_group_name(g));
+    snprintf(body, sizeof body, tr(S_PKG_DONE_BODY), where(pinfo.id));
     const char *btn[2] = { tr(S_PKG_OK), tr(S_PKG_OPEN) };
     dialog_open(LV_SYMBOL_OK, pal()->success, title, body, btn, 2, 1, -1, done_answer, NULL);
 }
@@ -251,6 +260,7 @@ bool apps_uninstall_now(const char *id)
     pkg_err_t e = pkg_uninstall(dir, id);
     fprintf(stderr, "bigfoston: desinstalar %s: %s\n", id, pkg_err_name(e));
     if(e) return false;
+    launcher_forget_pkg(id);                           /* sai da organização (grupos) de vez */
     changed();
     return true;
 }

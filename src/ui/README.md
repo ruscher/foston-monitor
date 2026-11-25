@@ -49,7 +49,7 @@ bigfoston-shell [--screenshot DIR] [--real-status|--sim-status]
 
 | Variável | Padrão | Uso |
 |---|---|---|
-| `BIGFOSTON_DATA` | `/data/bigfoston` (alvo), `./data` (sim) | `settings.conf`, `history.txt`, `favorites.txt`, `pointercal`, `lang/<código>.txt` |
+| `BIGFOSTON_DATA` | `/data/bigfoston` (alvo), `./data` (sim) | `settings.conf`, `appgroups.conf` (grupos de apps), `history.txt`, `favorites.txt`, `pointercal`, `lang/<código>.txt` |
 | `BIGFOSTON_FBDEV` | `/dev/fb0` | framebuffer |
 | `BIGFOSTON_TOUCH` | autodetecção | evdev do toque; sem ela, o 1º `/dev/input/event*` com `ABS_X`+`ABS_Y`+`BTN_TOUCH` |
 | `BIGFOSTON_APPS` | `$DATA/apps:/usr/share/bigfoston/apps` | pastas de `.desktop` do Run |
@@ -74,9 +74,12 @@ src/ui/
   lv_conf.h              GERADO por tools/make_lv_conf.py (RGB565, malloc da libc, buffers parciais)
   core/                  app (montagem), nav (pilha), status (+ _linux/_sim), settings,
                          i18n (+ i18n_strings.def), theme, sysinfo, runner (fork/exec),
-                         desktop (.desktop, histórico/favoritos), touch_calib, screenshot
-  widgets/               topbar, bottombar, tile, dialog, page (blocos de página)
-  screens/               uma tela por arquivo (scr_*.c)
+                         desktop (.desktop, histórico/favoritos), touch_calib, screenshot,
+                         appgroups (grupos de apps: modelo + appgroups.conf), launcher (IDs -> apps)
+  widgets/               topbar, bottombar, tile, dialog, page (blocos de página),
+                         hold (toque longo 2 s), ctxmenu (menu de contexto), namebox (digitar nome)
+  screens/               uma tela por arquivo (scr_*.c); launcher_ui.c: menus e fluxos dos
+                         grupos, iguais em todos os temas (docs/launcher-groups-*.md)
   assets/fonts/          Montserrat 14/20/28 + DejaVu Sans Mono 16 com Latin-1 (gerado)
   assets/icons/          ícones A8 (gerado por tools/make_icons.py)
   data/apps/             exemplos de .desktop para o simulador

@@ -6,6 +6,7 @@
 #include <stdio.h>
 
 #if !BIGFOSTON_SCREENSHOT
+
 int screenshot_run(const char *dir)
 {
     fprintf(stderr, "bigfoston: --screenshot não incluído neste build (SCREENSHOT=1)\n");
@@ -30,6 +31,11 @@ int screenshot_run(const char *dir)
 #include "hwkbd.h"
 #include "gamepad.h"
 #include "apps.h"
+#include "launcher.h"
+#include "appgroups.h"
+#include "../screens/launcher_ui.h"
+#include "../widgets/ctxmenu.h"
+#include "../widgets/namebox.h"
 #include "padmap.h"
 #include <linux/input.h>
 #include "lodepng.h"
@@ -394,7 +400,9 @@ static void apps_tests(void)
     gp_info_t gi;
 
     /* Jogos existe mesmo vazio */
-    go(SCR_APPGROUP, BF_GRP_GAMES); pump(300);
+    launcher_load();
+    int games = ag_group_by_key("games") ? ag_group_by_key("games")->id : -1;
+    go(SCR_APPGROUP, games); pump(300);
     shot("44a-jogos-vazio");
     kcheck("apps: Jogos vazio", apps_count() == 0 && nav_current().scr == SCR_APPGROUP);
 
@@ -404,7 +412,8 @@ static void apps_tests(void)
     dialog_key(true); pump(300);
     shot("44c-instalado");
     const bf_app_entry_t *a = apps_find("sc-controller");
-    kcheck("apps: instalado em Jogos", a && apps_group_of(a) == BF_GRP_GAMES && !strcmp(a->name, "SC Controller"));
+    kcheck("apps: instalado em Jogos", a && apps_group_of(a) == BF_GRP_GAMES && !strcmp(a->name, "SC Controller") &&
+           ag_parent("pkg:sc-controller") == games);
     kcheck("apps: ícone do pacote", a && apps_icon(a) != NULL);
     dialog_key(false); pump(100);
     kcheck("controle: mapa agora do banco do SC Controller", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
@@ -412,7 +421,7 @@ static void apps_tests(void)
     go(SCR_HOME, HOME_ARG_APPS); pump(200);
     scr_home_show_page(1); pump(300);
     shot("44d-apps-pasta-jogos");
-    go(SCR_APPGROUP, BF_GRP_GAMES); pump(400);
+    go(SCR_APPGROUP, games); pump(400);
     shot("44e-grupo-jogos");
 
     /* abre o app pelo .desktop (X-BigFoston-Screen) */
@@ -494,10 +503,336 @@ static void apps_tests(void)
     kcheck("scc: esquecer volta ao banco", gamepad_info(ds4, &gi) && gi.map_from == GPM_DB);
 
     /* desinstalar: o grupo fica vazio e o controle volta ao mapa embutido */
-    kcheck("apps: desinstala", apps_uninstall_now("sc-controller") && !apps_find("sc-controller"));
+    kcheck("apps: desinstala", apps_uninstall_now("sc-controller") && !apps_find("sc-controller") &&
+           ag_parent("pkg:sc-controller") == -1);
     kcheck("controle: sem o app, mapa embutido", gamepad_info(ds4, &gi) && gi.map_from == GPM_BUILTIN);
     gamepad_detach(ds4);
     printf("apps: %d falha(s) no total\n", kb_fail);
+}
+
+/* ---------------------------------------------- grupos de apps (core/appgroups.c, launcher_ui.c)
+ * Um toque virtual de verdade (indev de ponteiro do LVGL), como o do aparelho: o mesmo caminho
+ * de PRESSED/PRESSING/RELEASED, rolagem e clique. */
+static lv_indev_t *tp;
+static lv_point_t tp_pt;
+static bool tp_down;
+static int g_fail, g_total;
+
+static void gcheck(const char *what, bool ok)
+{
+    g_total++;
+    printf("grupos: %s %s\n", ok ? "ok" : "FALHOU", what);
+    if(!ok) g_fail++;
+}
+
+static void tp_read(lv_indev_t *i, lv_indev_data_t *d)
+{
+    (void)i;
+    d->point = tp_pt;
+    d->state = tp_down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+static void touch(lv_point_t p, uint32_t ms)
+{
+    tp_pt = p;
+    tp_down = true;
+    pump(ms);
+    tp_down = false;
+    pump(150);
+}
+
+static lv_obj_t *find_label(lv_obj_t *o, const char *txt)
+{
+    if(lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    if(lv_obj_check_type(o, &lv_label_class) && !strcmp(lv_label_get_text(o), txt)) return o;
+    for(uint32_t i = 0; i < lv_obj_get_child_count(o); i++) {
+        lv_obj_t *r = find_label(lv_obj_get_child(o, (int32_t)i), txt);
+        if(r) return r;
+    }
+    return NULL;
+}
+
+/* o centro do ícone (o quadrado acima do nome) do tile com esse nome, se estiver à vista */
+static bool tile_pt(const char *name, lv_point_t *pt)
+{
+    lv_obj_t *l = find_label(lv_screen_active(), name);
+    if(!l) return false;
+    lv_area_t a;
+    lv_obj_get_coords(lv_obj_get_parent(l), &a);
+    pt->x = (a.x1 + a.x2) / 2;
+    pt->y = (a.y1 + a.y2) / 2 - 16;
+    return pt->x > 0 && pt->x < BF_SCREEN_W && pt->y > 0 && pt->y < BF_SCREEN_H;
+}
+
+static int gid_named(const char *n)
+{
+    for(int i = 0; i < ag_group_count(); i++)
+        if(!strcmp(ag_group_name(ag_group_at(i)), n)) return ag_group_at(i)->id;
+    return 0;
+}
+
+/* clica no botão com esse texto na camada de cima (diálogos) */
+static bool click_top(const char *txt)
+{
+    lv_obj_t *l = find_label(lv_layer_top(), txt);
+    if(!l) return false;
+    lv_obj_send_event(lv_obj_get_parent(l), LV_EVENT_CLICKED, NULL);
+    pump(150);
+    return true;
+}
+
+static void group_tests(void)
+{
+    bf_settings_t *s = settings();
+    s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    scr_home_show_page(0); pump(100);
+    if(!tp) {
+        tp = lv_indev_create();
+        lv_indev_set_type(tp, LV_INDEV_TYPE_POINTER);
+        lv_indev_set_read_cb(tp, tp_read);
+        lv_indev_set_display(tp, disp);
+        lv_indev_set_scroll_limit(tp, 16);         /* como o toque calibrado do aparelho */
+    }
+    lv_point_t pt;
+    const char *tvn = tr(S_APP_TV);
+
+    /* toque rápido / soltar cedo / segurar 2 s */
+    gcheck("TV visível na grade", tile_pt(tvn, &pt));
+    touch(pt, 120); pump(300);
+    gcheck("toque rápido abre a TV", nav_current().scr == SCR_TV);
+    nav_home(); pump(500);
+    tile_pt(tvn, &pt);
+    touch(pt, 1000); pump(300);
+    gcheck("soltar com 1 s: nem abre nem menu", nav_current().scr == SCR_HOME && !ctxmenu_is_open());
+    tp_pt = pt; tp_down = true; pump(1100);
+    shot("50a-grupos-segurando");
+    gcheck("anel de progresso durante o toque", find_class(lv_screen_active(), &lv_arc_class) != NULL);
+    gcheck("1,1 s: ainda sem menu", !ctxmenu_is_open());
+    pump(1100);
+    gcheck("2 s: menu aberto", ctxmenu_is_open());
+    tp_down = false; pump(300);
+    gcheck("soltar depois do menu não abre o app", nav_current().scr == SCR_HOME && ctxmenu_is_open());
+    gcheck("anel some", find_class(lv_screen_active(), &lv_arc_class) == NULL);
+    shot("50b-grupos-menu-app");
+    kfeed(KEY_ESC, 0); pump(150);
+    gcheck("Esc fecha o menu (sem voltar de tela)", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+    tile_pt(tvn, &pt);
+    touch(pt, 2200); pump(100);
+    touch((lv_point_t){ 12, 470 }, 100); pump(200);
+    gcheck("toque fora fecha o menu", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+
+    /* arrastar (rolagem) não abre menu nem app */
+    tile_pt(tvn, &pt);
+    tp_pt = pt; tp_down = true; pump(80);
+    for(int i = 0; i < 10; i++) { tp_pt.x -= 12; pump(35); }
+    pump(2300);
+    tp_down = false; pump(500);
+    gcheck("arrastar: sem menu e sem abrir", !ctxmenu_is_open() && nav_current().scr == SCR_HOME);
+    scr_home_show_page(0); pump(200);
+
+    /* criar grupo: o app vai junto */
+    tile_pt(tvn, &pt);
+    touch(pt, 2200);
+    lui_demo_pick(M_NEW); pump(250);
+    gcheck("Novo grupo: janela aberta", namebox_is_open());
+    ktype("Entretenimento"); pump(100);
+    shot("50c-grupos-novo-grupo");
+    gcheck("nome vazio recusado", namebox_demo_submit("   ") != NULL && namebox_is_open());
+    pump(100);
+    shot("50d-grupos-nome-vazio");
+    gcheck("nome repetido (Jogos) recusado", namebox_demo_submit("jogos") != NULL && namebox_is_open());
+    gcheck("o campo para em 24 letras", !strcmp(namebox_demo_set("Aplicativos do dia a dia!"), "Aplicativos do dia a dia"));
+    gcheck("Entretenimento criado", namebox_demo_submit("Entretenimento") == NULL && !namebox_is_open());
+    pump(500);
+    int ent = gid_named("Entretenimento");
+    gcheck("TV dentro de Entretenimento", ent > 0 && ag_parent("sys:tv") == ent);
+    gcheck("pasta na grade, TV fora da grade", find_label(lv_screen_active(), "Entretenimento") &&
+           !find_label(lv_screen_active(), tvn));
+    shot("50e-grupos-pasta-criada");
+
+    /* enviar para o grupo (lista) */
+    lui_item_menu(NULL, "sys:music", 0); pump(100);
+    lui_demo_pick(M_SEND); pump(200);
+    shot("50f-grupos-enviar");
+    lui_demo_pick(ent); pump(500);
+    gcheck("Multimídia enviada para Entretenimento", ag_parent("sys:music") == ent);
+    lui_item_menu(NULL, "sys:music", ent); lui_demo_pick(M_SEND); lui_demo_pick(ent); pump(200);
+    gcheck("enviar de novo: sem duplicar", ag_parent("sys:music") == ent && ag_children(ent, NULL, 0) == 2);
+    lui_item_menu(NULL, "sys:book", 0); lui_demo_pick(M_NEW); pump(100);
+    gcheck("Educação (acentos) criado com o Livro", namebox_demo_submit("Educação") == NULL);
+    pump(300);
+    int edu = gid_named("Educação");
+    gcheck("Livro em Educação", edu > 0 && ag_parent("sys:book") == edu);
+    lui_item_menu(NULL, "sys:music", ent); lui_demo_pick(M_SEND); lui_demo_pick(edu); pump(300);
+    gcheck("Multimídia de um grupo para outro", ag_parent("sys:music") == edu && ag_children(ent, NULL, 0) == 1);
+
+    /* dentro do grupo: tocar na pasta abre; segurar o app; tirar do grupo */
+    nav_home(); pump(500);
+    gcheck("pasta à vista", tile_pt("Entretenimento", &pt));
+    touch(pt, 120); pump(500);
+    gcheck("tocar na pasta abre o grupo", nav_current().scr == SCR_APPGROUP && nav_current().arg == ent);
+    shot("50g-grupo-aberto");
+    gcheck("TV no grupo", tile_pt(tvn, &pt));
+    touch(pt, 2200); pump(100);
+    gcheck("segurar no grupo abre o menu", ctxmenu_is_open());
+    shot("50h-grupo-menu-app");
+    lui_demo_pick(M_REMOVE); pump(500);
+    gcheck("TV fora do grupo; grupo vazio continua", ag_parent("sys:tv") == 0 && ag_group_get(ent) &&
+           nav_current().scr == SCR_APPGROUP);
+    shot("50i-grupo-vazio");
+    lui_group_menu(NULL, ent); pump(100);
+    shot("50j-grupo-opcoes");
+    lui_demo_pick(G_RENAME); pump(100);
+    gcheck("renomear para o nome de outro: recusado", namebox_demo_submit("educação") != NULL);
+    gcheck("renomeado", namebox_demo_submit("Diversão") == NULL && gid_named("Diversão") == ent);
+    pump(400);
+    gcheck("título novo", !strcmp(nav_title(SCR_APPGROUP, ent), "Diversão"));
+    lui_group_menu(NULL, ent); lui_demo_pick(G_STYLE); pump(200);
+    shot("50k-grupo-cor-icone");
+    click_top(tr(S_LG_SAVE));
+
+    /* mover: tocar no novo lugar; tocar numa pasta põe dentro */
+    nav_home(); pump(500);
+    lui_item_menu(NULL, "sys:settings", 0); lui_demo_pick(M_MOVE); pump(400);
+    shot("50l-grupos-mover");
+    gcheck("faixa do modo mover", lui_moving() && find_label(lv_screen_active(), tr(S_LG_MOVE_END)));
+    gcheck("Bluetooth à vista", tile_pt(tr(S_APP_BLUETOOTH), &pt));
+    touch(pt, 120); pump(500);
+    {
+        const char *v[64];
+        int n = ag_children(0, v, 64), si = -1, bi = -1;
+        for(int i = 0; i < n && i < 64; i++) {
+            if(!strcmp(v[i], "sys:settings")) si = i;
+            if(!strcmp(v[i], "sys:bluetooth")) bi = i;
+        }
+        gcheck("Ajustes logo antes do Bluetooth", si >= 0 && si + 1 == bi && !lui_moving());
+    }
+    lui_item_menu(NULL, "sys:gps", 0); lui_demo_pick(M_MOVE); pump(400);
+    scr_home_show_page(0); pump(200);
+    gcheck("pasta Educação à vista", tile_pt("Educação", &pt));
+    touch(pt, 120); pump(500);
+    gcheck("tocar na pasta no modo mover: GPS entra", ag_parent("sys:gps") == edu && nav_current().scr == SCR_HOME);
+
+    /* todos os temas: mesma organização */
+    s->home_mode = BF_HOME_GLASS;
+    app_rebuild_now(); pump(50);
+    go(SCR_HOME, HOME_ARG_APPS); pump(500);
+    gcheck("Foston Glass > Apps: pastas", find_label(lv_screen_active(), "Educação") &&
+           find_label(lv_screen_active(), "Diversão"));
+    shot("50m-glass-apps-grupos");
+    tile_pt("Educação", &pt);
+    touch(pt, 2200); pump(100);
+    gcheck("Glass: segurar a pasta abre o menu do grupo", ctxmenu_is_open());
+    shot("50n-glass-menu-grupo");
+    ctxmenu_close(); pump(100);
+    s->home_mode = BF_HOME_PANEL;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    shot("50o-painel-com-apps");
+    gcheck("Painel: ícone Apps", tile_pt(tr(S_GL_APPS), &pt));
+    touch(pt, 120); pump(500);
+    gcheck("Painel: Apps abre a grade", nav_current().scr == SCR_HOME && nav_current().arg == HOME_ARG_APPS &&
+           find_label(lv_screen_active(), "Educação"));
+    shot("50p-painel-apps-grade");
+    s->home_mode = BF_HOME_KIOSK;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    if(tile_pt(tr(S_APP_FILES), &pt)) {
+        touch(pt, 2200); pump(100);
+        gcheck("Quiosque: sem menu de grupos", !ctxmenu_is_open());
+        nav_home(); pump(300);
+    }
+    s->home_mode = BF_HOME_GRID;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(400);
+    gcheck("Grade: mesmas pastas", find_label(lv_screen_active(), "Diversão") != NULL);
+
+    /* persistência: relê o arquivo como numa reinicialização */
+    launcher_reopen();
+    launcher_sync();
+    gcheck("depois de reler: grupos e apps no lugar", gid_named("Educação") == edu && ag_parent("sys:book") == edu &&
+           ag_parent("sys:music") == edu && ag_parent("sys:gps") == edu && gid_named("Diversão") == ent);
+
+    /* busca: acha dentro dos grupos, sem acento nem maiúsculas */
+    go(SCR_HOME, HOME_ARG_APPS); pump(400);
+    lui_search(); pump(100);
+    gcheck("busca sem resultado: avisa e continua aberta", namebox_demo_submit("zzz") != NULL && namebox_is_open());
+    gcheck("busca \"MULTIMIDIA\" acha Multimídia (no grupo)", namebox_demo_submit("MULTIMIDIA") == NULL && ctxmenu_is_open());
+    pump(150);
+    shot("50t-grupos-busca");
+    lui_demo_pick(0); pump(400);
+    gcheck("resultado abre o app", nav_current().scr == SCR_MUSIC);
+    nav_home(); pump(400);
+
+    /* excluir: os apps voltam */
+    lui_group_menu(NULL, edu); lui_demo_pick(G_DELETE); pump(200);
+    shot("50q-grupos-excluir");
+    gcheck("confirmar exclusão", click_top(tr(S_LG_DEL_BTN)));
+    pump(500);
+    gcheck("grupo excluído, apps de volta (nenhum perdido)", !ag_group_get(edu) && ag_parent("sys:book") == 0 &&
+           ag_parent("sys:music") == 0 && ag_parent("sys:gps") == 0);
+    shot("50r-grupos-excluido");
+
+    /* teclado físico na janela de nome: Esc cancela, Enter confirma */
+    lui_item_menu(NULL, "sys:gallery", 0); lui_demo_pick(M_NEW); pump(100);
+    kfeed(KEY_ESC, 0); pump(150);
+    gcheck("Esc cancela a janela de nome", !namebox_is_open() && ag_parent("sys:gallery") == 0);
+    lui_item_menu(NULL, "sys:gallery", 0); lui_demo_pick(M_NEW); pump(100);
+    ktype("Fotos"); kfeed(KEY_ENTER, 0); pump(300);
+    gcheck("Enter do teclado físico cria o grupo", !namebox_is_open() && gid_named("Fotos") > 0 &&
+           ag_parent("sys:gallery") == gid_named("Fotos"));
+    ag_group_delete(gid_named("Fotos")); pump(200);
+
+    /* tema claro e nome comprido */
+    lui_item_menu(NULL, "sys:files", 0); lui_demo_pick(M_NEW);
+    gcheck("nome de 24 letras", namebox_demo_submit("Ferramentas do dia a dia") == NULL);
+    s->mode = BF_MODE_LIGHT;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(500);
+    if(!tile_pt("Ferramentas do dia a dia", &pt)) tile_pt(tr(S_APP_BLUETOOTH), &pt);
+    touch(pt, 2200); pump(100);
+    shot("50s-grupos-claro-menu");
+    ctxmenu_close(); pump(100);
+    s->mode = BF_MODE_DARK;
+    app_rebuild_now(); pump(50);
+    nav_home(); pump(300);
+
+    /* muitos grupos: a página à vista na hora, as outras em segundo plano */
+    {
+        int made[40], nm = 0;
+        char nm_[32];
+        for(int i = 0; i < 40; i++) {
+            snprintf(nm_, sizeof nm_, "Carga %02d", i);
+            if(ag_group_create(nm_, NULL, &made[nm]) == AG_OK) nm++;
+        }
+        gcheck("40 grupos criados", nm == 40);
+        go(SCR_HOME, HOME_ARG_APPS); pump(30);
+        uint32_t t0 = now_ms();
+        nav_show_now();
+        uint32_t dt = now_ms() - t0;
+        lv_obj_t *tv = find_class(lv_screen_active(), &lv_tileview_class);
+        int pages = tv ? (int)lv_obj_get_child_count(tv) : 0;
+        lv_obj_t *last = pages ? lv_obj_get_child(lv_obj_get_child(tv, pages - 1), 0) : NULL;
+        gcheck("várias páginas; a última ainda vazia logo depois de abrir", pages >= 6 && last &&
+               lv_obj_get_child_count(last) == 0);
+        printf("grupos: abrir Apps com %d páginas: %u ms no PC (só a página à vista)\n", pages, (unsigned)dt);
+        scr_home_show_page(pages - 1); pump(50);
+        gcheck("pular para a última: preenchida na hora", last && lv_obj_get_child_count(last) > 0);
+        shot("50u-grupos-muitos");
+        scr_home_show_page(0);
+        pump(1500);
+        int empty = 0;
+        for(int i = 0; i < pages; i++) if(!lv_obj_get_child_count(lv_obj_get_child(lv_obj_get_child(tv, i), 0))) empty++;
+        gcheck("em 1,5 s todas as páginas preenchidas", empty == 0);
+        for(int i = 0; i < nm; i++) ag_group_delete(made[i]);
+        pump(300);
+    }
+
+    lv_indev_delete(tp);
+    tp = NULL;
+    printf("grupos: %d/%d ok\n", g_total - g_fail, g_total);
 }
 
 int screenshot_run(const char *dir)
@@ -521,6 +856,10 @@ int screenshot_run(const char *dir)
     settings_defaults(s);
     app_init(disp);
     pump(600);                      /* entrada animada dos ícones */
+    if(getenv("BIGFOSTON_TEST_GROUPS_ONLY")) {      /* só os testes de grupos (rápido) */
+        group_tests();
+        return g_fail ? 1 : 0;
+    }
 
     shot("01-inicio");
     scr_home_show_page(1);
@@ -632,6 +971,7 @@ int screenshot_run(const char *dir)
     keyboard_tests();
     gamepad_tests();
     apps_tests();
+    group_tests();
     go(SCR_TERM, 0); pump(800);
     scr_term_demo_type("echo 'olá, ação, ñandú'; printf 'normal \\033[7minverso\\033[0m fim\\n'; ls /\r");
     pump(1200);                     shot("23-terminal");
@@ -994,6 +1334,6 @@ int screenshot_run(const char *dir)
     go(SCR_MONITOR, 0); pump(2500); shot("36-es-monitor");
 
     printf("screenshot: %d imagens em %s\n", n_ok, dir);
-    return n_ok > 0 ? 0 : 1;
+    return n_ok > 0 && !g_fail ? 0 : 1;
 }
 #endif /* BIGFOSTON_SCREENSHOT */
