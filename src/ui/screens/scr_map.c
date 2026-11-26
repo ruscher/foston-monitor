@@ -2058,9 +2058,14 @@ static void tick_cb(lv_timer_t *t)
         {
             unsigned ms = (R.us_fetch + R.us_draw) / 1000;
             frame_ema_ms = frame_ema_ms ? (frame_ema_ms * 3 + ms) / 4 : ms;
-            if(shown_persp && frame_ema_ms > 500 && !persp_auto_off) {
-                persp_auto_off = true;                   /* pesado demais: volta ao 2D nesta sessão */
-                fprintf(stderr, "biggps: vista inclinada desligada (quadros de %u ms)\n", frame_ema_ms);
+            /* inclinada pesada de forma sustentada (6 quadros seguidos acima de 700 ms; um pico
+             * de leitura do cartão não conta): volta ao 2D nesta sessão; o botão 3D religa */
+            static int slow_run;
+            slow_run = shown_persp && ms > 700 ? slow_run + 1 : 0;
+            if(slow_run >= 6 && !persp_auto_off) {
+                persp_auto_off = true;
+                slow_run = 0;
+                fprintf(stderr, "biggps: vista inclinada desligada (6 quadros seguidos acima de 700 ms)\n");
                 rot_label();
             }
         }

@@ -31,7 +31,7 @@ vão na fonte. O marcador do carro e o pino do destino são projetados ponto a p
 - A vista só fica inclinada com o mapa **seguindo no rumo**. Arrastar o mapa volta ao 2D até
   tocar no botão de posição.
 - Fica no 2D com o detalhe "Econômico" (Ajustes > Desempenho).
-- **Recuo automático**: se a média dos quadros do motor passar de 500 ms, volta ao 2D na sessão
+- **Recuo automático**: com 6 quadros seguidos do motor acima de 700 ms, volta ao 2D na sessão
   e o botão mostra ↑.
 - `BIGGPS_PERSP=0` desliga, para comparar.
 
@@ -45,8 +45,9 @@ vão na fonte. O marcador do carro e o pino do destino são projetados ponto a p
 | Laço da interface p95 (navegação) | 97 ms | 136 ms |
 | RSS | 16,8 MB | 20,8 MB (+2 fontes de 1,5 MB) |
 
-A queda é moderada e fica acima da meta de 10 quadros/s úteis. O recuo automático não disparou
-no roteiro.
+A queda é moderada e fica acima da meta de 10 quadros/s úteis. A 1ª regra de recuo (média
+acima de 500 ms) disparou num bench por causa de picos de leitura do cartão e tirava o 3D da
+sessão inteira. Agora são 6 quadros seguidos acima de 700 ms.
 
 ## Limites
 
