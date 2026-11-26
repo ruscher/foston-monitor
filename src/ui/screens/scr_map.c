@@ -500,6 +500,7 @@ static bgmo_t MO;
 static lv_timer_t *anim;
 static uint64_t anim_req_us;
 static int zoom_goal = -1;     /* zoom pela velocidade na navegação: muda aos poucos; -1 = nenhum */
+static int nav_zoom = -1;      /* o último zoom de navegação calculado (volta da visão geral) */
 #define ZOOM_STEP 26           /* ~0,1 nível por quadro do motor */
 #define ANIM_MS 50
 
@@ -617,8 +618,9 @@ static void anim_step(bool fix)
     cur.cy = (uint32_t)llround(MO.y);
     cur.rot = cam_rot();
     if(zoom_goal > 0 && zoom_goal != cur.zoom256 && !render_busy()) {
-        int d = zoom_goal - cur.zoom256;
-        cur.zoom256 += d > ZOOM_STEP ? ZOOM_STEP : d < -ZOOM_STEP ? -ZOOM_STEP : d;
+        /* ~0,1 nível por quadro; diferenças grandes (volta da visão geral) em ~6 quadros */
+        int d = zoom_goal - cur.zoom256, st = abs(d) / 6 > ZOOM_STEP ? abs(d) / 6 : ZOOM_STEP;
+        cur.zoom256 += d > st ? st : d < -st ? -st : d;
         update_scale();
     }
     if(!have_shown) { if(!render_busy()) { request(); anim_req_us = now; } return; }
@@ -1213,7 +1215,7 @@ static void end_navigation(void)
     heading_up = N.prev_heading_up;
     lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
     cur.rot = 0;
-    zoom_goal = -1;
+    zoom_goal = nav_zoom = -1;
     update_marker();
     request();
 }
@@ -1505,6 +1507,7 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         /* zoom pela velocidade (mais longe na estrada) e mais perto ao chegar numa manobra,
          * mais ainda nas complexas (biggps/bgnav.c: bgn_zoom256) */
         int z = bgn_zoom256(&N.route, &N.st, speed, N.profile);
+        nav_zoom = z;
         /* anim_step chega lá aos poucos; um zoom feito à mão vale até a situação mudar */
         static int last_z;
         if(follow && z != last_z) zoom_goal = z;
@@ -2074,11 +2077,22 @@ static void follow_cb(lv_event_t *e)
 {
     (void)e;
     set_follow(true);
+    if(N.navigating && nav_zoom > 0) zoom_goal = nav_zoom;   /* da visão geral volta aos poucos */
     if(have_pos) {
-        bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
+        if(MO.has_disp) { cur.cx = (uint32_t)llround(MO.x); cur.cy = (uint32_t)llround(MO.y); }
+        else bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
         cur.rot = cam_rot();
         request();
     }
+}
+
+/* visão geral da rota durante a navegação: enquadra tudo; o botão de posição volta */
+static void overview_cb(lv_event_t *e)
+{
+    (void)e;
+    if(!N.navigating) return;
+    set_follow(false);
+    fit_route();
 }
 
 static void rot_cb(lv_event_t *e)
@@ -2609,6 +2623,9 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_pad_column(botbar, BF_SP_M, 0);
     lv_obj_align(botbar, LV_ALIGN_BOTTOM_LEFT, 12, -12);
     bot_lbl = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_t *vb = bf_button(botbar, LV_SYMBOL_EYE_OPEN, NULL, 0);     /* visão geral da rota */
+    lv_obj_set_size(vb, 52, 44);
+    lv_obj_add_event_cb(vb, overview_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *eb = bf_button(botbar, LV_SYMBOL_CLOSE, tr(S_MAP_END), 2);
     lv_obj_set_height(eb, 44);
     lv_obj_add_event_cb(eb, end_cb, LV_EVENT_CLICKED, NULL);
