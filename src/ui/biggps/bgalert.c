@@ -84,6 +84,41 @@ static int cmp_hit(const void *a, const void *b)
     return x->at_dm < y->at_dm ? -1 : x->at_dm > y->at_dm;
 }
 
+int bga_route_points(const bga_entry_t *pts, int npts_in, const uint32_t *xy, const uint32_t *cum_dm, int npts,
+                     bga_hit_t **hits, int n)
+{
+    if (npts < 2 || npts_in <= 0) return n;
+    for (int k = 0; k < npts_in; k++) {
+        const bga_entry_t *e = &pts[k];
+        int best_s = -1;
+        double best_d = 1e30, best_t = 0;
+        for (int s = 0; s + 1 < npts; s++) {
+            uint32_t ax = xy[2 * s], ay = xy[2 * s + 1], bx = xy[2 * s + 2], by = xy[2 * s + 3];
+            uint32_t pad = 2000;                    /* ~18 m: box test before any division */
+            if (e->x + pad < (ax < bx ? ax : bx) || e->x > (ax > bx ? ax : bx) + pad
+                || e->y + pad < (ay < by ? ay : by) || e->y > (ay > by ? ay : by) + pad) continue;
+            double dx = (double)(int32_t)(bx - ax), dy = (double)(int32_t)(by - ay), l2 = dx * dx + dy * dy;
+            double ex = (double)(int32_t)(e->x - ax), ey = (double)(int32_t)(e->y - ay);
+            double t = l2 > 0 ? (ex * dx + ey * dy) / l2 : 0;
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            double px = ex - t * dx, py = ey - t * dy, d = px * px + py * py;
+            if (d < best_d) { best_d = d; best_s = s; best_t = t; }
+        }
+        if (best_s < 0) continue;
+        double lat = atan(sinh(M_PI * (1.0 - 2.0 * (double)e->y / 4294967296.0)));
+        double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+        if (sqrt(best_d) * mpu > 12) continue;      /* on the road the route takes */
+        bga_hit_t *nh = realloc(*hits, (size_t)(n + 1) * sizeof *nh);
+        if (!nh) break;
+        *hits = nh;
+        uint32_t at = cum_dm[best_s] + (uint32_t)lround(best_t * (double)(cum_dm[best_s + 1] - cum_dm[best_s]));
+        nh[n++] = (bga_hit_t){ at, e->kind, 0, 1, e->x, e->y };
+    }
+    if (*hits) qsort(*hits, (size_t)n, sizeof **hits, cmp_hit);
+    return n;
+}
+
 bga_hit_t *bga_route(const bga_pack_t *p, const uint32_t *xy, const uint32_t *cum_dm, int npts, int *n)
 {
     *n = 0;
@@ -123,7 +158,7 @@ bga_hit_t *bga_route(const bga_pack_t *p, const uint32_t *xy, const uint32_t *cu
                 h = nh;
                 cap *= 2;
             }
-            h[cnt++] = (bga_hit_t){ at, e->kind, e->maxspeed, e->x, e->y };
+            h[cnt++] = (bga_hit_t){ at, e->kind, e->maxspeed, 0, e->x, e->y };
         }
     }
     qsort(h, (size_t)cnt, sizeof *h, cmp_hit);

@@ -23,6 +23,7 @@ int bga_query(const bga_pack_t *p, uint32_t x0, uint32_t y0, uint32_t x1, uint32
 typedef struct {
     uint32_t at_dm;            /* distance from the route start */
     uint8_t kind, maxspeed;
+    uint8_t user;              /* marked by the user on this device, not from the map data */
     uint32_t x, y;
 } bga_hit_t;
 
@@ -32,5 +33,9 @@ typedef struct {
  * goes (within 60 degrees).  The same kind within 40 m counts once.  Returns a malloc'd
  * array (caller frees) and its length in *n. */
 bga_hit_t *bga_route(const bga_pack_t *p, const uint32_t *xy, const uint32_t *cum_dm, int npts, int *n);
+/* The same for a few loose points (the user's own), appended to *hits (realloc'd) and
+ * re-sorted; user = 1 on the new ones.  Returns the new count. */
+int bga_route_points(const bga_entry_t *pts, int npts_in, const uint32_t *xy, const uint32_t *cum_dm, int npts,
+                     bga_hit_t **hits, int n);
 
 #endif

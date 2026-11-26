@@ -80,6 +80,18 @@ int main(int argc, char **argv)
         CHECK(h[i].maxspeed == want[i].speed, "alerta %d: limite %d", i, h[i].maxspeed);
     }
     for (int i = 0; i < n; i++) printf("  %u m: tipo %d limite %d\n", h[i].at_dm / 10, h[i].kind, h[i].maxspeed);
+    /* avisos do usuário: um na via (a 300 m), um fora (40 m ao lado); entram em ordem */
+    bga_entry_t u[2] = { { (uint32_t)lround(X0 + 300 * U), (uint32_t)lround(Y0 - 3 * U), BGA_BUMP, 0, BGA_DIR_ANY },
+                         { (uint32_t)lround(X0 + 500 * U), (uint32_t)lround(Y0 - 40 * U), BGA_BUMP, 0, BGA_DIR_ANY } };
+    int m = bga_route_points(u, 2, xy, cd, 3, &h, n);
+    CHECK(m == n + 1, "avisos do usuário na rota: %d (esperado %d)", m - n, 1);
+    int found = 0;
+    for (int i = 0; i < m; i++) {
+        if (i) CHECK(h[i].at_dm >= h[i - 1].at_dm, "fora de ordem em %d", i);
+        if (h[i].user) { found++; CHECK(abs((int)h[i].at_dm / 10 - 300) <= 1 && h[i].kind == BGA_BUMP, "aviso do usuário em %u m", h[i].at_dm / 10); }
+        else CHECK(!h[i].user, "aviso do mapa marcado como do usuário");
+    }
+    CHECK(found == 1, "um aviso do usuário");
     free(h);
     bga_close(p);
     /* arquivo cortado: recusa */

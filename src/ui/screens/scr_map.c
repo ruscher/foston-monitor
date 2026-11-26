@@ -302,6 +302,11 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
 static bgp_t PJ;
 static bool pj_ok, shown_persp, persp_auto_off;
 
+/* avisos marcados pelo usuário (lidos e gravados pela interface; o motor copia sob a trava) */
+#define MAXUPT 200
+static bga_entry_t upts[MAXUPT];
+static int nupt;
+
 /* ------------------------------------------------ pontos de alerta no quadro
  * Pequenos e desenhados com o rasterizador (sem imagem nem SVG por quadro). Cada tipo só
  * aparece a partir de um zoom, e no máximo MAXAL por quadro: nada de centenas de ícones. */
@@ -356,6 +361,24 @@ static void icon_rail(rast_surface_t *s, int x, int y)
     rast_line(s, b, 2, 7 * S, rgb565(0x202124), 0);
     rast_line(s, a, 2, 4 * S, rgb565(0xffffff), 0);
     rast_line(s, b, 2, 4 * S, rgb565(0xffffff), 0);
+}
+
+/* os avisos do usuário: o mesmo triângulo, em azul (não são dados do mapa) */
+static void draw_user_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_entry_t *u, int n)
+{
+    if((v->zoom256 >> 8) < 14) return;
+    const int S = RAST_SUB;
+    for(int i = 0; i < n; i++) {
+        int x, y;
+        bgr_world_to_screen(v, s, u[i].x, u[i].y, &x, &y);
+        if(x < -14 || y < -14 || x > s->w + 14 || y > s->h + 14) continue;
+        int32_t out[] = { x * S, (y - 12) * S, (x + 12) * S, (y + 9) * S, (x - 12) * S, (y + 9) * S };
+        int32_t in[] = { x * S, (y - 8) * S, (x + 8) * S, (y + 6) * S, (x - 8) * S, (y + 6) * S };
+        int n3 = 3;
+        rast_fill(s, out, &n3, 1, rgb565(0xffffff));
+        rast_fill(s, in, &n3, 1, rgb565(0x1a73e8));
+        rast_disc(s, x * S, (y + 5) * S, 4 * S, rgb565(0xffffff));
+    }
 }
 
 static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t *p)
@@ -449,6 +472,9 @@ static void *worker(void *arg)
         }
         if(rn) memcpy(rcopy, R.route, (size_t)rn * 2 * sizeof *rcopy);
         int rk = R.route_k < rn - 1 ? R.route_k : -1;
+        static bga_entry_t ucopy[MAXUPT];
+        int nu = nupt;                                /* os avisos do usuário (mudam na interface) */
+        memcpy(ucopy, upts, (size_t)nu * sizeof ucopy[0]);
         static uint32_t *acopy[BGRT_MAXALT];
         static int acap[BGRT_MAXALT];
         int an[BGRT_MAXALT];
@@ -493,6 +519,7 @@ static void *worker(void *arg)
             }
         }
         draw_alerts(&v, &s, R.alerts);              /* por cima da rota: o radar na via aparece */
+        draw_user_alerts(&v, &s, ucopy, nu);
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
             l->x = tmp[i].x; l->y = tmp[i].y; l->angle = tmp[i].angle;
@@ -1276,18 +1303,68 @@ static void announce(void)
  * antecedência pela velocidade, e um chip enquanto se aproxima. Semáforos só no mapa (seriam
  * avisos demais). O limite só é dito quando o próprio ponto do OSM o informa. */
 
+/* ---------------------------------------------- avisos marcados pelo usuário
+ * Lombadas que o mapa não tem, marcadas no próprio aparelho (biggps-avisos.txt: "lat lon tipo"
+ * por linha). Aparecem em azul (os do OSM são amarelos) e o aviso diz "sua". */
+
+static void upts_load(void)
+{
+    char path[512], line[128];
+    data_path(path, sizeof path, "biggps-avisos.txt");
+    FILE *f = fopen(path, "r");
+    nupt = 0;
+    while(f && nupt < MAXUPT && fgets(line, sizeof line, f)) {
+        double lat, lon;
+        int kind;
+        if(sscanf(line, "%lf %lf %d", &lat, &lon, &kind) != 3 || kind <= 0 || kind >= BGA_KINDS) continue;
+        uint32_t x, y;
+        bgr_lonlat_to_world(lon, lat, &x, &y);
+        upts[nupt++] = (bga_entry_t){ x, y, (uint8_t)kind, 0, BGA_DIR_ANY };
+    }
+    if(f) fclose(f);
+}
+
+static void upts_save(void)
+{
+    char path[512], tmp[520];
+    data_path(path, sizeof path, "biggps-avisos.txt");
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
+    if(!f) return;
+    for(int i = 0; i < nupt; i++) {
+        double lon, lat;
+        bgr_world_to_lonlat(upts[i].x, upts[i].y, &lon, &lat);
+        fprintf(f, "%.6f %.6f %d\n", lat, lon, upts[i].kind);
+    }
+    if(fclose(f) == 0) rename(tmp, path);
+}
+
+/* o aviso do usuário a até 30 m de (x, y), ou -1 */
+static int upt_near(uint32_t x, uint32_t y)
+{
+    double lat = atan(sinh(M_PI * (1.0 - 2.0 * (double)y / 4294967296.0)));
+    double mpu = 40075016.686 / 4294967296.0 * cos(lat), best = 30;
+    int k = -1;
+    for(int i = 0; i < nupt; i++) {
+        double dx = (double)(int32_t)(upts[i].x - x), dy = (double)(int32_t)(upts[i].y - y), d = sqrt(dx * dx + dy * dy) * mpu;
+        if(d < best) { best = d; k = i; }
+    }
+    return k;
+}
+
 static void route_alerts(void)
 {
     free(N.al);
     N.al = NULL;
     N.nal = N.al_next = 0;
     N.al_said = -1;
-    if(!R.alerts || N.route.npts < 2) return;
+    if(N.route.npts < 2) return;
     uint64_t t0 = perf_now_us();
-    int n;
-    bga_hit_t *h = bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n);
+    int n = 0;
+    bga_hit_t *h = R.alerts ? bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n) : NULL;
     int w = 0;
     for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
+    w = bga_route_points(upts, nupt, N.route.xy, N.route.cum_dm, N.route.npts, &h, w);   /* os seus */
     N.al = h;
     N.nal = w;
     fprintf(stderr, "biggps: %d alertas na rota (de %d pontos com semáforos) em %u ms\n", w, n,
@@ -1309,6 +1386,7 @@ static void alert_check(void)
     char t[96];
     const char *name = tr(a->kind == BGA_CAMERA ? S_MAP_AL_CAMERA : a->kind == BGA_BUMP ? S_MAP_AL_BUMP : S_MAP_AL_RAIL);
     if(a->kind == BGA_CAMERA && a->maxspeed) snprintf(t, sizeof t, "%s · %u m · %u km/h", name, dist, a->maxspeed);
+    else if(a->user) snprintf(t, sizeof t, "%s (%s) · %u m", name, tr(S_MAP_AL_YOURS), dist);   /* não é dado do mapa */
     else snprintf(t, sizeof t, "%s · %u m", name, dist);
     lv_label_set_text(al_lbl, t);
     lv_obj_remove_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
@@ -1559,6 +1637,19 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name);
 
 static void open_dest_sheet(uint32_t x, uint32_t y) { open_dest_sheet_named(x, y, NULL); }
 
+/* "Lombada aqui" no ponto do destino marcado, ou tirar o aviso seu que está ali */
+static void upt_cb(lv_event_t *e)
+{
+    int k = (int)(intptr_t)lv_event_get_user_data(e);
+    if(k >= 0 && k < nupt) upts[k] = upts[--nupt];
+    else if(k < 0 && nupt < MAXUPT) upts[nupt++] = (bga_entry_t){ N.dx, N.dy, BGA_BUMP, 0, BGA_DIR_ANY };
+    upts_save();
+    N.has_dest = 0;                                   /* era só para marcar o aviso */
+    close_sheet();
+    update_marker();
+    request();
+}
+
 static void alerts_sw_cb(lv_event_t *e)
 {
     settings()->map_alerts = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
@@ -1634,6 +1725,13 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
         lv_obj_t *l = bf_label(tr_, tr(S_MAP_AVOID_TOLL), BF_FONT_M, pal()->text);
         lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
+    }
+    {                                               /* aviso seu: marcar ou tirar aqui */
+        lv_obj_t *ur = sheet_row(sh);
+        int k = upt_near(x, y);
+        lv_obj_t *ub = bf_button(ur, k >= 0 ? LV_SYMBOL_TRASH : LV_SYMBOL_WARNING, tr(k >= 0 ? S_MAP_UPT_DEL : S_MAP_UPT_ADD), 0);
+        lv_obj_set_height(ub, 44);
+        lv_obj_add_event_cb(ub, upt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)k);
     }
     if(R.alerts) {                                 /* avisos de radar e lombada na rota */
         lv_obj_t *ar = sheet_row(sh);
@@ -3106,6 +3204,7 @@ static void create(lv_obj_t *parent, int arg)
         return;
     }
     R.alerts = open_alerts();
+    upts_load();
     lanes_pack = open_lanes();
     R.pack = bgm_open(paths[0], err, sizeof err);
     for(int i = 1; R.pack && i < nmaps; i++)
@@ -3308,6 +3407,15 @@ void scr_map_demo(int step)
             if(!N.nalt) usleep(20000);
         }
         if(N.nalt) select_alt(0);
+    } else if(step == 11) {                          /* painel do destino no centro do mapa */
+        open_dest_sheet(cur.cx + 6400, cur.cy);       /* ~60 m a leste da posição */
+    } else if(step == 12) {                          /* marca "Lombada aqui" nesse ponto */
+        if(nupt < MAXUPT && upt_near(N.dx, N.dy) < 0) { upts[nupt++] = (bga_entry_t){ N.dx, N.dy, BGA_BUMP, 0, BGA_DIR_ANY }; upts_save(); }
+        N.has_dest = 0;
+        close_sheet();
+        cur.zoom256 = 17 * 256;
+        update_scale();
+        request();
     } else if(step == 10) {                          /* guia de faixas de exemplo (captura) */
         static bgl_entry_t ex = { .n = 4, .lane = { BGL_LEFT, BGL_THROUGH, BGL_THROUGH, BGL_THROUGH | BGL_RIGHT } };
         lane_e = &ex;
