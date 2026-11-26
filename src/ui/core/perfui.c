@@ -335,7 +335,10 @@ void perfui_tag_offset(int y) { tag_y = y; }
 static unsigned app_needs(bf_screen_t s)
 {
     switch(s) {
-    case SCR_MAP: case SCR_GPS: return PM_SVC_GPS;
+    /* Big GPS: navegando, nada essencial pausa — GPS, o som e a música do celular (Bluetooth)
+     * e as chamadas (docs/big-gps-2/25-modo-performance.md) */
+    case SCR_MAP: return PM_SVC_GPS | PM_SVC_BT | PM_SVC_PHONE;
+    case SCR_GPS: return PM_SVC_GPS;
     case SCR_PHONE: return PM_SVC_PHONE | PM_SVC_BT;
     case SCR_BLUETOOTH: return PM_SVC_BT;
     case SCR_BRP: return PM_SVC_BT;                  /* o controle Bluetooth do jogo */

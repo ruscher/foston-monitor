@@ -155,7 +155,7 @@ X(S_PERF_HINT,     "perf.hint",     "Quanto o sistema todo desenha: efeitos de t
 X(S_PERF_AUTO,     "perf.auto",     "Automático (recomendado)", "Automatic (recommended)", "Automático (recomendado)")
 X(S_PERF_AUTO_SUB, "perf.auto_sub", "Econômico ao navegar ou se o mapa ficar lento; equilibrado no resto.", "Economic while navigating or if the map gets slow; balanced otherwise.", "Económico al navegar o si el mapa se vuelve lento; equilibrado en el resto.")
 X(S_PERF_ECO,      "perf.eco",      "Econômico", "Economic", "Económico")
-X(S_PERF_ECO_SUB,  "perf.eco_sub",  "Vias e rótulos; sem edifícios, caminhos e vias de serviço até bem perto.", "Roads and labels; no buildings, paths or service roads until close in.", "Vías y rótulos; sin edificios, caminos ni vías de servicio hasta muy cerca.")
+X(S_PERF_ECO_SUB,  "perf.eco_sub",  "Vias e rótulos; sem edifícios, caminhos e vias de serviço até bem perto. Mapa sempre em 2D.", "Roads and labels; no buildings, paths or service roads until close in. Map always 2D.", "Vías y rótulos; sin edificios, caminos ni vías de servicio hasta muy cerca. Mapa siempre en 2D.")
 X(S_PERF_BAL,      "perf.bal",      "Equilibrado", "Balanced", "Equilibrado")
 X(S_PERF_BAL_SUB,  "perf.bal_sub",  "Edifícios e caminhos a partir do zoom de bairro.", "Buildings and paths from neighbourhood zoom.", "Edificios y caminos desde el zoom de barrio.")
 X(S_PERF_DET,      "perf.det",      "Detalhado", "Detailed", "Detallado")
