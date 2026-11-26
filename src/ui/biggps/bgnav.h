@@ -61,6 +61,12 @@ const char *bgn_text(const bgn_man_t *m, char *buf, int n);
  * ("na Rua X", "para a DF-440"; empty when there is no name).  Departure is always
  * "Siga em frente". */
 void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn);
+/* Camera zoom (zoom level * 256) for the navigation view: by speed (farther on the highway),
+ * closer when a maneuver is near — more for the complex ones (roundabout, ramp, keep left/right,
+ * U-turn, sharp turn), from max(200 m, 9 s) before them; ordinary turns from max(120 m, 6 s).
+ * Bicycle and foot: always close. */
+int bgn_zoom256(const bgn_route_t *r, const bgn_state_t *st, double speed_kmh, int profile);
+
 /* Distance as spoken/shown in Portuguese: "300 m", "1,2 km". */
 const char *bgn_dist_text(uint32_t dm, char *buf, int n);
 

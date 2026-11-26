@@ -326,6 +326,22 @@ static const char *prep(const char *name)
     return "na";
 }
 
+int bgn_zoom256(const bgn_route_t *r, const bgn_state_t *st, double speed_kmh, int profile)
+{
+    if (profile >= BGR_BIKE) return 17 * 256;
+    int z = speed_kmh > 80 ? 15 * 256 + 128 : speed_kmh > 50 ? 16 * 256 : 16 * 256 + 128;
+    if (!st->valid || st->next < 0 || st->next >= r->nman) return z;
+    int t = r->man[st->next].type;
+    if (t == BGN_ARRIVE || t == BGN_STRAIGHT || t == BGN_DEPART) return z;
+    int complex = t == BGN_ROUNDABOUT || t == BGN_RAMP_LEFT || t == BGN_RAMP_RIGHT || t == BGN_KEEP_LEFT
+               || t == BGN_KEEP_RIGHT || t == BGN_UTURN || t == BGN_SHARP_LEFT || t == BGN_SHARP_RIGHT;
+    double v = speed_kmh / 3.6, d = st->next_dm / 10.0;
+    double near = complex ? (v * 9 > 200 ? v * 9 : 200) : (v * 6 > 120 ? v * 6 : 120);
+    if (d > near) return z;
+    int zm = complex ? 17 * 256 + 128 : 17 * 256;
+    return zm > z ? zm : z;
+}
+
 static const char *verb_of(int type);
 
 void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn)

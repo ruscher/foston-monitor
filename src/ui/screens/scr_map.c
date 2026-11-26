@@ -1532,9 +1532,10 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         update_banner();
         update_botbar();
         if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
-        /* zoom pela velocidade: mais longe na estrada */
-        int z = N.profile >= BGR_BIKE ? 17 * 256 : speed > 80 ? 15 * 256 + 128 : speed > 50 ? 16 * 256 : 16 * 256 + 128;
-        /* anim_step chega lá aos poucos; um zoom feito à mão vale até a velocidade mudar de faixa */
+        /* zoom pela velocidade (mais longe na estrada) e mais perto ao chegar numa manobra,
+         * mais ainda nas complexas (biggps/bgnav.c: bgn_zoom256) */
+        int z = bgn_zoom256(&N.route, &N.st, speed, N.profile);
+        /* anim_step chega lá aos poucos; um zoom feito à mão vale até a situação mudar */
         static int last_z;
         if(follow && z != last_z) zoom_goal = z;
         last_z = z;

@@ -41,9 +41,12 @@ anim_cb (20 Hz) ──► bgmo_step ──► posição animada + rumo do carro 
 
 ## Limites conhecidos (próximas fases)
 
-- O giro da câmera aparece em degraus de até ~2–6°, a cada quadro novo do motor (~100–200 ms
-  em navegação). Girar a imagem pronta a cada passo custaria uma transformação de
-  800×480 por software (fase 3/5, a medir).
+- O giro da câmera aparece em degraus, a cada quadro novo do motor (~100–200 ms em navegação;
+  numa curva, 4–9° por degrau). **Girar a imagem pronta entre quadros foi medido e
+  descartado** (25/11/2026): com `lv_image_set_rotation` (vizinho mais próximo), cada
+  redesenho passou de 48 para 170 ms (p50). A navegação caiu de 14,4 para 11,2 quadros/s e o
+  laço da interface p95 subiu de 96 para 179 ms (toque pior). Sem aceleração gráfica, girar
+  800×480 por software custa mais do que ajuda.
 - A troca de zoom pela velocidade (16,5 → 16 → 15,5) anda em passos de ~0,1 nível, um por
   quadro do motor (`zoom_goal`, `ZOOM_STEP`). Entre um passo e outro a imagem não é escalada.
   Um zoom feito à mão vale até a velocidade mudar de faixa.
