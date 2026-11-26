@@ -23,10 +23,8 @@ destino. Cada trecho vira um `bgn_route_t`, e `bgn_append` (`bgnav.c`) os emenda
 
 ## Ainda não
 
-- Reordenar e arrastar paradas: hoje é "tirar todas" e marcar de novo.
-- Rotas alternativas: o Contraction Hierarchies não dá alternativas de graça (exigiria a
-  técnica de via-nós ou de penalidades com buscas extras). Não é feito por enquanto, e nada é
-  inventado no lugar.
+- Rotas alternativas: hoje feitas por penalidades ([11](11-rotas-alternativas.md)); com paradas, a
+  rota vai sem alternativas.
 
 ## Verificado
 
@@ -43,3 +41,28 @@ destino. Cada trecho vira um `bgn_route_t`, e `bgn_append` (`bgnav.c`) os emenda
 - Voz: "Você chegou à parada" no pacote de frases fixas (129 frases). A voz agora procura em
   todos os pacotes `.bgv`, o maior primeiro: dá para acrescentar frases sem refazer o pacote
   regional.
+
+## Reordenar, tirar uma e arrastar (BigFoston OS 0.6.3, 26/11/2026)
+
+- **No painel de rotas**, abaixo de Iniciar/Simular/+ Parada, cada parada tem uma linha:
+  - o número (o mesmo do círculo laranja no mapa);
+  - ▲ e ▼ para trocar a ordem (apagados quando não há para onde ir);
+  - ✕ para tirar só aquela.
+- Cada mudança recalcula a rota. O painel rola quando as paradas passam da altura.
+- O botão "Tirar paradas" (todas) saiu: o ✕ de cada linha faz isso, e o botão cortava o texto
+  "Simular".
+- **No mapa**, segurando o círculo de uma parada, ela passa a acompanhar o dedo:
+  - fica ampliada, 30 px acima do dedo, à vista;
+  - o mapa anda quando o dedo chega à borda;
+  - ao soltar, a rota é recalculada passando por ali.
+- O mesmo vale para o pino do destino, que já era arrastável.
+- Os botões agem fora do evento do próprio botão (`lv_async_call`): a rota nova recria o painel, e
+  apagar o pai dentro do evento do filho derrubaria o LVGL.
+
+Verificado no FOSTON, com a fase `paradas` do bench e toques injetados com o `bftap`:
+- rota com 2 paradas (414 trechos);
+- ▼ na parada 1 trocou a ordem (780 trechos: a rota agora vai e volta);
+- a parada 1 foi arrastada 70 px com toque longo, e a rota passou de 41 min / 41 km para
+  34 min / 33 km.
+
+Captura do simulador: `42q-biggps-paradas`.
