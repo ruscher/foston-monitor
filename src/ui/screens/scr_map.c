@@ -2022,9 +2022,16 @@ static void ref_point(uint32_t *x, uint32_t *y)
     else { *x = cur.cx; *y = cur.cy; }
 }
 
+static char sv_fixed[128];      /* a busca corrigida que achou os resultados ("" = como digitada) */
+
 static void show_results(void)
 {
     lv_obj_clean(sv_list);
+    if(sv_fixed[0] && sv_nres) {
+        char t[200];
+        snprintf(t, sizeof t, tr(S_MAP_RESULTS_FOR), sv_fixed);
+        bf_label(sv_list, t, BF_FONT_S, pal()->text_dim);
+    }
     static const char *sym[] = { LV_SYMBOL_HOME, LV_SYMBOL_RIGHT, LV_SYMBOL_GPS, LV_SYMBOL_HOME };
     for(int i = 0; i < sv_nres; i++)
         list_row(sym[sv_res[i].type & 3], sv_res[i].name, sv_res[i].context, sv_res[i].dist_m, i);
@@ -2038,6 +2045,7 @@ static void cat_cb(lv_event_t *e)
     ref_point(&x, &y);
     if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }   /* a categoria vence a busca em curso */
     sv_nres = six ? bgs_nearby(six, cat, x, y, 30000, sv_res, MAXRES) : 0;
+    sv_fixed[0] = 0;
     show_results();
 }
 
@@ -2085,6 +2093,7 @@ static struct {
     uint32_t x, y;
     bgs_result_t res[MAXRES];
     int nres;
+    char fixed[128];             /* bgs_corrected do último resultado */
 } SQ = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *search_worker(void *arg)
@@ -2101,8 +2110,10 @@ static void *search_worker(void *arg)
         pthread_mutex_unlock(&SQ.mu);
         bgs_result_t res[MAXRES];
         int n = bgs_query(six, text, x, y, res, MAXRES);
+        char fixed[128];
+        snprintf(fixed, sizeof fixed, "%s", bgs_corrected(six));   /* erro de digitação corrigido */
         pthread_mutex_lock(&SQ.mu);
-        if(seq == SQ.seq) { memcpy(SQ.res, res, sizeof res); SQ.nres = n; }
+        if(seq == SQ.seq) { memcpy(SQ.res, res, sizeof res); SQ.nres = n; memcpy(SQ.fixed, fixed, sizeof fixed); }
         SQ.done = seq;
     }
     pthread_mutex_unlock(&SQ.mu);
@@ -2127,7 +2138,7 @@ static void sv_poll_cb(lv_timer_t *t)
     (void)t;
     pthread_mutex_lock(&SQ.mu);
     int ready = SQ.done == SQ.seq;
-    if(ready) { memcpy(sv_res, SQ.res, sizeof sv_res); sv_nres = SQ.nres; }
+    if(ready) { memcpy(sv_res, SQ.res, sizeof sv_res); sv_nres = SQ.nres; memcpy(sv_fixed, SQ.fixed, sizeof sv_fixed); }
     pthread_mutex_unlock(&SQ.mu);
     if(!ready) return;
     lv_timer_delete(sv_poll);

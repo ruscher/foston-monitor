@@ -618,6 +618,7 @@ X(S_MAP_VEH_RESET,  "map.veh.reset",  "Restaurar padrão", "Restore default", "R
 X(S_MAP_ADD_STOP,   "map.add_stop",   "Parada", "Stop", "Parada")
 X(S_MAP_CLEAR_STOPS,"map.clear_stops","Tirar paradas", "Remove stops", "Quitar paradas")
 X(S_MAP_PICK_STOP,  "map.pick_stop",  "Toque e segure onde fica a parada", "Touch and hold where the stop is", "Mantenga pulsado donde está la parada")
+X(S_MAP_RESULTS_FOR,"map.results_for","Resultados para \"%s\"", "Results for \"%s\"", "Resultados para \"%s\"")
 X(S_MAP_PIN_HINT,   "map.pin_hint",   "Toque e segure o pino para movê-lo", "Touch and hold the pin to move it", "Mantenga pulsado el pin para moverlo")
 X(S_MAP_CAR,        "map.car",        "Carro", "Car", "Coche")
 X(S_MAP_MOTO,       "map.moto",       "Moto", "Motorcycle", "Moto")

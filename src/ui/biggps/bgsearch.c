@@ -19,6 +19,7 @@ struct bgs_index {
     off_t size;
     bgs_header_t h;
     bgs_tile_t *tiles;         /* version 3: in memory (~60 KB for Brazil) */
+    char corrected[256];       /* the text bgs_query used after a typing correction */
 };
 
 static int rd(const bgs_index_t *ix, off_t off, void *buf, size_t n)
@@ -568,7 +569,140 @@ static void verify_tiles(const bgs_index_t *ix, const qword_t *qw, int nw, int n
     free(sg);
 }
 
+/* Damerau-Levenshtein distance, giving up above k */
+static int edits(const char *a, const char *b, int k)
+{
+    int la = (int)strlen(a), lb = (int)strlen(b);
+    if (abs(la - lb) > k || la > 40 || lb > 40) return k + 1;
+    int d[41][41];
+    for (int i = 0; i <= la; i++) d[i][0] = i;
+    for (int j = 0; j <= lb; j++) d[0][j] = j;
+    for (int i = 1; i <= la; i++) {
+        int rowmin = k + 1;
+        for (int j = 1; j <= lb; j++) {
+            int c = a[i - 1] != b[j - 1];
+            int v = d[i - 1][j] + 1;
+            if (d[i][j - 1] + 1 < v) v = d[i][j - 1] + 1;
+            if (d[i - 1][j - 1] + c < v) v = d[i - 1][j - 1] + c;
+            if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] && d[i - 2][j - 2] + 1 < v) v = d[i - 2][j - 2] + 1;
+            d[i][j] = v;
+            if (v < rowmin) rowmin = v;
+        }
+        if (rowmin > k) return k + 1;
+    }
+    return d[la][lb];
+}
+
+/* the closest indexed word to w among those starting with pre (fewest edits, then the most
+ * common); *best / *bestd: count and edits of the best word so far */
+static void fix_prefix(const bgs_index_t *ix, const char *w, const char *pre, char *out, size_t n, uint32_t *best, int *bestd)
+{
+    uint32_t lo = bound(ix, pre, 0), hi = bound(ix, pre, 1);
+    if (hi - lo > 40000) hi = lo + 40000;                 /* a bound on the work per prefix */
+    int k = strlen(w) >= 8 ? 2 : 1;
+    bgs_token_t buf[512];
+    for (uint32_t i = lo; i < hi;) {
+        uint32_t m = hi - i < 512 ? hi - i : 512;
+        if (rd(ix, (off_t)ix->h.off_tokens + (off_t)i * sizeof buf[0], buf, m * sizeof buf[0])) return;
+        for (uint32_t j = 0; j < m; j++) {
+            if (buf[j].count <= *best && *bestd <= 1) continue;   /* cannot beat it */
+            char tw[48];
+            str_at(ix, buf[j].text, tw, sizeof tw);
+            if (!strcmp(tw, w)) continue;
+            int d = edits(w, tw, k);
+            if (d > k || d > *bestd || (d == *bestd && buf[j].count <= *best)) continue;
+            *best = buf[j].count;
+            *bestd = d;
+            snprintf(out, n, "%s", tw);
+        }
+        i += m;
+    }
+}
+
+/* candidates: the same first two letters; and, for an error in the second
+ * letter, the 3-letter prefixes it would have (missing, wrong, extra or swapped letter) —
+ * small ranges instead of every word with the first letter */
+static uint32_t fix_word(const bgs_index_t *ix, const char *w, char *out, size_t n)
+{
+    uint32_t best = 0;
+    int bestd = 99;
+    char pre[8];
+    /* every stage, keeping the most common neighbour: a rare word one edit away in the
+     * first range ("nrtl" for "nrte") must not hide the common one ("norte") */
+    snprintf(pre, sizeof pre, "%.2s", w);                       /* covers the first 3 letters too */
+    fix_prefix(ix, w, pre, out, n, &best, &bestd);
+    if (strlen(w) >= 3) {
+        for (char c = 'a'; c <= 'z'; c++) {
+            snprintf(pre, sizeof pre, "%c%c%c", w[0], c, w[1]);     /* missing 2nd letter */
+            fix_prefix(ix, w, pre, out, n, &best, &bestd);
+            snprintf(pre, sizeof pre, "%c%c%c", w[0], c, w[2]);     /* wrong 2nd letter */
+            fix_prefix(ix, w, pre, out, n, &best, &bestd);
+        }
+        snprintf(pre, sizeof pre, "%c%c", w[0], w[2]);             /* extra 2nd letter */
+        fix_prefix(ix, w, pre, out, n, &best, &bestd);
+        snprintf(pre, sizeof pre, "%c%c", w[1], w[0]);             /* first two swapped */
+        fix_prefix(ix, w, pre, out, n, &best, &bestd);
+    }
+    return best;
+}
+
+int bgs_correct(bgs_index_t *ix, const char *text, char *out, size_t n)
+{
+    char qn[256];
+    bgs_norm(text, qn, sizeof qn);
+    size_t o = 0, tl = strlen(text);
+    int changed = 0, typing = tl && text[tl - 1] != ' ';
+    out[0] = 0;
+    for (const char *p = qn; *p;) {
+        size_t l = strcspn(p, " ");
+        char w[WLEN], fix[64];
+        snprintf(w, sizeof w, "%.*s", (int)(l < WLEN ? l : WLEN - 1), p);
+        const char *use = w;
+        size_t dl;
+        int last = !p[l] || !p[l + strspn(p + l, " ")];
+        /* a finished word must exist whole (a rarer word that merely starts with the typo, like
+         * "avendano" for "avenda", does not count); the word being typed, as a prefix */
+        uint32_t own = 0;                       /* how common the word itself is (0 = absent) */
+        uint32_t lo = bound(ix, w, 0);
+        if (last && typing) own = (uint32_t)tok_sum(ix, lo, bound(ix, w, 1), 1000);   /* being typed: a prefix */
+        else {
+            bgs_token_t tk;
+            char tw[64];
+            if (lo < ix->h.ntokens && !token(ix, lo, &tk, tw, sizeof tw) && !strcmp(tw, w)) own = tk.count;
+        }
+        /* absent, or rare enough that a word 50x more common one edit away is the likely intent
+         * ("avenda" is a surname somewhere; "avenida" is everywhere) */
+        if (strlen(w) >= 4 && !all_digits(w, &dl) && !syn_of(w) && own < 20) {
+            uint32_t c = fix_word(ix, w, fix, sizeof fix);
+            if (c && (own == 0 || c >= 50 * own)) { use = fix; changed = 1; }
+        }
+        o += (size_t)snprintf(out + o, o < n ? n - o : 0, "%s%s", o ? " " : "", use);
+        p += l;
+        while (*p == ' ') p++;
+    }
+    return changed && o < n;
+}
+
+const char *bgs_corrected(const bgs_index_t *ix) { return ix->corrected; }
+
+static int query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_result_t *out, int max);
+
 int bgs_query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_result_t *out, int max)
+{
+    ix->corrected[0] = 0;
+    int n = query(ix, text, x, y, out, max);
+    char fixed[256];
+    size_t tl = strlen(text);
+    /* nothing found and the text is complete (or long enough): try it corrected */
+    if (n == 0 && tl >= 4 && bgs_correct(ix, text, fixed, sizeof fixed)) {
+        if (text[tl - 1] != ' ') strncat(fixed, " ", sizeof fixed - strlen(fixed) - 1);   /* whole words now */
+        n = query(ix, fixed, x, y, out, max);
+        if (n) snprintf(ix->corrected, sizeof ix->corrected, "%s", fixed);
+    }
+    return n;
+}
+
+static int query(bgs_index_t *ix, const char *text, uint32_t x, uint32_t y, bgs_result_t *out, int max)
 {
     char qn[256];
     wlist_t pl, cn;
