@@ -1035,6 +1035,7 @@ int screenshot_run(const char *dir)
                 scr_map_demo(0); pump(4000); shot("42b-biggps-rota");
                 scr_map_demo(9); pump(2500); shot("42j-biggps-rota-alternativa");
                 scr_map_demo(1); pump(2500); shot("42c-biggps-navegacao");
+                scr_map_demo(10); pump(300); shot("42k-biggps-faixas");
                 scr_map_demo(2); pump(2500); shot("42d-biggps-navegacao-adiante");
                 go(SCR_HOME, 0); pump(100);
             }

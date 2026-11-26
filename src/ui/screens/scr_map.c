@@ -25,6 +25,8 @@
 #include "../biggps/bgalert.h"
 #include "../biggps/bgvehicle.h"
 #include "../biggps/bgpersp.h"
+#include "../biggps/bglanes.h"
+#include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -565,6 +567,70 @@ static struct {
 static lv_obj_t *stop_mk[BGRT_MAXSTOPS];   /* círculos numerados das paradas */
 static lv_obj_t *pick_chip;                /* "toque e segure onde fica a parada" */
 static int pin_drag_done;      /* o painel reabre depois de mover o pino: mantém as paradas */
+
+/* ------------------------------------------------------------ guia de faixas
+ * Do arquivo .bgl em rotas (turn:lanes do OSM): as faixas do cruzamento da próxima manobra, as
+ * que servem em azul. Só aparece quando os dados dizem quais servem (bgl_fit != 0). */
+#define LANE_W 44
+#define LANE_H 48
+static bgl_pack_t *lanes_pack;
+static lv_obj_t *lane_img;
+static lv_image_dsc_t lane_dsc;
+static uint16_t lane_px[BGL_MAXLANES * LANE_W * LANE_H];
+static int lane_for = -1;      /* manobra cujo desenho está pronto */
+static const bgl_entry_t *lane_e;
+static unsigned lane_fit;
+
+static void lanes_draw(int type)
+{
+    int n = lane_e->n, w = n * LANE_W;
+    for(int i = 0; i < n; i++) {
+        bool ok = lane_fit & (1u << i);
+        rast_surface_t s = { lane_px + i * LANE_W, LANE_W, LANE_H, w };
+        uint16_t bg = rgb565(ok ? 0x1a73e8 : 0x2b2f36);
+        bgn_icon(&s, bgl_arrow(lane_e, i, type, lane_fit), 0, rgb565(ok ? 0xffffff : 0x9aa0a6), bg, bg);
+        for(int y = 0; y < LANE_H; y++) lane_px[y * w + i * LANE_W] = rgb565(0x15181d);   /* divisória */
+    }
+    memset(&lane_dsc, 0, sizeof lane_dsc);
+    lane_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    lane_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    lane_dsc.header.w = (uint32_t)w;
+    lane_dsc.header.h = LANE_H;
+    lane_dsc.header.stride = (uint32_t)w * 2;
+    lane_dsc.data = (const uint8_t *)lane_px;
+    lane_dsc.data_size = (uint32_t)(w * LANE_H * 2);
+    lv_image_cache_drop(&lane_dsc);
+    lv_image_set_src(lane_img, &lane_dsc);
+}
+
+static void lanes_update(void)
+{
+    if(!lane_img) return;
+    const bgn_state_t *st = &N.st;
+    if(!lanes_pack || !N.navigating || !st->valid || st->next < 0 || st->next >= N.route.nman) {
+        lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const bgn_man_t *m = &N.route.man[st->next];
+    if(lane_for != st->next) {                       /* manobra nova: procura as faixas uma vez */
+        lane_for = st->next;
+        lane_e = NULL;
+        lane_fit = 0;
+        uint32_t ax, ay;
+        double br;
+        bgn_point_at(&N.route, m->at_dm > 300 ? m->at_dm - 300 : 0, &ax, &ay, &br);   /* rumo de chegada */
+        lane_e = bgl_find(lanes_pack, m->x, m->y, (int)lround(br));
+        lane_fit = bgl_fit(lane_e, m->type);
+        if(lane_e && lane_fit) {
+            lanes_draw(m->type);
+            fprintf(stderr, "biggps: faixas na manobra %d: %d faixas, servem %#x\n", st->next, lane_e->n, lane_fit);
+        }
+    }
+    double v = pos_speed / 3.6;
+    uint32_t show = (uint32_t)fmax(400, v * 15);
+    if(lane_e && lane_fit && st->next_dm / 10 <= show) lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+}
 static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
 static uint32_t last_say_ms;
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
@@ -1329,6 +1395,8 @@ static void end_navigation(void)
     N.nal = 0;
     N.nstops = N.pick_stop = 0;
     clear_alts();
+    lane_for = -1;
+    if(lane_img) lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
     if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
     if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
@@ -1635,6 +1703,7 @@ static void route_result(bgrt_res_t *r)
     N.active = 1;
     set_route_overlay(N.route.xy, N.route.npts);
     route_alerts();
+    lane_for = -1;                                   /* índices de manobra novos */
     if(N.rerouting) {
         N.rerouting = 0;
         N.said_next = -1;
@@ -1720,6 +1789,7 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         announce();
         alert_check();
         update_banner();
+        lanes_update();
         update_botbar();
         if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
         /* zoom pela velocidade (mais longe na estrada) e mais perto ao chegar numa manobra,
@@ -2712,6 +2782,29 @@ static int find_maps(char paths[][1024], int max)
     return 0;
 }
 
+/* guia de faixas: o primeiro .bgl em big-gps/rotas (opcional) */
+static bgl_pack_t *open_lanes(void)
+{
+    const char *base = getenv("BIGFOSTON_BIGGPS");
+    if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
+    char dir[512], path[1024], err[256];
+    snprintf(dir, sizeof dir, "%s/rotas", base);
+    DIR *dp = opendir(dir);
+    if(!dp) return NULL;
+    bgl_pack_t *p = NULL;
+    struct dirent *de;
+    while(!p && (de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bgl") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        p = bgl_open(path, err, sizeof err);
+        if(!p) fprintf(stderr, "biggps: %s\n", err);
+    }
+    closedir(dp);
+    if(p) fprintf(stderr, "biggps: faixas de %u cruzamentos\n", bgl_count(p));
+    return p;
+}
+
 /* pontos de alerta: o .bga mais novo em big-gps/alertas (opcional; sem ele o mapa funciona igual) */
 static bga_pack_t *open_alerts(void)
 {
@@ -2923,7 +3016,15 @@ static void create(lv_obj_t *parent, int arg)
     al_chip = chip(ov);                           /* radar / lombada à frente */
     lv_obj_set_style_bg_color(al_chip, lv_color_hex(0xf5b83d), 0);
     al_lbl = bf_label(al_chip, "", BF_FONT_M, lv_color_hex(0x202124));
-    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 92, 124);
+    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 92, 180);   /* abaixo das faixas */
+
+    lane_img = lv_image_create(ov);                  /* faixas da próxima manobra */
+    lv_obj_align(lane_img, LV_ALIGN_TOP_MID, -20, 124);
+    lv_obj_set_style_radius(lane_img, 8, 0);
+    lv_obj_set_style_clip_corner(lane_img, true, 0);
+    lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+    lane_for = -1;
     lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
 
     set_follow(follow);
@@ -2939,6 +3040,7 @@ static void create(lv_obj_t *parent, int arg)
         return;
     }
     R.alerts = open_alerts();
+    lanes_pack = open_lanes();
     R.pack = bgm_open(paths[0], err, sizeof err);
     for(int i = 1; R.pack && i < nmaps; i++)
         if(bgm_add(R.pack, paths[i], err, sizeof err)) fprintf(stderr, "biggps: %s\n", err);
@@ -3080,6 +3182,10 @@ static void destroy(void)
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     bga_close(R.alerts);
     R.alerts = NULL;
+    bgl_close(lanes_pack);
+    lanes_pack = NULL;
+    lane_img = NULL;
+    lane_e = NULL;
     al_chip = al_lbl = pick_chip = NULL;
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
     pj_ok = shown_persp = false;
@@ -3135,6 +3241,13 @@ void scr_map_demo(int step)
             if(!N.nalt) usleep(20000);
         }
         if(N.nalt) select_alt(0);
+    } else if(step == 10) {                          /* guia de faixas de exemplo (captura) */
+        static bgl_entry_t ex = { .n = 4, .lane = { BGL_LEFT, BGL_THROUGH, BGL_THROUGH, BGL_THROUGH | BGL_RIGHT } };
+        lane_e = &ex;
+        lane_fit = bgl_fit(&ex, BGN_RIGHT);
+        lane_for = -2;                                /* não é de nenhuma manobra: a próxima refaz */
+        lanes_draw(BGN_RIGHT);
+        lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
