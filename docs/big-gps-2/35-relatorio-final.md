@@ -112,10 +112,16 @@ No cartão:
 
 - **Limite de velocidade das vias**, do `maxspeed` do OSM ([36](36-limites-de-velocidade.md)), BigFoston OS 0.6.2.
 
+- **Paradas:** reordenar, tirar uma e arrastar no mapa ([20](20-paradas-intermediarias.md)), BigFoston OS 0.6.3.
+- **Revisão visual** com paleta própria ([03](03-design-system.md)) e **voz com nomes de vias de
+  todo o Centro-Oeste** ([22](22-piper-faber.md)), BigFoston OS 0.6.4.
+- **Modo Performance com o mapa aberto**, testado no FOSTON (26/11/2026): pausou só as
+  tarefas agendadas (`crond`); Bluetooth, GPS e telefone continuaram, com os mesmos processos.
+  A etiqueta "Performance" ficava sobre o botão Voltar; agora vai para um lugar livre
+  ([25](25-modo-performance.md)).
+
 ## 26. Próximos passos
 
-- Testar no FOSTON o que só foi visto no simulador: alternativas, faixas, painéis e busca.
-- Testar dirigindo, e com música do celular tocando.
-- Gerar a voz com nomes para outras regiões.
-- Reordenar e arrastar paradas.
-- Ajustar o visual quando as imagens de referência chegarem.
+- Testar dirigindo: navegação com o GPS de verdade, limite da via, placa e bipe do radar, voz
+  com nomes de vias fora do DF, e com música do celular tocando.
+- Medir o desempenho com o GPS fixado, no carro.

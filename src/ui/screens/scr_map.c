@@ -15,6 +15,7 @@
 #include "../core/settings.h"
 #include "../core/voice.h"
 #include "../core/perf.h"
+#include "../core/perfui.h"
 #include "../third_party/lvgl/src/core/lv_obj_event_private.h"   /* lv_cover_check_info_t */
 #include "../biggps/bgmap.h"
 #include "../biggps/bgrender.h"
@@ -27,7 +28,6 @@
 #include "../biggps/bgpersp.h"
 #include "../biggps/bglanes.h"
 #include "../biggps/bgspeed.h"
-#include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -1280,7 +1280,7 @@ static void fit_route(void)
     request();
 }
 
-/* voz: eSpeak NG (core/voice), se ligada nos ajustes e instalada no cartão */
+/* voz: a Faber pré-gerada (core/voice, pacotes .bgv no cartão), se ligada nos ajustes */
 /* text: o que se lê no registro; parts: os trechos da voz Faber separados por '|' */
 static void say(const char *text, const char *parts)
 {
@@ -2682,9 +2682,20 @@ static void gps_update(void)
     on_fix(x, y, g.speed_kmh, g.speed_kmh >= 3.0 ? g.course : -1, true);
 }
 
+/* a etiqueta do modo Performance (layer_top) num lugar livre: seguindo, abaixo do Voltar;
+ * navegando, embaixo, ao lado da coluna (abaixo da faixa ficam as setas das faixas); com o
+ * painel da rota aberto, escondida (o painel ocupa a esquerda) */
+static void perf_tag_place(void)
+{
+    perfui_tag_hide(sheet != NULL || sv != NULL);           /* painel da rota ou busca aberta */
+    if(N.navigating) perfui_tag_at(12 + NAV_COL_W + 12, MAP_H - 12 - 30);
+    else perfui_tag_at(12, 12 + BTN + 8);
+}
+
 static void tick_cb(lv_timer_t *t)
 {
     (void)t;
+    perf_tag_place();
     int swapped = 0;
     pthread_mutex_lock(&R.mu);
     if(R.done) {
@@ -3799,6 +3810,8 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     demo_alive = false;
+    perfui_tag_hide(false);
+    perfui_tag_at(-1, 0);
     if(bench_tm) { lv_timer_delete(bench_tm); bench_tm = NULL; }
     if(tick) { lv_timer_delete(tick); tick = NULL; }
     if(anim) { lv_timer_delete(anim); anim = NULL; }

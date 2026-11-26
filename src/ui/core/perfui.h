@@ -36,5 +36,6 @@ bool       perfui_video_playing(void);
 void       perfui_settings_changed(void);/* depois de mudar um ajuste perf_* */
 void       perfui_tag_hide(bool hide);   /* tela cheia: sem nada por cima do vídeo */
 void       perfui_tag_offset(int y);     /* Internet: abaixo da barra de ferramentas (0 = padrão) */
+void       perfui_tag_at(int x, int y);  /* Big GPS: num lugar livre da tela (x < 0 = padrão) */
 void       perfui_dialog(void);          /* o que a etiqueta abre: Desativar / Configurar / Fechar */
 #endif
