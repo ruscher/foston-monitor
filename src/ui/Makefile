@@ -202,6 +202,11 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_bglanes.c biggps/bglanes.c -lm -o build/test/test_bglanes
 	./build/test/test_bglanes build/test
+	sed -n '/BF-VOICE-BEGIN/,/BF-VOICE-END/p' ../../firmware/buildroot/patches/bluez-alsa/0002-aplay-bigfoston-voice-mix.patch \
+		| sed 's/^+//' > build/test/bfvoice_mix.inc
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ibuild/test \
+		tests/test_btvoice.c core/btaudio.c -lpthread -o build/test/test_btvoice
+	./build/test/test_btvoice build/test
 
 run: sim
 	./build/sim/bigfoston-shell

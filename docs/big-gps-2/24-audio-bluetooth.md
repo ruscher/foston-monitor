@@ -14,29 +14,46 @@
   `bluealsa-aplay` para de escrever durante a fala. Com a voz pré-gerada, a fala começa na hora
   e dura só o necessário (sem síntese no meio).
 
-Na prática, a música **some** enquanto a voz fala (~1–3 s): o celular continua mandando, e o
-`bluealsa-aplay` descarta esse trecho (patch `firmware/buildroot/patches/bluez-alsa/0001-aplay-bigfoston-ring-and-hold.patch`).
-Depois a música volta. Ela não é abaixada.
+## Agora: a música abaixa durante a fala
 
-## O que falta para abaixar em vez de parar
+Sem `dmix` e sem mexer no resto da cadeia de som. O `bluealsa-aplay` continua dono da saída e
+mistura a voz ele mesmo (patch
+`firmware/buildroot/patches/bluez-alsa/0002-aplay-bigfoston-voice-mix.patch`):
 
-O MT3351 tem uma saída de som só, e o OSS do `/dev/dsp` é exclusivo. Para tocar música baixa e
-voz ao mesmo tempo é preciso **mixar**:
+1. O shell escreve a voz (mono, 22.050 Hz) numa fila em memória compartilhada,
+   `/run/bluealsa-voice` (32.768 amostras, `btaudio_say` em `core/btaudio.c`).
+2. A cada bloco de música, o aplay leva a voz à taxa da música (44,1 ou 48 kHz, interpolação
+   linear em inteiros), abaixa a música para 1/4 (-12 dB) e soma.
+3. A música desce numa rampa de ~50 ms **antes** de a voz entrar (sem estouro) e volta ~330 ms
+   depois do fim da fala, também em rampa (sem estalo).
 
-1. Usar o `dmix` do ALSA na saída (`/etc/asound.conf`): o `bluealsa-aplay --pcm=dmix` e a voz
-   abrindo o mesmo `dmix`. A voz passaria do OSS para a libasound.
-2. Durante a fala, baixar o volume da música no `bluealsa` (propriedade `Volume` do PCM pelo
-   D-Bus, `org.bluealsa.PCM1`) e devolvê-lo depois.
-3. Medir no aparelho o custo de CPU do `dmix` (reamostragem e mistura em ponto fixo) com o mapa
-   navegando. O ARM1176 não tem FPU nem NEON.
+O shell só usa esse caminho quando o aplay está tocando de fato: ele conta cada bloco que
+mistura (`beat`). Se esse contador não andar em 300 ms, ou se a música parar no meio da frase
+(600 ms sem consumir), o resto da fala vai pelo caminho antigo: `/dev/dsp`, com a música solta
+durante a fala. O Multimídia e o app Internet continuam no caminho antigo.
 
-Isso mexe na cadeia de áudio do sistema inteiro: Multimídia, Telefone (HFP) e TV também usam a
-saída. Por isso fica para uma etapa própria, testada com um celular tocando música de verdade.
-Nada disso foi feito ainda.
+## Medido no FOSTON (2026-11-26, música do celular por A2DP)
 
-## A testar no aparelho (ainda não feito)
+| | |
+|---|---|
+| Frase de 3,44 s | tocada inteira em 3,51–3,52 s (3 vezes); +80 ms = a rampa antes da voz |
+| CPU do `bluealsa-aplay` | 6,0 % sem voz → 7,4 % durante a fala |
 
-- Navegação com o celular tocando música: a voz se ouve? A música volta sozinha? A ligação
-  A2DP se mantém?
-- Falas seguidas (manobra e radar) com a música: sem cortes nem travamento.
-- CPU durante a fala com a música e o mapa.
+Medido com `bfsay`, um programa de teste que chama o mesmo `btaudio_say` do shell, e com o
+aplay novo rodando de `/tmp` (o sistema instalado não foi trocado nesse teste).
+
+## Testes no PC
+
+`make test` em `src/ui` (`tests/test_btvoice.c`). A função de mistura é tirada do próprio
+patch, então o teste confere o código que vai para o aparelho. Ele verifica:
+- a voz inteira a 44,1 e 48 kHz;
+- a música baixa durante a fala e de volta depois;
+- nenhum salto fora da entrada e da saída da voz;
+- a volta ao `/dev/dsp` sem música;
+- a música parando no meio da frase;
+- a fala interrompida.
+
+## A testar dirigindo
+
+- Ouvir se -12 dB é o ponto certo (constante `BF_DUCK` no patch).
+- Falas seguidas (manobra e radar) com a música.

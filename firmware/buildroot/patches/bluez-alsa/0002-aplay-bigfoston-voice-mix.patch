@@ -1,0 +1,127 @@
+From: ruscher <rruscher@gmail.com>
+Subject: [PATCH] aplay: voz do Big GPS misturada à música, que abaixa (BigFoston)
+
+O shell do BigFoston escreve a voz da navegação (mono) em
+/run/bluealsa-voice (mmap). Enquanto houver voz, o bluealsa-aplay a leva à
+taxa da música, soma às amostras e abaixa a música para 1/4 com uma rampa
+curta. Assim a música do celular não some durante a fala, e nada mais na
+cadeia de som muda. Só inteiros (o FOSTON não tem FPU).
+
+Signed-off-by: ruscher <rruscher@gmail.com>
+---
+--- a/utils/aplay/aplay.c
++++ b/utils/aplay/aplay.c
+--- a/utils/aplay/aplay.c
++++ b/utils/aplay/aplay.c
+@@ -145,6 +145,93 @@
+ 	bf_ring->w = w;
+ }
+ 
++/* BF-VOICE-BEGIN
++ * BigFoston: a voz do Big GPS tocada junto com a música, que fica mais baixa enquanto ela
++ * fala. O shell escreve a voz (mono, na taxa dela) em /run/bluealsa-voice; aqui ela é levada
++ * à taxa da música (interpolação linear) e somada; a música desce antes para 1/4 (-12 dB),
++ * com uma rampa de ~50 ms, e volta ~330 ms depois da fala. Só inteiros: o ARM1176 do FOSTON não tem FPU. */
++#define BF_VOICE_PATH "/run/bluealsa-voice"
++#define BF_VOICE_N 32768
++#define BF_VOICE_MAGIC 0x31564642u   /* 'BFV1' */
++#define BF_DUCK 64                   /* ganho da música durante a fala (/256) */
++struct bf_voice {
++	uint32_t magic;
++	uint32_t rate;           /* Hz da voz (o shell escreve) */
++	volatile uint32_t w;     /* amostras escritas pelo shell */
++	volatile uint32_t r;     /* amostras já tocadas (aqui) */
++	volatile uint32_t beat;  /* cresce a cada bloco de música tocado */
++	uint32_t pad[3];
++	int16_t s[BF_VOICE_N];
++};
++static void bf_voice_mix(struct bf_voice *v, int16_t *x, size_t samples, unsigned channels, unsigned rate) {
++	static unsigned gain = 256, ramp = 0, hang = 0;
++	static uint32_t phase = 0;
++	if (v == NULL || channels == 0 || rate == 0)
++		return;
++	v->beat++;
++	uint32_t w = v->w, r = v->r;
++	__sync_synchronize();
++	uint32_t avail = w - r;
++	if (avail > BF_VOICE_N) {   /* o shell descartou a fala: começa do que ele escreveu */
++		r = w;
++		avail = 0;
++	}
++	if (avail == 0 && hang == 0 && gain == 256) {
++		v->r = r;
++		phase = 0;
++		return;
++	}
++	unsigned vrate = v->rate ? v->rate : rate;
++	uint32_t step = (uint32_t)(((uint64_t)vrate << 16) / rate);
++	unsigned ramp_every = rate / 4000 + 1;   /* 192 passos de ganho em ~50 ms */
++	size_t frames = samples / channels;
++	for (size_t f = 0; f < frames; f++) {
++		int voice = 0;
++		if (avail > 0 && gain <= BF_DUCK) {   /* a voz entra com a música já baixa */
++			int a = v->s[r & (BF_VOICE_N - 1)];
++			int b = avail > 1 ? v->s[(r + 1) & (BF_VOICE_N - 1)] : a;
++			voice = a + (((b - a) * (int)(phase >> 4)) >> 12);
++			phase += step;
++			while (phase >= 65536 && avail > 0) {
++				phase -= 65536;
++				r++;
++				avail--;
++			}
++			hang = rate / 3;     /* a música segue baixa ~330 ms depois da fala */
++		}
++		else if (hang > 0 && avail == 0) {
++			hang--;
++			phase = 0;
++		}
++		unsigned target = avail > 0 || hang > 0 ? BF_DUCK : 256;
++		if (gain != target && ++ramp >= ramp_every) {
++			ramp = 0;
++			gain = gain < target ? gain + 1 : gain - 1;
++		}
++		for (unsigned c = 0; c < channels; c++) {
++			int y = ((int)x[f * channels + c] * (int)gain) / 256 + voice;
++			x[f * channels + c] = (int16_t)(y > 32767 ? 32767 : y < -32768 ? -32768 : y);
++		}
++	}
++	v->r = r;
++}
++/* BF-VOICE-END */
++static struct bf_voice *bf_voice = NULL;
++static void bf_voice_open(void) {
++	int fd = open(BF_VOICE_PATH, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
++	if (fd == -1)
++		return;
++	if (ftruncate(fd, sizeof(*bf_voice)) == 0) {
++		void *m = mmap(NULL, sizeof(*bf_voice), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
++		if (m != MAP_FAILED) {
++			bf_voice = m;
++			bf_voice->r = bf_voice->w;
++			bf_voice->magic = BF_VOICE_MAGIC;
++		}
++	}
++	close(fd);
++}
++
+ static int main_loop_quit_event_fd = -1;
+ static void main_loop_stop(int sig) {
+ 	eventfd_write(main_loop_quit_event_fd, sig);
+@@ -837,6 +924,9 @@
+ 			single_playback_mutex_locked = false;
+ 		}
+ 
++		if (pcm_format == SND_PCM_FORMAT_S16_LE)
++			bf_voice_mix(bf_voice, (int16_t *)buffer.tail, read_samples, w->ba_pcm.channels, w->ba_pcm.sampling);
++
+ 		ffb_seek(&buffer, read_samples);
+ 		size_t samples = ffb_len_out(&buffer);
+ 
+@@ -1376,6 +1466,7 @@
+ 	sigaction(SIGUSR1, &bf_sig, NULL);
+ 	sigaction(SIGUSR2, &bf_sig, NULL);
+ 	bf_ring_open();
++	bf_voice_open();
+ 
+ 	debug("Starting main loop");
+ 	for (;;) {

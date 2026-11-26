@@ -99,6 +99,42 @@ static int dsp_open(int rate, int channels)
     return fd;
 }
 
+static bool stop_requested(void)
+{
+    pthread_mutex_lock(&mu);
+    bool s = stop_now;
+    pthread_mutex_unlock(&mu);
+    return s;
+}
+
+/* a voz sozinha no /dev/dsp: o que estiver tocando (Multimídia, app Internet, música do
+ * celular) solta a saída e volta depois */
+static void play_dsp(const int16_t *pcm, uint32_t n, uint32_t rate)
+{
+    /* primeiro o som do app Internet (modo completo): ao soltar o /dev/dsp ele devolve a
+     * vez ao player e ao Bluetooth, que então são suspensos abaixo */
+    webaudio_hold(true);
+    bool music = player_state() != PL_STOPPED;
+    if(music) player_suspend(true);
+    bool bt = btaudio_live();                   /* o bluealsa-aplay solta a saída */
+    if(bt) btaudio_hold(true);
+    int dsp = dsp_open((int)rate, 1);
+    const char *b = (const char *)pcm;
+    size_t left = (size_t)n * 2;
+    while(dsp >= 0 && left) {
+        size_t chunk = left < 4096 ? left : 4096;
+        ssize_t w = write(dsp, b, chunk);
+        if(w <= 0) break;
+        b += w;
+        left -= (size_t)w;
+        if(stop_requested()) { ioctl(dsp, SNDCTL_DSP_RESET, 0); break; }
+    }
+    if(dsp >= 0) close(dsp);                            /* drena o que falta tocar */
+    if(music) player_suspend(false);
+    if(bt) btaudio_hold(false);
+    webaudio_hold(false);
+}
+
 static void speak(const char *text)
 {
     bgv_pack_t *p = get_pack();
@@ -127,32 +163,10 @@ static void speak(const char *text)
         bgv_decode(&clips[i], pcm + o);
         o += clips[i].nsamples + gap;
     }
-    /* primeiro o som do app Internet (modo completo): ao soltar o /dev/dsp ele devolve a
-     * vez ao player e ao Bluetooth, que então são suspensos abaixo */
-    webaudio_hold(true);
-    bool music = player_state() != PL_STOPPED;
-    if(music) player_suspend(true);
-    bool bt = btaudio_live();                   /* música do celular: o bluealsa-aplay solta a saída */
-    if(bt) btaudio_hold(true);
-    int dsp = dsp_open((int)rate, 1);
-    const char *b = (const char *)pcm;
-    size_t left = (size_t)total * 2;
-    while(dsp >= 0 && left) {
-        size_t chunk = left < 4096 ? left : 4096;
-        ssize_t w = write(dsp, b, chunk);
-        if(w <= 0) break;
-        b += w;
-        left -= (size_t)w;
-        pthread_mutex_lock(&mu);
-        bool stop = stop_now;
-        pthread_mutex_unlock(&mu);
-        if(stop) { ioctl(dsp, SNDCTL_DSP_RESET, 0); break; }
-    }
-    if(dsp >= 0) close(dsp);                            /* drena o que falta tocar */
+    /* música do celular tocando: a voz entra nela, que abaixa enquanto a voz fala */
+    uint32_t done = btaudio_live() ? btaudio_say(pcm, total, rate, stop_requested) : 0;
+    if(done < total) play_dsp(pcm + done, total - done, rate);
     free(pcm);
-    if(music) player_suspend(false);
-    if(bt) btaudio_hold(false);
-    webaudio_hold(false);
 }
 
 static void *worker(void *arg)
