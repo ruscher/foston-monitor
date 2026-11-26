@@ -7,11 +7,19 @@ LDLIBS = -lz -lpthread
 
 RK = $(DEPS)/src-routingkit
 
-all: bgmap-build bgmap-merge bgroute-build bgsearch-build
+all: bgmap-build bgmap-merge bgroute-build bgsearch-build bgalert-build bgvoice-pack bgvoice-names bglanes-build
 bgmap-build: bgmap-build.cpp ../../../src/ui/biggps/bgmap_format.h ../../../src/ui/biggps/bgkinds.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
 bgmap-merge: bgmap-merge.cpp ../../../src/ui/biggps/bgmap_format.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
+bgalert-build: bgalert-build.cpp ../../../src/ui/biggps/bgalert_format.h
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
+bgvoice-pack: bgvoice-pack.c ../../../src/ui/biggps/bgvoice.c ../../../src/ui/biggps/bgvoice.h
+	$(CC) -O2 -std=gnu11 -Wall -Wextra -o $@ bgvoice-pack.c ../../../src/ui/biggps/bgvoice.c
+bglanes-build: bglanes-build.cpp ../../../src/ui/biggps/bglanes_format.h
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
+bgvoice-names: bgvoice-names.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
 bgsearch-build: bgsearch-build.cpp ../../../src/ui/biggps/bgsearch_format.h
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDLIBS)
 # RoutingKit (BSD-2-Clause): make -C $(RK) lib/libroutingkit.a
@@ -20,5 +28,5 @@ bgroute-build: bgroute-build.cpp ../../../src/ui/biggps/bgroute_format.h $(RK)/l
 $(RK)/lib/libroutingkit.a:
 	$(MAKE) -C $(RK) lib/libroutingkit.a
 clean:
-	rm -f bgmap-build bgmap-merge bgroute-build bgsearch-build
+	rm -f bgmap-build bgmap-merge bgroute-build bgsearch-build bgalert-build bgvoice-pack bgvoice-names bglanes-build
 .PHONY: all clean

@@ -31,6 +31,14 @@ if [ -f "$HOSTKEY" ]; then
     install -d -m 700 "$TARGET_DIR/etc/dropbear"
     install -m 600 "$HOSTKEY" "$TARGET_DIR/etc/dropbear/dropbear_ed25519_host_key"
     echo "post-build: fixed SSH host key installed"
+else
+    # sem chave fixa (imagem pública: BIGFOSTON_SSH_HOSTKEY=/dev/null/x): tira a chave que um
+    # build anterior deixou em target/ e volta ao padrão do Buildroot (dropbear -R cria na hora)
+    if [ -d "$TARGET_DIR/etc/dropbear" ] && [ ! -L "$TARGET_DIR/etc/dropbear" ]; then
+        rm -rf "$TARGET_DIR/etc/dropbear"
+        ln -snf /var/run/dropbear "$TARGET_DIR/etc/dropbear"
+    fi
+    echo "post-build: no fixed SSH host key; dropbear makes one at first use"
 fi
 
 # mpg123 programs: the shell links libmpg123 itself (~1.4 MB of the initrd)

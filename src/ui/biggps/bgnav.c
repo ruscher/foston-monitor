@@ -253,6 +253,104 @@ static uint32_t first_out_arc(bgr_pack_t *p, uint32_t node, uint32_t *end)
     return bgr_node_first_out(p, node);
 }
 
+int bgn_append(bgn_route_t *a, bgn_route_t *b)
+{
+    if (b->npts < 2) { bgn_free(b); return 0; }
+    if (a->npts < 2) { bgn_free(a); *a = *b; memset(b, 0, sizeof *b); return 0; }
+    int skip = a->xy[2 * a->npts - 2] == b->xy[0] && a->xy[2 * a->npts - 1] == b->xy[1];   /* same point */
+    int np = a->npts + b->npts - skip, nm = a->nman + b->nman;
+    uint32_t *xy = realloc(a->xy, (size_t)np * 2 * sizeof *xy);
+    if (!xy) { bgn_free(b); return -1; }
+    a->xy = xy;
+    uint32_t *cd = realloc(a->cum_dm, (size_t)np * sizeof *cd);
+    if (!cd) { bgn_free(b); return -1; }
+    a->cum_dm = cd;
+    uint32_t *ct = realloc(a->cum_ds, (size_t)np * sizeof *ct);
+    if (!ct) { bgn_free(b); return -1; }
+    a->cum_ds = ct;
+    bgn_man_t *man = realloc(a->man, (size_t)nm * sizeof *man);
+    if (!man) { bgn_free(b); return -1; }
+    a->man = man;
+    uint32_t dm0 = a->total_dm, ds0 = a->total_ds;
+    if (!skip) {          /* the gap between the two snapped ends counts as straight distance */
+        double dx = (double)(int32_t)(b->xy[0] - a->xy[2 * a->npts - 2]), dy = (double)(int32_t)(b->xy[1] - a->xy[2 * a->npts - 1]);
+        double lat = atan(sinh(M_PI * (1.0 - 2.0 * b->xy[1] / 4294967296.0)));
+        double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+        dm0 += (uint32_t)lround(sqrt(dx * dx + dy * dy) * mpu * 10);
+    }
+    for (int i = skip; i < b->npts; i++) {
+        int o = a->npts + i - skip;
+        a->xy[2 * o] = b->xy[2 * i];
+        a->xy[2 * o + 1] = b->xy[2 * i + 1];
+        a->cum_dm[o] = dm0 + b->cum_dm[i];
+        a->cum_ds[o] = ds0 + b->cum_ds[i];
+    }
+    if (a->nman && a->man[a->nman - 1].type == BGN_ARRIVE) {
+        a->man[a->nman - 1].type = BGN_WAYPOINT;
+        a->man[a->nman - 1].at_dm = a->total_dm;
+    }
+    for (int i = 0; i < b->nman; i++) {
+        if (i == 0 && b->man[0].type == BGN_DEPART) continue;
+        bgn_man_t m = b->man[i];
+        m.at_dm += dm0;
+        a->man[a->nman++] = m;
+    }
+    a->npts = np;
+    a->total_dm = dm0 + b->total_dm;
+    a->total_ds = ds0 + b->total_ds;
+    bgn_free(b);
+    return 0;
+}
+
+/* squared distance (world units) from p to segment ab, all relative to a */
+static int64_t seg_d2(int64_t px, int64_t py, int64_t bx, int64_t by)
+{
+    int64_t l2 = bx * bx + by * by, t = px * bx + py * by;
+    if (l2 <= 0 || t <= 0) return px * px + py * py;
+    if (t >= l2) return (px - bx) * (px - bx) + (py - by) * (py - by);
+    /* distance of p from the line, squared: (p x b)^2 / |b|^2 — in 128-bit-safe steps */
+    int64_t cr = px * by - py * bx;
+    double d = (double)cr / (double)l2 * (double)cr;   /* one division per test, not per pixel */
+    return (int64_t)d;
+}
+
+int bgn_shared_permille(const bgn_route_t *a, const bgn_route_t *b, int tol_m)
+{
+    if (a->npts < 2 || b->npts < 2 || !b->total_dm) return 0;
+    double lat = atan(sinh(M_PI * (1.0 - 2.0 * b->xy[1] / 4294967296.0)));
+    double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+    int64_t tol = (int64_t)(tol_m / mpu), tol2 = tol * tol;
+    uint64_t shared = 0;
+    int j = 0;                                   /* where on a we were last */
+    for (int i = 0; i + 1 < b->npts; i++) {
+        /* the middle of b's segment */
+        int64_t mx = ((int64_t)b->xy[2 * i] + b->xy[2 * i + 2]) / 2, my = ((int64_t)b->xy[2 * i + 1] + b->xy[2 * i + 3]) / 2;
+        int lo = j - 40 < 0 ? 0 : j - 40, hi = j + 600 > a->npts - 2 ? a->npts - 2 : j + 600, hit = -1;
+        for (int k = lo; k <= hi && hit < 0; k++) {
+            int64_t ax = a->xy[2 * k], ay = a->xy[2 * k + 1], bx = a->xy[2 * k + 2], by = a->xy[2 * k + 3];
+            /* caixa do segmento com a folga: só inteiros; quase todos param aqui */
+            if (mx < (ax < bx ? ax : bx) - tol || mx > (ax > bx ? ax : bx) + tol
+                || my < (ay < by ? ay : by) - tol || my > (ay > by ? ay : by) + tol) continue;
+            if (seg_d2(mx - ax, my - ay, bx - ax, by - ay) <= tol2) hit = k;
+        }
+        if (hit >= 0) { j = hit; shared += b->cum_dm[i + 1] - b->cum_dm[i]; }
+    }
+    return (int)(shared * 1000 / b->total_dm);
+}
+
+void bgn_point_at(const bgn_route_t *r, uint32_t dm, uint32_t *x, uint32_t *y, double *bearing)
+{
+    int k = 0;
+    while (k + 2 < r->npts && r->cum_dm[k + 1] < dm) k++;
+    uint32_t span = r->cum_dm[k + 1] - r->cum_dm[k];
+    double f = span ? (double)(dm > r->cum_dm[k] ? dm - r->cum_dm[k] : 0) / span : 0;
+    if (f > 1) f = 1;
+    double dx = (double)(int32_t)(r->xy[2 * k + 2] - r->xy[2 * k]), dy = (double)(int32_t)(r->xy[2 * k + 3] - r->xy[2 * k + 1]);
+    *x = r->xy[2 * k] + (uint32_t)(int32_t)lround(f * dx);
+    *y = r->xy[2 * k + 1] + (uint32_t)(int32_t)lround(f * dy);
+    *bearing = fmod(atan2(dx, -dy) * 180 / M_PI + 360, 360);
+}
+
 void bgn_free(bgn_route_t *r)
 {
     free(r->xy);
@@ -326,7 +424,39 @@ static const char *prep(const char *name)
     return "na";
 }
 
-const char *bgn_text(const bgn_man_t *m, char *buf, int n)
+int bgn_zoom256(const bgn_route_t *r, const bgn_state_t *st, double speed_kmh, int profile)
+{
+    if (profile >= BGR_BIKE) return 17 * 256;
+    int z = speed_kmh > 80 ? 15 * 256 + 128 : speed_kmh > 50 ? 16 * 256 : 16 * 256 + 128;
+    if (!st->valid || st->next < 0 || st->next >= r->nman) return z;
+    int t = r->man[st->next].type;
+    if (t == BGN_ARRIVE || t == BGN_WAYPOINT || t == BGN_STRAIGHT || t == BGN_DEPART) return z;
+    int complex = t == BGN_ROUNDABOUT || t == BGN_RAMP_LEFT || t == BGN_RAMP_RIGHT || t == BGN_KEEP_LEFT
+               || t == BGN_KEEP_RIGHT || t == BGN_UTURN || t == BGN_SHARP_LEFT || t == BGN_SHARP_RIGHT;
+    double v = speed_kmh / 3.6, d = st->next_dm / 10.0;
+    double near = complex ? (v * 9 > 200 ? v * 9 : 200) : (v * 6 > 120 ? v * 6 : 120);
+    if (d > near) return z;
+    int zm = complex ? 17 * 256 + 128 : 17 * 256;
+    return zm > z ? zm : z;
+}
+
+static const char *verb_of(int type);
+
+void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn)
+{
+    road[0] = 0;
+    if (m->type == BGN_ROUNDABOUT) {
+        snprintf(verb, (size_t)vn, "Na rotatória, pegue a %dª saída", m->exit);
+        if (m->name[0]) snprintf(road, (size_t)rn, "para %c %s", prep(m->name)[1], m->name);
+    } else if (m->type == BGN_DEPART) {
+        snprintf(verb, (size_t)vn, "Siga em frente");
+    } else {
+        snprintf(verb, (size_t)vn, "%s", verb_of(m->type));
+        if (m->type != BGN_ARRIVE && m->type != BGN_WAYPOINT && m->name[0]) snprintf(road, (size_t)rn, "%s %s", prep(m->name), m->name);
+    }
+}
+
+static const char *verb_of(int type)
 {
     static const char *verb[] = {
         [BGN_DEPART] = "Siga", [BGN_STRAIGHT] = "Continue em frente", [BGN_SLIGHT_RIGHT] = "Vire levemente à direita",
@@ -335,12 +465,18 @@ const char *bgn_text(const bgn_man_t *m, char *buf, int n)
         [BGN_SLIGHT_LEFT] = "Vire levemente à esquerda", [BGN_KEEP_RIGHT] = "Mantenha-se à direita",
         [BGN_KEEP_LEFT] = "Mantenha-se à esquerda", [BGN_RAMP_RIGHT] = "Pegue o acesso à direita",
         [BGN_RAMP_LEFT] = "Pegue o acesso à esquerda", [BGN_ROUNDABOUT] = "Na rotatória", [BGN_ARRIVE] = "Você chegou ao destino",
+        [BGN_WAYPOINT] = "Você chegou à parada",
     };
-    const char *v = m->type <= BGN_ARRIVE ? verb[m->type] : "";
+    return type >= 0 && type <= BGN_WAYPOINT ? verb[type] : "";
+}
+
+const char *bgn_text(const bgn_man_t *m, char *buf, int n)
+{
+    const char *v = verb_of(m->type);
     if (m->type == BGN_ROUNDABOUT) {
         if (m->name[0]) snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída para %c %s", m->exit, prep(m->name)[1], m->name);
         else snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída", m->exit);
-    } else if (m->type == BGN_ARRIVE || !m->name[0]) {
+    } else if (m->type == BGN_ARRIVE || m->type == BGN_WAYPOINT || !m->name[0]) {
         snprintf(buf, (size_t)n, "%s", m->type == BGN_DEPART ? "Siga em frente" : v);
     } else if (m->type == BGN_DEPART) {
         snprintf(buf, (size_t)n, "Siga pel%c %s", prep(m->name)[1], m->name);

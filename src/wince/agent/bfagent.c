@@ -32,8 +32,8 @@
 #include "sha256.h"
 #include "ui.h"
 
-#define AGENT_VERSION "bfagent 0.7.0"
-#define AGENT_VERSION_W L"bfagent 0.7.0"
+#define AGENT_VERSION "bfagent 0.8.0"
+#define AGENT_VERSION_W L"bfagent 0.8.0"
 #define AGENT_CLASS L"BigFostonAgent"
 #define WM_APP_REDRAW (WM_APP + 1)
 #define WM_APP_COUNT  (WM_APP + 2)     /* wParam 1: a contagem começou (anima a barra), 0: acabou */
@@ -2056,6 +2056,358 @@ static void autoboot_start(void)
         InterlockedExchange(&g_autoboot, 0);
 }
 
+/* ------------------------------------------------------------ instalar e restaurar no toque
+ *
+ * Aberto pelo cartão ("Caminho da navegação" -> BigFoston\bfagent.exe) sem o Dual Boot
+ * instalado, o cartão BigFoston vira "Instalar o Dual Boot": guarda os valores originais no
+ * cartão (BigFoston\recuperacao\original.txt, escrito uma vez só), copia o agente para
+ * \ResidentFlash\BigFoston (conferido por SHA-256), aplica BigFoston\update com o mesmo código
+ * das atualizações, liga o início automático (autoboot.conf, HKLM\init Launch90/Depend90) e
+ * confere. "Restaurar o original" desfaz: devolve ou apaga Launch90/Depend90, apaga só a pasta
+ * \ResidentFlash\BigFoston e devolve o caminho da navegação guardado (HKCU\OEM\ShellEx GpsPath).
+ * Nada no Windows CE, no EBoot nem nas partições do sistema. */
+
+#define FLASH_AGENT AUTOBOOT_DIR L"\\bfagent.exe"
+#define ORIG_SD     SD_DIR L"\\recuperacao\\original.txt"
+#define ORIG_FLASH  AUTOBOOT_DIR L"\\original.txt"
+#define SHELLEX_KEY L"OEM\\ShellEx"
+
+static volatile LONG g_setup;              /* UI_SETUP_* */
+static volatile LONG g_busy;
+static volatile LONG g_can_restore;
+static int g_overlay;                      /* UI_OV_* (só a thread da janela muda) */
+static WCHAR g_status[120];
+static WCHAR g_ov_title[80], g_ov_body[400];
+static int g_close_after_ok;               /* restaurado: OK fecha o agente */
+
+static int reg_get_sz(HKEY root, const WCHAR *path, const WCHAR *name, WCHAR *out, DWORD chars)
+{
+    HKEY key;
+    DWORD type = 0, len = chars * sizeof(WCHAR);
+    LONG rc;
+    out[0] = 0;
+    if (RegOpenKeyExW(root, path, 0, 0, &key) != ERROR_SUCCESS)
+        return 0;
+    rc = RegQueryValueExW(key, name, NULL, &type, (BYTE *)out, &len);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ && type != REG_MULTI_SZ)) {
+        out[0] = 0;
+        return 0;
+    }
+    out[chars - 1] = 0;
+    return 1;
+}
+
+static int reg_get_bin(HKEY root, const WCHAR *path, const WCHAR *name, BYTE *out, DWORD *len)
+{
+    HKEY key;
+    DWORD type = 0;
+    LONG rc;
+    if (RegOpenKeyExW(root, path, 0, 0, &key) != ERROR_SUCCESS)
+        return 0;
+    rc = RegQueryValueExW(key, name, NULL, &type, out, len);
+    RegCloseKey(key);
+    return rc == ERROR_SUCCESS && type == REG_BINARY;
+}
+
+/* type REG_SZ ou REG_BINARY; data NULL apaga o valor */
+static int reg_put(HKEY root, const WCHAR *path, const WCHAR *name, DWORD type, const void *data, DWORD len)
+{
+    typedef LONG (WINAPI *RegFlushKey_t)(HKEY);
+    RegFlushKey_t flush = (RegFlushKey_t)core_proc(L"RegFlushKey");
+    HKEY key;
+    DWORD disp;
+    LONG rc;
+    if (RegCreateKeyExW(root, path, 0, NULL, 0, 0, NULL, &key, &disp) != ERROR_SUCCESS)
+        return 0;
+    rc = data ? RegSetValueExW(key, name, 0, type, (const BYTE *)data, len) : RegDeleteValueW(key, name);
+    if (flush)
+        flush(key);
+    RegCloseKey(key);
+    return rc == ERROR_SUCCESS || (!data && rc == ERROR_FILE_NOT_FOUND);
+}
+
+static int is_our_agent(const WCHAR *path)
+{
+    return path[0] && !_wcsicmp(path, FLASH_AGENT);
+}
+
+static int dual_boot_installed(void)
+{
+    WCHAR v[MAX_PATH];
+    reg_get_sz(HKEY_LOCAL_MACHINE, L"init", L"Launch90", v, MAX_PATH);
+    return is_our_agent(v) && file_exists(FLASH_AGENT) && linux_installed();
+}
+
+/* tela de resultado (a thread de trabalho prepara, a janela mostra) */
+static void show_result(const WCHAR *title, const WCHAR *body)
+{
+    wcsncpy(g_ov_title, title, 79);
+    g_ov_title[79] = 0;
+    wcsncpy(g_ov_body, body, 399);
+    g_ov_body[399] = 0;
+    PostMessageW(g_hwnd, WM_APP_REDRAW, UI_OV_DONE, 1);
+}
+
+static void set_status(const WCHAR *s)
+{
+    wcsncpy(g_status, s, 119);
+    g_status[119] = 0;
+    STATUS(L"%ls", s);
+}
+
+/* original.txt: os valores de antes da primeira instalação (nunca sobrescrito) */
+static void save_originals(void)
+{
+    WCHAR launch[MAX_PATH], gps[MAX_PATH], usb[64], line[MAX_PATH + 40];
+    BYTE dep[16];
+    DWORD dep_len = sizeof(dep), i;
+    char hex[40] = "", utf8[3 * MAX_PATH + 64];
+    FILE *f;
+    const WCHAR *dests[2] = { ORIG_SD, ORIG_FLASH };
+    int k, have_dep;
+    if (file_exists(ORIG_SD) || file_exists(ORIG_FLASH))
+        return;
+    reg_get_sz(HKEY_LOCAL_MACHINE, L"init", L"Launch90", launch, MAX_PATH);
+    if (is_our_agent(launch))
+        launch[0] = 0;                     /* já era o nosso: o original é "não existia" */
+    have_dep = !launch[0] ? 0 : reg_get_bin(HKEY_LOCAL_MACHINE, L"init", L"Depend90", dep, &dep_len);
+    for (i = 0; have_dep && i < dep_len && i < 16; i++)
+        _snprintf(hex + i * 2, 3, "%02x", dep[i]);
+    reg_get_sz(HKEY_CURRENT_USER, SHELLEX_KEY, L"GpsPath", gps, MAX_PATH);
+    read_default_client(usb, 64);
+    CreateDirectoryW(SD_DIR L"\\recuperacao", NULL);
+    CreateDirectoryW(AUTOBOOT_DIR, NULL);
+    for (k = 0; k < 2; k++) {
+        f = _wfopen(dests[k], L"w");
+        if (!f)
+            continue;
+        fprintf(f, "# BigFoston: valores antes da instalacao do Dual Boot (nao editar), formato %d\n", 1);
+        _snwprintf(line, MAX_PATH + 39, L"Launch90=%ls", launch);
+        line[MAX_PATH + 39] = 0;
+        WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8), NULL, NULL);
+        fprintf(f, "%s\nDepend90=%s\n", utf8, hex);
+        _snwprintf(line, MAX_PATH + 39, L"GpsPath=%ls", gps);
+        line[MAX_PATH + 39] = 0;
+        WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8), NULL, NULL);
+        fprintf(f, "%s\n", utf8);
+        WideCharToMultiByte(CP_UTF8, 0, usb, -1, utf8, sizeof(utf8), NULL, NULL);
+        fprintf(f, "DefaultClientDriver=%s\n", utf8);
+        fclose(f);
+    }
+    log_line("valores originais guardados (Launch90 '%ls', GpsPath '%ls')", launch, gps);
+}
+
+/* um valor de original.txt (vazio se não houver o arquivo ou a chave); só fread e laços
+ * próprios: nada de CRT que o agente ainda não usava (o coredll do aparelho tem lacunas) */
+static int load_original(const char *name, WCHAR *out, DWORD chars)
+{
+    static char buf[4096];
+    size_t got, n = strlen(name), i = 0;
+    FILE *f = _wfopen(ORIG_SD, L"r");
+    out[0] = 0;
+    if (!f)
+        f = _wfopen(ORIG_FLASH, L"r");
+    if (!f)
+        return 0;
+    got = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[got] = 0;
+    while (i < got) {
+        size_t j = i, k;
+        while (j < got && buf[j] != '\n')
+            j++;
+        for (k = 0; k < n && i + k < j && buf[i + k] == name[k]; k++)
+            ;
+        if (k == n && i + n < j && buf[i + n] == '=') {
+            char save = buf[j];
+            if (j > i && buf[j - 1] == '\r')
+                buf[j - 1] = 0;
+            buf[j] = 0;
+            MultiByteToWideChar(CP_UTF8, 0, buf + i + n + 1, -1, out, (int)chars);
+            out[chars - 1] = 0;
+            buf[j] = save;
+            return out[0] != 0;
+        }
+        i = j + 1;
+    }
+    return 0;
+}
+
+static int hexval(WCHAR c)
+{
+    return c >= L'0' && c <= L'9' ? c - L'0' : c >= L'a' && c <= L'f' ? c - L'a' + 10 :
+           c >= L'A' && c <= L'F' ? c - L'A' + 10 : -1;
+}
+
+static int copy_verified(const WCHAR *src, const WCHAR *dst)
+{
+    WCHAR tmp[MAX_PATH], old[MAX_PATH];
+    char a[65], b[65];
+    DWORD sa = 0, sb = 0;
+    _snwprintf(tmp, MAX_PATH - 1, L"%ls.new", dst);
+    tmp[MAX_PATH - 1] = 0;
+    _snwprintf(old, MAX_PATH - 1, L"%ls.old", dst);
+    old[MAX_PATH - 1] = 0;
+    DeleteFileW(tmp);
+    if (!CopyFileW(src, tmp, FALSE))
+        return 0;
+    if (!file_sha256(src, 1u << 20, a, &sa) || !file_sha256(tmp, 1u << 20, b, &sb) || sa != sb || strcmp(a, b)) {
+        DeleteFileW(tmp);
+        return 0;
+    }
+    if (file_exists(dst)) {
+        DeleteFileW(old);
+        if (!MoveFileW(dst, old))
+            DeleteFileW(dst);
+    }
+    return MoveFileW(tmp, dst);
+}
+
+static DWORD WINAPI install_thread(LPVOID unused)
+{
+    WCHAR self[MAX_PATH], v[MAX_PATH];
+    static const BYTE dep[4] = { 0x14, 0x00, 0x32, 0x00 };   /* depois do device.exe (20) e do menu (50) */
+    FILE *f;
+    InterlockedExchange(&g_busy, 1);
+    set_status(L"Guardando os valores originais...");
+    save_originals();
+    set_status(L"Copiando o agente para a memória interna...");
+    CreateDirectoryW(AUTOBOOT_DIR, NULL);
+    _snwprintf(self, MAX_PATH - 1, L"%ls\\bfagent.exe", g_origin_dir);
+    self[MAX_PATH - 1] = 0;
+    if (!copy_verified(self, FLASH_AGENT)) {
+        FAIL(L"Não foi possível copiar o agente para a memória interna.");
+        goto fail;
+    }
+    OK_(L"Agente copiado e conferido.");
+    if (file_exists(UPDATE_DIR L"\\SHA256SUMS")) {
+        set_status(L"Gravando o BigFoston OS na memória interna...");
+        apply_sd_update();
+    }
+    if (!linux_installed()) {
+        FAIL(L"O BigFoston OS não ficou completo na memória interna (ver BigFoston\\update.log).");
+        goto fail;
+    }
+    if (!file_exists(AUTOBOOT_DIR L"\\autoboot.conf") && (f = _wfopen(AUTOBOOT_DIR L"\\autoboot.conf", L"w"))) {
+        fprintf(f, "delay=%d\n", 12);
+        fclose(f);
+    }
+    set_status(L"Ligando o início automático...");
+    if (!reg_put(HKEY_LOCAL_MACHINE, L"init", L"Launch90", REG_SZ, FLASH_AGENT,
+                 (DWORD)(wcslen(FLASH_AGENT) + 1) * sizeof(WCHAR)) ||
+        !reg_put(HKEY_LOCAL_MACHINE, L"init", L"Depend90", REG_BINARY, dep, sizeof(dep))) {
+        FAIL(L"Não foi possível gravar o início automático no registro.");
+        goto fail;
+    }
+    reg_get_sz(HKEY_LOCAL_MACHINE, L"init", L"Launch90", v, MAX_PATH);
+    if (!dual_boot_installed()) {
+        FAIL(L"A conferência final falhou (início automático: '%ls').", v);
+        goto fail;
+    }
+    OK_(L"Dual Boot instalado e conferido.");
+    InterlockedExchange(&g_linux_ok, 1);
+    InterlockedExchange(&g_setup, UI_SETUP_NO);
+    InterlockedExchange(&g_can_restore, 1);
+    InterlockedExchange(&g_busy, 0);
+    set_status(L"Dual Boot instalado");
+    show_result(L"Dual Boot instalado",
+                L"Desligue e ligue o FOSTON: a tela Dual Boot aparece sozinha e inicia o BigFoston OS. O botão "
+                L"Navegação ainda abre este agente; para voltar a abrir o GPS por ele: Ajustes \x00bb Caminho da "
+                L"navegação \x00bb o navegador original.");
+    return 0;
+fail:
+    InterlockedExchange(&g_busy, 0);
+    set_status(L"A instalação não terminou");
+    show_result(L"A instalação não terminou",
+                L"Nada do Windows CE foi alterado. Veja o registro abaixo; para desfazer o que foi feito, toque em "
+                L"Restaurar o original.");
+    InterlockedExchange(&g_can_restore, 1);
+    return 0;
+}
+
+static DWORD WINAPI restore_thread(LPVOID unused)
+{
+    WCHAR launch[MAX_PATH], gps[MAX_PATH], now_gps[MAX_PATH], usb[64], hexw[40];
+    BYTE dep[16];
+    DWORD n = 0, i;
+    int gps_back = 0;
+    InterlockedExchange(&g_busy, 1);
+    set_status(L"Desligando o início automático...");
+    load_original("Launch90", launch, MAX_PATH);
+    load_original("Depend90", hexw, 40);
+    if (launch[0] && !is_our_agent(launch)) {        /* havia outro programa ali: devolve */
+        for (i = 0; i < 16 && hexval(hexw[i * 2]) >= 0 && hexval(hexw[i * 2 + 1]) >= 0; i++) {
+            dep[i] = (BYTE)(hexval(hexw[i * 2]) << 4 | hexval(hexw[i * 2 + 1]));
+            n = i + 1;
+        }
+        reg_put(HKEY_LOCAL_MACHINE, L"init", L"Launch90", REG_SZ, launch, (DWORD)(wcslen(launch) + 1) * sizeof(WCHAR));
+        reg_put(HKEY_LOCAL_MACHINE, L"init", L"Depend90", REG_BINARY, n ? dep : NULL, n);
+    } else {
+        reg_put(HKEY_LOCAL_MACHINE, L"init", L"Launch90", 0, NULL, 0);
+        reg_put(HKEY_LOCAL_MACHINE, L"init", L"Depend90", 0, NULL, 0);
+    }
+    OK_(L"Início automático desligado.");
+    set_status(L"Apagando a pasta BigFoston da memória interna...");
+    remove_tree(AUTOBOOT_DIR);
+    if (file_exists(FLASH_AGENT) || file_exists(LINUX_DIR L"\\zImage"))
+        WARN(L"Algo da pasta BigFoston ficou na memória interna (arquivo em uso?).");
+    else
+        OK_(L"Pasta BigFoston da memória interna apagada.");
+    load_original("GpsPath", gps, MAX_PATH);
+    reg_get_sz(HKEY_CURRENT_USER, SHELLEX_KEY, L"GpsPath", now_gps, MAX_PATH);
+    if (gps[0] && !wcsstr(gps, L"bfagent") && _wcsicmp(gps, now_gps)) {
+        reg_put(HKEY_CURRENT_USER, SHELLEX_KEY, L"GpsPath", REG_SZ, gps, (DWORD)(wcslen(gps) + 1) * sizeof(WCHAR));
+        OK_(L"Caminho da navegação devolvido: %ls", gps);
+        gps_back = 1;
+    }
+    if (read_default_client(usb, 64) && !_wcsicmp(usb, L"Serial_Class")) {
+        write_default_client(L"Mass_Storage_Class");
+        OK_(L"USB volta a abrir como armazenamento (MASS STORAGE).");
+    }
+    InterlockedExchange(&g_busy, 0);
+    InterlockedExchange(&g_linux_ok, 0);
+    InterlockedExchange(&g_can_restore, 0);
+    InterlockedExchange(&g_setup, file_exists(UPDATE_DIR L"\\SHA256SUMS") ? UI_SETUP_READY : UI_SETUP_NOFILES);
+    set_status(L"FOSTON original restaurado");
+    g_close_after_ok = 1;
+    show_result(L"FOSTON original restaurado",
+                gps_back ? L"O início automático saiu e o botão Navegação volta a abrir o GPS. Os arquivos do "
+                           L"BigFoston continuam no cartão. Toque em OK para voltar ao Windows CE."
+                         : L"O início automático saiu. Os arquivos do BigFoston continuam no cartão. Para o botão "
+                           L"Navegação abrir o GPS: Ajustes \x00bb Caminho da navegação \x00bb o navegador original. "
+                           L"Toque em OK para voltar ao Windows CE.");
+    return 0;
+}
+
+static void start_thread(LPTHREAD_START_ROUTINE fn)
+{
+    HANDLE t = CreateThread(NULL, 0, fn, NULL, 0, NULL);
+    if (t)
+        CloseHandle(t);
+    else
+        FAIL(L"Sem memória para começar.");
+}
+
+/* o que a tela oferece, decidido ao abrir (e depois de instalar/restaurar) */
+static void detect_setup(void)
+{
+    int from_flash = !_wcsnicmp(g_origin_dir, AUTOBOOT_DIR, wcslen(AUTOBOOT_DIR));
+    int installed = dual_boot_installed();
+    WCHAR v[MAX_PATH];
+    reg_get_sz(HKEY_LOCAL_MACHINE, L"init", L"Launch90", v, MAX_PATH);
+    InterlockedExchange(&g_can_restore, installed || from_flash || is_our_agent(v) || file_exists(FLASH_AGENT));
+    if (from_flash || installed)
+        InterlockedExchange(&g_setup, UI_SETUP_NO);
+    else
+        InterlockedExchange(&g_setup, file_exists(UPDATE_DIR L"\\SHA256SUMS") || linux_installed() ?
+                            UI_SETUP_READY : UI_SETUP_NOFILES);
+    if (g_setup == UI_SETUP_READY)
+        STATUS(L"Dual Boot não instalado: toque em Instalar o Dual Boot para gravar o BigFoston OS.");
+    else if (g_setup == UI_SETUP_NOFILES)
+        WARN(L"O cartão não tem o BigFoston OS: prepare-o com o BigFoston OS Installer no computador.");
+}
+
 static void paint(HDC dc, const RECT *clip)
 {
     ui_state_t st;
@@ -2077,6 +2429,16 @@ static void paint(HDC dc, const RECT *clip)
     st.pressed = g_pressed;
     st.version = AGENT_VERSION_W;
     st.port = g_port_label;
+    st.setup = (int)g_setup;
+    st.can_restore = (int)g_can_restore && g_autoboot != 3;
+    st.busy = (int)g_busy;
+    st.overlay = g_overlay;
+    st.ov_title = g_ov_title;
+    st.ov_body = g_ov_body;
+    st.status = g_setup != UI_SETUP_NO || g_busy || g_status[0] ? g_status : NULL;
+    if (st.status && !st.status[0])
+        st.status = g_setup == UI_SETUP_READY ? L"Aberto pelo cartão: Dual Boot não instalado" :
+                    L"O cartão não tem o BigFoston OS";
     if (g_ui_ok) {
         ui_paint(dc, &st, clip);
         return;
@@ -2097,7 +2459,19 @@ static void paint(HDC dc, const RECT *clip)
 /* toque solto em cima de um cartão: o que ele faz depende da contagem */
 static void card_action(HWND hwnd, int hit)
 {
-    if (hit == UI_HIT_LINUX)
+    if (g_busy)
+        return;
+    if (hit == UI_HIT_RESTORE) {
+        if (g_autoboot == 1)
+            InterlockedExchange(&g_autoboot, 2);          /* a contagem para enquanto decide */
+        g_overlay = UI_OV_RESTORE;
+        return;
+    }
+    if (hit == UI_HIT_LINUX && g_setup == UI_SETUP_READY) {
+        g_overlay = UI_OV_INSTALL;
+        return;
+    }
+    if (hit == UI_HIT_LINUX && g_setup == UI_SETUP_NO)
         start_linux_now();
     else if (hit == UI_HIT_CE) {
         if (g_autoboot == 1)
@@ -2120,6 +2494,11 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_ERASEBKGND:
         return 1;                              /* a tela inteira é desenhada de uma vez: sem piscar */
     case WM_APP_REDRAW:
+        if (lp == 1 && wp == UI_OV_DONE) {             /* resultado de instalar/restaurar */
+            g_overlay = UI_OV_DONE;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
         /* junta os pedidos de redesenho de REDRAW_MS em um (uma cópia grande gera milhares) */
         SetTimer(hwnd, TIMER_REDRAW, REDRAW_MS, NULL);
         return 0;
@@ -2131,10 +2510,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     case WM_LBUTTONDOWN:
-        if (g_ui_ok) {
+        if (g_ui_ok && g_overlay) {                    /* com a confirmação aberta, só os botões dela */
+            g_pressed = ui_hit_overlay((short)LOWORD(lp), (short)HIWORD(lp));
+            if (g_overlay == UI_OV_DONE && g_pressed == UI_HIT_OV_CANCEL)
+                g_pressed = UI_HIT_NONE;
+            InvalidateRect(hwnd, NULL, FALSE);
+        } else if (g_ui_ok && !g_busy) {
             int hit = ui_hit((short)LOWORD(lp), (short)HIWORD(lp));
             /* só destaca o cartão que faz algo agora */
-            if ((hit == UI_HIT_LINUX && (!g_linux_ok || g_autoboot == 3)) || (hit == UI_HIT_CE && g_autoboot == 3))
+            if ((hit == UI_HIT_LINUX && (g_setup ? g_setup != UI_SETUP_READY : !g_linux_ok || g_autoboot == 3)) ||
+                (hit == UI_HIT_CE && g_autoboot == 3) || (hit == UI_HIT_RESTORE && (!g_can_restore || g_autoboot == 3)))
                 hit = UI_HIT_NONE;
             g_pressed = hit;
             if (g_pressed)
@@ -2143,7 +2528,8 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     case WM_MOUSEMOVE:
         /* o dedo saiu do cartão: solta o destaque (e soltar ali não faz nada) */
-        if (g_pressed && ui_hit((short)LOWORD(lp), (short)HIWORD(lp)) != g_pressed) {
+        if (g_pressed && (g_overlay ? ui_hit_overlay((short)LOWORD(lp), (short)HIWORD(lp))
+                                    : ui_hit((short)LOWORD(lp), (short)HIWORD(lp))) != g_pressed) {
             g_pressed = UI_HIT_NONE;
             InvalidateRect(hwnd, NULL, FALSE);
         }
@@ -2155,6 +2541,21 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         }
         g_pressed = UI_HIT_NONE;
+        if (g_overlay) {
+            if (!was || ui_hit_overlay((short)LOWORD(lp), (short)HIWORD(lp)) != was) {
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+            if (g_overlay == UI_OV_INSTALL && was == UI_HIT_OV_OK)
+                start_thread(install_thread);
+            else if (g_overlay == UI_OV_RESTORE && was == UI_HIT_OV_OK)
+                start_thread(restore_thread);
+            else if (g_overlay == UI_OV_DONE && g_close_after_ok)
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            g_overlay = UI_OV_NONE;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
         if (was && ui_hit((short)LOWORD(lp), (short)HIWORD(lp)) == was)
             card_action(hwnd, was);
         InvalidateRect(hwnd, NULL, FALSE);
@@ -2266,6 +2667,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmd, int show)
     }
     InterlockedExchange(&g_linux_ok, linux_installed());
     STATUS(L"%ls iniciado (%ls).", AGENT_VERSION_W, g_origin_dir);
+    detect_setup();
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wnd_proc;

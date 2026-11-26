@@ -14,13 +14,13 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.5.1
+VERSION   := 0.6.0
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
 APP_SRCS  := main.c $(wildcard core/*.c) $(wildcard screens/*.c) $(wildcard widgets/*.c)
 # Big GPS engine (biggps/README.md): hot loops, built with -O2 even on the target
-BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c
+BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c biggps/bgmotion.c biggps/bgalert.c biggps/bgvoice.c biggps/bgvehicle.c biggps/bgpersp.c biggps/bglanes.c
 ASSET_SRCS:= $(wildcard assets/fonts/*.c) $(wildcard assets/icons/*.c) $(wildcard assets/logo/*.c)
 
 INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iassets/icons -Iassets/logo
@@ -178,6 +178,35 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_appgroups.c core/appgroups.c -o build/test/test_appgroups
 	./build/test/test_appgroups build/test/appgroups
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgmotion.c biggps/bgmotion.c -lm -o build/test/test_bgmotion
+	./build/test/test_bgmotion
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgalert.c biggps/bgalert.c -lm -o build/test/test_bgalert
+	./build/test/test_bgalert build/test
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgvoice.c biggps/bgvoice.c -lm -o build/test/test_bgvoice
+	./build/test/test_bgvoice
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgnavzoom.c biggps/bgnav.c biggps/bgroute.c -lm -o build/test/test_bgnavzoom
+	./build/test/test_bgnavzoom
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgvehicle.c biggps/bgvehicle.c -lm -o build/test/test_bgvehicle
+	./build/test/test_bgvehicle
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgpersp.c biggps/bgpersp.c -o build/test/test_bgpersp
+	./build/test/test_bgpersp
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgnavlegs.c biggps/bgnav.c biggps/bgroute.c -lm -o build/test/test_bgnavlegs
+	./build/test/test_bgnavlegs
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bglanes.c biggps/bglanes.c -lm -o build/test/test_bglanes
+	./build/test/test_bglanes build/test
+	sed -n '/BF-VOICE-BEGIN/,/BF-VOICE-END/p' ../../firmware/buildroot/patches/bluez-alsa/0002-aplay-bigfoston-voice-mix.patch \
+		| sed 's/^+//' > build/test/bfvoice_mix.inc
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ibuild/test \
+		tests/test_btvoice.c core/btaudio.c -lpthread -o build/test/test_btvoice
+	./build/test/test_btvoice build/test
 
 run: sim
 	./build/sim/bigfoston-shell

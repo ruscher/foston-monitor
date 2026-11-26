@@ -1026,12 +1026,22 @@ int screenshot_run(const char *dir)
                     fclose(gf);
                 }
                 go(SCR_MAP, 0); pump(3000); shot("42-biggps-mapa");
+                scr_map_demo(6); pump(300); shot("42g-biggps-marcador");
+                scr_map_demo(7); pump(300); shot("42h-biggps-marcador-sedan");
+                scr_map_demo(8); pump(1200); shot("42i-biggps-sedan-no-mapa");
+                scr_map_demo(11); pump(300); shot("42l-biggps-destino-aviso");
+                scr_map_demo(12); pump(1500); shot("42m-biggps-aviso-seu");
                 scr_map_demo(3); pump(300); shot("42e-biggps-busca");
                 scr_map_demo(4); pump(300); shot("42f-biggps-busca-hospital");
                 scr_map_demo(5); pump(100);
                 scr_map_demo(0); pump(4000); shot("42b-biggps-rota");
+                scr_map_demo(9); pump(2500); shot("42j-biggps-rota-alternativa");
                 scr_map_demo(1); pump(2500); shot("42c-biggps-navegacao");
+                scr_map_demo(10); pump(300); shot("42k-biggps-faixas");
                 scr_map_demo(2); pump(2500); shot("42d-biggps-navegacao-adiante");
+                scr_map_demo(13); pump(200); shot("42n-biggps-radar-placa");
+                scr_map_demo(14); pump(200); shot("42o-biggps-radar-acima");
+                scr_map_demo(15);
                 go(SCR_HOME, 0); pump(100);
             }
             unsetenv("BIGFOSTON_GPS_STATUS");

@@ -26,7 +26,7 @@ int main(int argc, char **argv)
     static const char *types[] = { "lugar", "rua", "local", "endereço" };
     double t = now();
     int n = argc >= 6 && !strcmp(argv[4], "-c") ? bgs_nearby(ix, atoi(argv[5]), x, y, 20000, r, 10) : bgs_query(ix, argv[4], x, y, r, 10);
-    printf("%d resultados em %.1f ms (%u entradas no índice)\n", n, (now() - t) * 1e3, bgs_count(ix));
+    printf("%d resultados em %.1f ms (%u entradas no índice)%s%s\n", n, (now() - t) * 1e3, bgs_count(ix), bgs_corrected(ix)[0] ? " — corrigido para: " : "", bgs_corrected(ix));
     for (int i = 0; i < n; i++)
         printf("  %-9s %-44s %-24s %6.1f km\n", types[r[i].type & 3], r[i].name, r[i].context, r[i].dist_m / 1000.0);
     bgs_close(ix);

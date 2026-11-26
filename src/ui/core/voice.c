@@ -1,32 +1,35 @@
 /* voice.c — ver voice.h.
- * Um processo espeak-ng por aviso (fork + execv, texto como argumento: nada passa por
- * shell); o WAV sai do pipe e vai para o /dev/dsp enquanto é sintetizado (o eSpeak NG gera
- * ~10x mais rápido que o tempo real no aparelho, docs/big-gps/09-voz.md). */
+ * Os trechos da frase são procurados no pacote .bgv (mapeado: só as páginas tocadas são lidas
+ * do cartão), decodificados (IMA ADPCM, custo desprezível) e escritos no /dev/dsp. */
 #define _DEFAULT_SOURCE
 #include "btaudio.h"
 #include "voice.h"
 #include "player.h"
 #include "webaudio.h"
+#include "../biggps/bgvoice.h"
+#include <dirent.h>
+#include <math.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #define BIGGPS_DIR_DEFAULT "/mnt/sd/BigFoston/big-gps"
+#define GAP_MS 70                      /* pausa entre os trechos de uma frase */
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static bool started, has_text, stop_now;
+static bool started, has_text, stop_now, want_beep, busy;
 static char pending[512];
-static pid_t child = -1;
+#define MAXPACKS 4
+static bgv_pack_t *packs[MAXPACKS];             /* o maior primeiro; um trecho vem do primeiro que o tiver */
+static int npacks;
 
 static const char *base_dir(void)
 {
@@ -34,40 +37,49 @@ static const char *base_dir(void)
     return b && *b ? b : BIGGPS_DIR_DEFAULT;
 }
 
-/* motor: $BIGGPS_ESPEAK, o do sistema ou o do cartão */
-static bool engine(char *out, size_t n)
+/* os .bgv da pasta voz, o de mais frases primeiro: um pacote regional (com nomes de ruas) e o
+ * das frases fixas, que pode ser refeito sozinho quando entra uma frase nova */
+static void open_packs(void)
 {
-    const char *e = getenv("BIGGPS_ESPEAK");
-    if(e && *e && access(e, X_OK) == 0) { snprintf(out, n, "%s", e); return true; }
-    if(access("/usr/bin/espeak-ng", X_OK) == 0) { snprintf(out, n, "%s", "/usr/bin/espeak-ng"); return true; }
-    snprintf(out, n, "%s/voz/espeak-ng", base_dir());
-    return access(out, X_OK) == 0;
+    char dir[600], path[900], err[256];
+    snprintf(dir, sizeof dir, "%s/voz", base_dir());
+    DIR *dp = opendir(dir);
+    if(!dp) return;
+    struct dirent *de;
+    while((de = readdir(dp)) && npacks < MAXPACKS) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bgv") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        bgv_pack_t *p = bgv_open(path, err, sizeof err);
+        if(!p) { fprintf(stderr, "voz: %s\n", err); continue; }
+        if(npacks && bgv_rate(p) != bgv_rate(packs[0])) { fprintf(stderr, "voz: %s com outra taxa, ignorado\n", path); bgv_close(p); continue; }
+        int i = npacks++;
+        while(i > 0 && bgv_count(packs[i - 1]) < bgv_count(p)) { packs[i] = packs[i - 1]; i--; }
+        packs[i] = p;
+    }
+    closedir(dp);
+    for(int i = 0; i < npacks; i++) fprintf(stderr, "voz: Faber, %u frases\n", bgv_count(packs[i]));
 }
 
-static bool data_dir(char *out, size_t n)
+static int find_clip(const char *text, bgv_clip_t *c)
 {
-    struct stat st;
-    char probe[600];
-    snprintf(out, n, "%s/voz", base_dir());
-    snprintf(probe, sizeof probe, "%s/espeak-ng-data/phondata", out);
-    return stat(probe, &st) == 0;
+    for(int i = 0; i < npacks; i++) if(bgv_find(packs[i], text, c)) return 1;
+    return 0;
+}
+
+static pthread_once_t pack_once = PTHREAD_ONCE_INIT;
+static void load_pack(void) { open_packs(); }
+
+/* a interface e a thread da fala chamam: abre uma vez só */
+static bgv_pack_t *get_pack(void)
+{
+    pthread_once(&pack_once, load_pack);
+    return npacks ? packs[0] : NULL;
 }
 
 bool voice_available(void)
 {
-    char e[600], d[600];
-    return engine(e, sizeof e) && data_dir(d, sizeof d) && access("/dev/dsp", W_OK) == 0;
-}
-
-static int read_full(int fd, void *buf, size_t n)
-{
-    size_t got = 0;
-    while(got < n) {
-        ssize_t r = read(fd, (char *)buf + got, n - got);
-        if(r <= 0) return (int)got;
-        got += (size_t)r;
-    }
-    return (int)got;
+    return get_pack() && access("/dev/dsp", W_OK) == 0;
 }
 
 static int dsp_open(int rate, int channels)
@@ -88,69 +100,93 @@ static int dsp_open(int rate, int channels)
     return fd;
 }
 
-static void speak(const char *text)
+static bool stop_requested(void)
 {
-    char eng[600], dir[600], pathopt[640];
-    if(!engine(eng, sizeof eng) || !data_dir(dir, sizeof dir)) return;
-    snprintf(pathopt, sizeof pathopt, "--path=%s", dir);
-    int pfd[2];
-    if(pipe(pfd)) return;
+    pthread_mutex_lock(&mu);
+    bool s = stop_now;
+    pthread_mutex_unlock(&mu);
+    return s;
+}
+
+/* a voz sozinha no /dev/dsp: o que estiver tocando (Multimídia, app Internet, música do
+ * celular) solta a saída e volta depois */
+static void play_dsp(const int16_t *pcm, uint32_t n, uint32_t rate)
+{
     /* primeiro o som do app Internet (modo completo): ao soltar o /dev/dsp ele devolve a
      * vez ao player e ao Bluetooth, que então são suspensos abaixo */
     webaudio_hold(true);
-    /* o player segura o /dev/dsp também pausado: suspende sempre que está carregado */
     bool music = player_state() != PL_STOPPED;
     if(music) player_suspend(true);
-    bool bt = btaudio_live();                   /* música do celular: o bluealsa-aplay solta a saída */
+    bool bt = btaudio_live();                   /* o bluealsa-aplay solta a saída */
     if(bt) btaudio_hold(true);
-    pid_t pid = fork();
-    if(pid == 0) {
-        dup2(pfd[1], 1);
-        int nul = open("/dev/null", O_WRONLY);
-        if(nul >= 0) dup2(nul, 2);
-        close(pfd[0]);
-        char *argv[] = { eng, pathopt, "-v", "pt-br", "-s", "165", "--stdout", (char *)text, NULL };
-        execv(eng, argv);
-        _exit(127);
+    int dsp = dsp_open((int)rate, 1);
+    const char *b = (const char *)pcm;
+    size_t left = (size_t)n * 2;
+    while(dsp >= 0 && left) {
+        size_t chunk = left < 4096 ? left : 4096;
+        ssize_t w = write(dsp, b, chunk);
+        if(w <= 0) break;
+        b += w;
+        left -= (size_t)w;
+        if(stop_requested()) { ioctl(dsp, SNDCTL_DSP_RESET, 0); break; }
     }
-    close(pfd[1]);
-    if(pid < 0) { close(pfd[0]); if(music) player_suspend(false); if(bt) btaudio_hold(false); webaudio_hold(false); return; }
-    pthread_mutex_lock(&mu);
-    child = pid;
-    pthread_mutex_unlock(&mu);
-    uint8_t hdr[44];
-    int dsp = -1;
-    if(read_full(pfd[0], hdr, sizeof hdr) == (int)sizeof hdr && !memcmp(hdr, "RIFF", 4) && !memcmp(hdr + 8, "WAVE", 4)) {
-        int channels = hdr[22] | hdr[23] << 8;
-        int rate = hdr[24] | hdr[25] << 8 | hdr[26] << 16 | hdr[27] << 24;
-        if(channels >= 1 && channels <= 2 && rate >= 8000 && rate <= 48000) dsp = dsp_open(rate, channels);
-    }
-    static char buf[4096];
-    ssize_t r;
-    while((r = read(pfd[0], buf, sizeof buf)) > 0) {
-        if(dsp < 0) continue;                           /* sem áudio: só esvazia o pipe */
-        char *p = buf;
-        while(r > 0) {
-            ssize_t w = write(dsp, p, (size_t)r);
-            if(w <= 0) { r = 0; break; }
-            p += w;
-            r -= w;
-        }
-        pthread_mutex_lock(&mu);
-        bool stop = stop_now;
-        pthread_mutex_unlock(&mu);
-        if(stop) { ioctl(dsp, SNDCTL_DSP_RESET, 0); break; }
-    }
-    close(pfd[0]);
     if(dsp >= 0) close(dsp);                            /* drena o que falta tocar */
-    kill(pid, SIGTERM);
-    waitpid(pid, NULL, 0);
-    pthread_mutex_lock(&mu);
-    child = -1;
-    pthread_mutex_unlock(&mu);
     if(music) player_suspend(false);
     if(bt) btaudio_hold(false);
     webaudio_hold(false);
+}
+
+static void speak(const char *text)
+{
+    bgv_pack_t *p = get_pack();
+    if(!p) return;
+    /* junta os trechos que o pacote tem, com uma pausa curta entre eles */
+    bgv_clip_t clips[12];
+    int nc = 0;
+    uint32_t rate = bgv_rate(p), gap = rate * GAP_MS / 1000, total = 0;
+    char part[512];
+    const char *s = text;
+    while(*s && nc < 12) {
+        const char *bar = strchr(s, '|');
+        size_t l = bar ? (size_t)(bar - s) : strlen(s);
+        if(l >= sizeof part) l = sizeof part - 1;
+        memcpy(part, s, l);
+        part[l] = 0;
+        if(find_clip(part, &clips[nc])) total += clips[nc++].nsamples + gap;
+        else if(part[0]) fprintf(stderr, "voz: sem o trecho \"%s\" no pacote\n", part);
+        s = bar ? bar + 1 : s + l;
+    }
+    if(!nc) return;
+    int16_t *pcm = calloc(total, sizeof *pcm);
+    if(!pcm) return;
+    uint32_t o = 0;
+    for(int i = 0; i < nc; i++) {
+        bgv_decode(&clips[i], pcm + o);
+        o += clips[i].nsamples + gap;
+    }
+    /* música do celular tocando: a voz entra nela, que abaixa enquanto a voz fala */
+    uint32_t done = btaudio_live() ? btaudio_say(pcm, total, rate, stop_requested) : 0;
+    if(done < total) play_dsp(pcm + done, total - done, rate);
+    free(pcm);
+}
+
+/* 1 kHz por 100 ms, com 8 ms de rampa nas pontas (sem estalo); feito uma vez só */
+#define BEEP_RATE 22050
+#define BEEP_N (BEEP_RATE / 10)
+static void beep(void)
+{
+    static int16_t pcm[BEEP_N];
+    static bool made;
+    if(!made) {
+        int ramp = BEEP_RATE * 8 / 1000;
+        for(int i = 0; i < BEEP_N; i++) {
+            double g = i < ramp ? (double)i / ramp : BEEP_N - 1 - i < ramp ? (double)(BEEP_N - 1 - i) / ramp : 1.0;
+            pcm[i] = (int16_t)lround(14000.0 * g * sin(2 * M_PI * 1000.0 * i / BEEP_RATE));
+        }
+        made = true;
+    }
+    uint32_t done = btaudio_live() ? btaudio_say(pcm, BEEP_N, BEEP_RATE, stop_requested) : 0;
+    if(done < BEEP_N) play_dsp(pcm + done, BEEP_N - done, BEEP_RATE);
 }
 
 static void *worker(void *arg)
@@ -158,31 +194,50 @@ static void *worker(void *arg)
     (void)arg;
     pthread_mutex_lock(&mu);
     for(;;) {
-        while(!has_text) pthread_cond_wait(&cv, &mu);
+        while(!has_text && !want_beep) pthread_cond_wait(&cv, &mu);
+        bool talk = has_text;
         char text[sizeof pending];
-        memcpy(text, pending, sizeof text);
-        has_text = false;
+        if(talk) memcpy(text, pending, sizeof text);
+        has_text = want_beep = false;
         stop_now = false;
+        busy = true;
         pthread_mutex_unlock(&mu);
-        speak(text);
+        if(talk) speak(text); else beep();
         pthread_mutex_lock(&mu);
+        busy = false;
     }
     return NULL;
+}
+
+/* com mu travado */
+static void start_worker(void)
+{
+    if(started) return;
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&at, 128 * 1024);
+    started = pthread_create(&t, &at, worker, NULL) == 0;
+    pthread_attr_destroy(&at);
+}
+
+void voice_beep(void)
+{
+    pthread_mutex_lock(&mu);
+    start_worker();
+    if(started && !busy && !has_text) {
+        want_beep = true;
+        pthread_cond_signal(&cv);
+    }
+    pthread_mutex_unlock(&mu);
 }
 
 void voice_say(const char *text)
 {
     if(!text || !*text) return;
     pthread_mutex_lock(&mu);
-    if(!started) {
-        pthread_t t;
-        pthread_attr_t at;
-        pthread_attr_init(&at);
-        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-        pthread_attr_setstacksize(&at, 128 * 1024);
-        started = pthread_create(&t, &at, worker, NULL) == 0;
-        pthread_attr_destroy(&at);
-    }
+    start_worker();
     snprintf(pending, sizeof pending, "%s", text);
     has_text = started;
     pthread_cond_signal(&cv);
@@ -192,8 +247,7 @@ void voice_say(const char *text)
 void voice_stop(void)
 {
     pthread_mutex_lock(&mu);
-    has_text = false;
+    has_text = want_beep = false;
     stop_now = true;
-    if(child > 0) kill(child, SIGTERM);
     pthread_mutex_unlock(&mu);
 }

@@ -2,3 +2,7 @@ bgmap-build
 bgroute-build
 bgsearch-build
 bgmap-merge
+bgalert-build
+bgvoice-pack
+bgvoice-names
+bglanes-build

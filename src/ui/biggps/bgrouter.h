@@ -14,9 +14,13 @@ typedef struct {
     uint32_t sx, sy;           /* start (world) */
     int heading;               /* degrees, -1 = unknown (prefers the road going that way) */
     uint32_t dx, dy;           /* destination (world) */
+    int alternatives;          /* after the route, look for up to BGRT_MAXALT real alternatives */
+    int nstops;                /* stops on the way, in order (0..BGRT_MAXSTOPS) */
+    uint32_t stx[3], sty[3];
     int avoid_toll;            /* use the "sem pedágio" pack when there is one */
 } bgrt_req_t;
 
+#define BGRT_MAXSTOPS 3
 enum { BGRT_OK = 0, BGRT_NOROUTE = -1, BGRT_ERROR = -2, BGRT_NOFILE = -3, BGRT_NOSTART = -4, BGRT_NODEST = -5 };
 
 typedef struct {
@@ -28,6 +32,20 @@ typedef struct {
     int toll_arcs;             /* arcs of toll ways on the route */
     int toll_avoided;          /* computed with a pack that avoids tolls (toll_arcs > 0: no toll-free way) */
 } bgrt_res_t;
+
+/* Alternatives: real routes through a point to one side of the main route (the half and the
+ * thirds), kept only when at most 35 % slower, sharing at most 70 % of the main route (80 % with
+ * each other) and without going to the point and back.  Computed after the main result, in the
+ * same thread; a new request stops the search. */
+#define BGRT_MAXALT 2
+typedef struct {
+    unsigned id;               /* the request they belong to */
+    int n;
+    bgn_route_t r[BGRT_MAXALT];   /* owned by the caller after bgrt_poll_alts (bgn_free) */
+    int toll_arcs[BGRT_MAXALT];
+    unsigned ms;
+} bgrt_alts_t;
+int bgrt_poll_alts(bgrt_alts_t *out);
 
 int bgrt_start(const char *dir);
 void bgrt_stop(void);

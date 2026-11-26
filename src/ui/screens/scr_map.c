@@ -21,6 +21,12 @@
 #include "../biggps/bgrouter.h"
 #include "../biggps/bgicons.h"
 #include "../biggps/bgsearch.h"
+#include "../biggps/bgmotion.h"
+#include "../biggps/bgalert.h"
+#include "../biggps/bgvehicle.h"
+#include "../biggps/bgpersp.h"
+#include "../biggps/bglanes.h"
+#include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -35,6 +41,10 @@
 
 #define MAP_W   800
 #define MAP_H   480
+#define ROUTE_PANEL_W 300      /* painel das rotas à esquerda; o mapa enquadra à direita dele */
+#define NAV_COL_W 150          /* coluna da navegação à esquerda: tempo, distância, chegada, velocidade */
+/* superfície onde os rótulos são postos: a tela (2D) ou a fonte da vista inclinada */
+static int lab_w = MAP_W, lab_h = MAP_H;
 #define MAXLBL  96
 #define BTN     56
 #define BIGGPS_DIR_DEFAULT "/mnt/sd/BigFoston/big-gps"
@@ -237,12 +247,12 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
         int x0 = cx - w / 2, y0 = cy - h / 2;
         for(int y = 0; y < h; y++) {
             int Y = y0 + y;
-            if(Y < 0 || Y >= MAP_H) continue;
+            if(Y < 0 || Y >= lab_h) continue;
             for(int x = 0; x < w; x++) {
                 int X = x0 + x;
-                if(X < 0 || X >= MAP_W) continue;
+                if(X < 0 || X >= lab_w) continue;
                 uint32_t c = px[y * w + x];
-                blend565(&buf[Y * MAP_W + X], c, c >> 24);
+                blend565(&buf[Y * lab_w + X], c, c >> 24);
             }
         }
         return;
@@ -252,9 +262,9 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
     int32_t cs = (int32_t)lround(cos(r) * 65536), sn = (int32_t)lround(sin(r) * 65536);
     int hw = (int)(fabs(w * cos(r)) + fabs(h * sin(r))) / 2 + 2, hh = (int)(fabs(w * sin(r)) + fabs(h * cos(r))) / 2 + 2;
     for(int Y = cy - hh; Y <= cy + hh; Y++) {
-        if(Y < 0 || Y >= MAP_H) continue;
+        if(Y < 0 || Y >= lab_h) continue;
         for(int X = cx - hw; X <= cx + hw; X++) {
-            if(X < 0 || X >= MAP_W) continue;
+            if(X < 0 || X >= lab_w) continue;
             int dx = X - cx, dy = Y - cy;
             /* rotação inversa: fonte = R(-ang) * destino */
             int32_t u = (int32_t)(((int64_t)dx * cs + (int64_t)dy * sn) >> 8) + (w << 7) - 128;
@@ -278,7 +288,131 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
             }
             if(!A) continue;
             uint32_t c = (Rr / A) << 16 | (G / A) << 8 | (B / A);
-            blend565(&buf[Y * MAP_W + X], c, A >> 16);
+            blend565(&buf[Y * lab_w + X], c, A >> 16);
+        }
+    }
+}
+
+/* ------------------------------------------------ vista inclinada (biggps/bgpersp.h)
+ * Carro na linha 350, horizonte 800 px acima da tela: a fonte tem ~1,9x a área da tela e o
+ * remapeamento custa ~27 ms no FOSTON. Liga com o acompanhamento no rumo e o botão em "3D";
+ * volta sozinha ao 2D se os quadros do motor passarem de 500 ms em média. */
+#define PERSP_Y0 350
+#define PERSP_YH (-800)
+static bgp_t PJ;
+static bool pj_ok, shown_persp, persp_auto_off;
+
+/* avisos marcados pelo usuário (lidos e gravados pela interface; o motor copia sob a trava) */
+#define MAXUPT 200
+static bga_entry_t upts[MAXUPT];
+static int nupt;
+
+/* ------------------------------------------------ pontos de alerta no quadro
+ * Pequenos e desenhados com o rasterizador (sem imagem nem SVG por quadro). Cada tipo só
+ * aparece a partir de um zoom, e no máximo MAXAL por quadro: nada de centenas de ícones. */
+#define MAXAL 160
+static void quad(rast_surface_t *s, int x0, int y0, int x1, int y1, uint16_t c)
+{
+    const int S = RAST_SUB;
+    int32_t q[] = { x0 * S, y0 * S, x1 * S, y0 * S, x1 * S, y1 * S, x0 * S, y1 * S };
+    int n4 = 4;
+    rast_fill(s, q, &n4, 1, c);
+}
+
+static void icon_signal(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    quad(s, x - 6, y - 12, x + 6, y + 12, rgb565(0xffffff));
+    quad(s, x - 5, y - 11, x + 5, y + 11, rgb565(0x2b2f36));
+    rast_disc(s, x * S, (y - 6) * S, 3 * S, rgb565(0xe5484d));     /* sem estado real: as três luzes */
+    rast_disc(s, x * S, y * S, 3 * S, rgb565(0xf5b83d));
+    rast_disc(s, x * S, (y + 6) * S, 3 * S, rgb565(0x30a46c));
+}
+
+static void icon_camera(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    rast_disc(s, x * S, y * S, 12 * S, rgb565(0xffffff));
+    rast_disc(s, x * S, y * S, 11 * S, rgb565(0xd93025));
+    rast_disc(s, x * S, y * S, 8 * S, rgb565(0xffffff));
+    quad(s, x - 5, y - 3, x + 3, y + 4, rgb565(0x202124));
+    int32_t lens[] = { (x + 3) * S, (y - 1) * S, (x + 6) * S, (y - 3) * S, (x + 6) * S, (y + 4) * S, (x + 3) * S, (y + 2) * S };
+    int n4 = 4;
+    rast_fill(s, lens, &n4, 1, rgb565(0x202124));
+}
+
+static void icon_bump(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    int32_t out[] = { x * S, (y - 12) * S, (x + 12) * S, (y + 9) * S, (x - 12) * S, (y + 9) * S };
+    int32_t in[] = { x * S, (y - 8) * S, (x + 8) * S, (y + 6) * S, (x - 8) * S, (y + 6) * S };
+    int n3 = 3;
+    rast_fill(s, out, &n3, 1, rgb565(0x202124));
+    rast_fill(s, in, &n3, 1, rgb565(0xf5b83d));
+    rast_disc(s, x * S, (y + 5) * S, 4 * S, rgb565(0x202124));     /* a lombada */
+    quad(s, x - 7, y + 5, x + 7, y + 7, rgb565(0x202124));
+}
+
+static void icon_rail(rast_surface_t *s, int x, int y)
+{
+    const int S = RAST_SUB;
+    int32_t a[] = { (x - 9) * S, (y - 9) * S, (x + 9) * S, (y + 9) * S }, b[] = { (x + 9) * S, (y - 9) * S, (x - 9) * S, (y + 9) * S };
+    rast_line(s, a, 2, 7 * S, rgb565(0x202124), 0);
+    rast_line(s, b, 2, 7 * S, rgb565(0x202124), 0);
+    rast_line(s, a, 2, 4 * S, rgb565(0xffffff), 0);
+    rast_line(s, b, 2, 4 * S, rgb565(0xffffff), 0);
+}
+
+/* os avisos do usuário: o mesmo triângulo, em azul (não são dados do mapa) */
+static void draw_user_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_entry_t *u, int n)
+{
+    if((v->zoom256 >> 8) < 14) return;
+    const int S = RAST_SUB;
+    for(int i = 0; i < n; i++) {
+        int x, y;
+        bgr_world_to_screen(v, s, u[i].x, u[i].y, &x, &y);
+        if(x < -14 || y < -14 || x > s->w + 14 || y > s->h + 14) continue;
+        int32_t out[] = { x * S, (y - 12) * S, (x + 12) * S, (y + 9) * S, (x - 12) * S, (y + 9) * S };
+        int32_t in[] = { x * S, (y - 8) * S, (x + 8) * S, (y + 6) * S, (x - 8) * S, (y + 6) * S };
+        int n3 = 3;
+        rast_fill(s, out, &n3, 1, rgb565(0xffffff));
+        rast_fill(s, in, &n3, 1, rgb565(0x1a73e8));
+        rast_disc(s, x * S, (y + 5) * S, 4 * S, rgb565(0xffffff));
+    }
+}
+
+static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t *p)
+{
+    int z = v->zoom256 >> 8;
+    if(!p || z < 13) return;
+    uint32_t x0 = UINT32_MAX, y0 = UINT32_MAX, x1 = 0, y1 = 0;
+    const int cx[4] = { 0, s->w, 0, s->w }, cy[4] = { 0, 0, s->h, s->h };
+    for(int i = 0; i < 4; i++) {                       /* caixa do quadro (girado) no mundo */
+        uint32_t wx, wy;
+        bgr_screen_to_world(v, s, cx[i], cy[i], &wx, &wy);
+        if(wx < x0) x0 = wx;
+        if(wx > x1) x1 = wx;
+        if(wy < y0) y0 = wy;
+        if(wy > y1) y1 = wy;
+    }
+    static const bga_entry_t *found[2048];
+    int n = bga_query(p, x0, y0, x1, y1, found, 2048), drawn = 0;
+    /* radares primeiro (os mais importantes), depois passagens de nível, lombadas, semáforos */
+    static const int order[] = { BGA_CAMERA, BGA_RAIL, BGA_BUMP, BGA_SIGNAL };
+    static const int minz[BGA_KINDS] = { 99, 15, 13, 15, 14 };
+    for(int o = 0; o < 4 && drawn < MAXAL; o++) {
+        int k = order[o];
+        if(z < minz[k]) continue;
+        for(int i = 0; i < n && drawn < MAXAL; i++) {
+            if(found[i]->kind != k) continue;
+            int sx, sy;
+            bgr_world_to_screen(v, s, found[i]->x, found[i]->y, &sx, &sy);
+            if(sx < -14 || sy < -14 || sx > s->w + 14 || sy > s->h + 14) continue;
+            if(k == BGA_SIGNAL) icon_signal(s, sx, sy);
+            else if(k == BGA_CAMERA) icon_camera(s, sx, sy);
+            else if(k == BGA_BUMP) icon_bump(s, sx, sy);
+            else icon_rail(s, sx, sy);
+            drawn++;
         }
     }
 }
@@ -288,7 +422,7 @@ static struct {
     pthread_t th;
     pthread_mutex_t mu;
     pthread_cond_t cv;
-    int started, stop, has_req, done;
+    int started, stop, has_req, done, busy;
     bgr_view_t req, done_view;
     uint16_t *buf[2];
     int front;                 /* a interface mostra buf[front] */
@@ -298,6 +432,13 @@ static struct {
     bgm_pack_t *pack;
     uint32_t *route;           /* rota a desenhar (pontos x,y no mundo), dono: interface */
     int route_n;
+    int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
+    uint32_t route_px, route_py;
+    bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
+    uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
+    uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
+    int alt_n[BGRT_MAXALT];
+    int req_persp, done_persp;
 } R = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *worker(void *arg)
@@ -319,7 +460,9 @@ static void *worker(void *arg)
         while(!R.stop && (!R.has_req || R.done)) pthread_cond_wait(&R.cv, &R.mu);
         if(R.stop) break;
         bgr_view_t v = R.req;
+        int persp = R.req_persp;
         R.has_req = 0;
+        R.busy = 1;
         int back = !R.front;
         int rn = R.route_n;                         /* cópia da rota: a interface pode trocá-la */
         if(rn > rcap) {
@@ -328,16 +471,55 @@ static void *worker(void *arg)
             else rn = 0;
         }
         if(rn) memcpy(rcopy, R.route, (size_t)rn * 2 * sizeof *rcopy);
+        int rk = R.route_k < rn - 1 ? R.route_k : -1;
+        static bga_entry_t ucopy[MAXUPT];
+        int nu = nupt;                                /* os avisos do usuário (mudam na interface) */
+        memcpy(ucopy, upts, (size_t)nu * sizeof ucopy[0]);
+        static uint32_t *acopy[BGRT_MAXALT];
+        static int acap[BGRT_MAXALT];
+        int an[BGRT_MAXALT];
+        for(int a = 0; a < BGRT_MAXALT; a++) {
+            an[a] = R.alt_n[a];
+            if(an[a] > acap[a]) {
+                uint32_t *nb = realloc(acopy[a], (size_t)an[a] * 2 * sizeof *nb);
+                if(nb) { acopy[a] = nb; acap[a] = an[a]; } else an[a] = 0;
+            }
+            if(an[a]) memcpy(acopy[a], R.alt[a], (size_t)an[a] * 2 * sizeof *acopy[a]);
+        }
+        uint32_t rpx = R.route_px, rpy = R.route_py;
         pthread_mutex_unlock(&R.mu);
 
-        rast_surface_t s = { R.buf[back], MAP_W, MAP_H, MAP_W };
+        /* vista inclinada: o motor desenha a fonte (maior); a interface projeta na tela */
+        rast_surface_t s = persp ? (rast_surface_t){ R.src[back], PJ.sw, PJ.sh, PJ.sw }
+                                 : (rast_surface_t){ R.buf[back], MAP_W, MAP_H, MAP_W };
         bgr_stats_t st;
         int n = bgr_render(R.pack, &v, &s, tmp, MAXLBL, &st);
+        for(int a = 0; a < BGRT_MAXALT; a++)        /* alternativas: azul-claro, mais finas, por baixo */
+            if(an[a] >= 2) {
+                int z = v.zoom256 >> 8, w = z >= 16 ? 6 : z >= 14 ? 5 : 3;
+                bgr_draw_polyline(&v, &s, acopy[a], an[a], w * RAST_SUB, rgb565(v.night ? 0x6f8fc4 : 0x8ab4f8),
+                                  (w + 2) * RAST_SUB, rgb565(v.night ? 0x2a3a57 : 0x5b85c9));
+            }
         if(rn >= 2) {
             int z = v.zoom256 >> 8, w = z >= 16 ? 8 : z >= 14 ? 6 : 4;
-            bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, rgb565(v.night ? 0x4c8bf5 : 0x1a73e8),
-                              (w + 3) * RAST_SUB, rgb565(v.night ? 0x0d2b5e : 0x0b3d91));
+            uint16_t blue = rgb565(v.night ? 0x4c8bf5 : 0x1a73e8), edge = rgb565(v.night ? 0x0d2b5e : 0x0b3d91);
+            if(rk >= 0) {
+                /* trecho já percorrido mais claro; o que falta em azul forte */
+                uint32_t kx = rcopy[2 * rk + 2], ky = rcopy[2 * rk + 3];
+                rcopy[2 * rk + 2] = rpx; rcopy[2 * rk + 3] = rpy;
+                bgr_draw_polyline(&v, &s, rcopy, rk + 2, w * RAST_SUB, rgb565(v.night ? 0x5b6f8f : 0x9fbbe6),
+                                  (w + 3) * RAST_SUB, rgb565(v.night ? 0x2a3447 : 0x7a93bd));
+                rcopy[2 * rk + 2] = kx; rcopy[2 * rk + 3] = ky;
+                kx = rcopy[2 * rk]; ky = rcopy[2 * rk + 1];
+                rcopy[2 * rk] = rpx; rcopy[2 * rk + 1] = rpy;
+                bgr_draw_polyline(&v, &s, rcopy + 2 * rk, rn - rk, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
+                rcopy[2 * rk] = kx; rcopy[2 * rk + 1] = ky;
+            } else {
+                bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
+            }
         }
+        draw_alerts(&v, &s, R.alerts);              /* por cima da rota: o radar na via aparece */
+        draw_user_alerts(&v, &s, ucopy, nu);
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
             l->x = tmp[i].x; l->y = tmp[i].y; l->angle = tmp[i].angle;
@@ -348,10 +530,12 @@ static void *worker(void *arg)
         pthread_mutex_lock(&R.mu);
         R.nlbl[back] = n;
         R.done_view = v;
+        R.done_persp = persp;
         R.ms = (st.us_fetch + st.us_draw) / 1000;
         R.us_fetch = st.us_fetch;
         R.us_draw = st.us_draw;
         R.done = 1;
+        R.busy = 0;
         fprintf(stderr, "biggps: quadro z%.1f em %u ms (%u tiles, %u feições)\n", v.zoom256 / 256.0, R.ms, st.tiles, st.feats);
     }
     pthread_mutex_unlock(&R.mu);
@@ -371,11 +555,22 @@ static bool have_pos, pos_live;
 static double pos_lat, pos_lon, pos_course, pos_speed;
 static placed_t placed[MAXLBL];
 static int nplaced;
-static int off_x, off_y;       /* deslocamento da imagem enquanto o quadro novo não chega */
+static int off_x, off_y;
+static int swap_serial;        /* muda a cada quadro novo do motor na tela */       /* deslocamento da imagem enquanto o quadro novo não chega */
 static lv_point_t drag_start;
 static bgr_view_t drag_view;
 static bool dragging;
 static unsigned gps_ms;
+/* movimento entre as posições do GPS (biggps/bgmotion.h): a câmera e o marcador andam a
+ * 20 Hz deslizando o quadro pronto; o motor só desenha um quadro novo quando a imagem
+ * deslocada já não basta (docs/big-gps-2/04-arquitetura-renderizacao.md) */
+static bgmo_t MO;
+static lv_timer_t *anim;
+static uint64_t anim_req_us;
+static int zoom_goal = -1;     /* zoom pela velocidade na navegação: muda aos poucos; -1 = nenhum */
+static int nav_zoom = -1;      /* o último zoom de navegação calculado (volta da visão geral) */
+#define ZOOM_STEP 26           /* ~0,1 nível por quadro do motor */
+#define ANIM_MS 50
 
 /* navegação */
 static struct {
@@ -389,15 +584,117 @@ static struct {
     int said_next, said_far, said_near;
     bool prev_heading_up;
     char dest_name[64];
+    bga_hit_t *al;             /* alertas na rota (radar, lombada, passagem de nível) */
+    int nal, al_next, al_said;
+    int nstops, pick_stop;     /* paradas no caminho (em ordem); esperando o toque longo da próxima */
+    int toll_arcs, toll_avoided;            /* da rota mostrada */
+    int nalt;                               /* rotas alternativas de verdade (bgrt_poll_alts) */
+    bgn_route_t alt[BGRT_MAXALT];
+    int alt_toll[BGRT_MAXALT];
+    uint32_t stx[BGRT_MAXSTOPS], sty[BGRT_MAXSTOPS];
 } N;
+static lv_obj_t *stop_mk[BGRT_MAXSTOPS];   /* círculos numerados das paradas */
+static lv_obj_t *pick_chip;                /* "toque e segure onde fica a parada" */
+static int pin_drag_done;      /* o painel reabre depois de mover o pino: mantém as paradas */
+
+/* ------------------------------------------------------------ guia de faixas
+ * Do arquivo .bgl em rotas (turn:lanes do OSM): as faixas do cruzamento da próxima manobra, as
+ * que servem em azul. Só aparece quando os dados dizem quais servem (bgl_fit != 0). */
+#define LANE_W 44
+#define LANE_H 48
+static bgl_pack_t *lanes_pack;
+static lv_obj_t *lane_img;
+static lv_image_dsc_t lane_dsc;
+static uint16_t lane_px[BGL_MAXLANES * LANE_W * LANE_H];
+static int lane_for = -1;      /* manobra cujo desenho está pronto */
+static const bgl_entry_t *lane_e;
+static unsigned lane_fit;
+
+static void lanes_draw(int type)
+{
+    int n = lane_e->n, w = n * LANE_W;
+    for(int i = 0; i < n; i++) {
+        bool ok = lane_fit & (1u << i);
+        rast_surface_t s = { lane_px + i * LANE_W, LANE_W, LANE_H, w };
+        uint16_t bg = rgb565(ok ? 0x1a73e8 : 0x2b2f36);
+        bgn_icon(&s, bgl_arrow(lane_e, i, type, lane_fit), 0, rgb565(ok ? 0xffffff : 0x9aa0a6), bg, bg);
+        for(int y = 0; y < LANE_H; y++) lane_px[y * w + i * LANE_W] = rgb565(0x15181d);   /* divisória */
+    }
+    memset(&lane_dsc, 0, sizeof lane_dsc);
+    lane_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    lane_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    lane_dsc.header.w = (uint32_t)w;
+    lane_dsc.header.h = LANE_H;
+    lane_dsc.header.stride = (uint32_t)w * 2;
+    lane_dsc.data = (const uint8_t *)lane_px;
+    lane_dsc.data_size = (uint32_t)(w * LANE_H * 2);
+    lv_image_cache_drop(&lane_dsc);
+    lv_image_set_src(lane_img, &lane_dsc);
+}
+
+static void lanes_update(void)
+{
+    if(!lane_img) return;
+    const bgn_state_t *st = &N.st;
+    if(!lanes_pack || !N.navigating || !st->valid || st->next < 0 || st->next >= N.route.nman) {
+        lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    const bgn_man_t *m = &N.route.man[st->next];
+    if(lane_for != st->next) {                       /* manobra nova: procura as faixas uma vez */
+        lane_for = st->next;
+        lane_e = NULL;
+        lane_fit = 0;
+        uint32_t ax, ay;
+        double br;
+        bgn_point_at(&N.route, m->at_dm > 300 ? m->at_dm - 300 : 0, &ax, &ay, &br);   /* rumo de chegada */
+        lane_e = bgl_find(lanes_pack, m->x, m->y, (int)lround(br));
+        lane_fit = bgl_fit(lane_e, m->type);
+        if(lane_e && lane_fit) {
+            lanes_draw(m->type);
+            fprintf(stderr, "biggps: faixas na manobra %d: %d faixas, servem %#x\n", st->next, lane_e->n, lane_fit);
+        }
+    }
+    double v = pos_speed / 3.6;
+    uint32_t show = (uint32_t)fmax(400, v * 15);
+    if(lane_e && lane_fit && st->next_dm / 10 <= show) lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+}
+static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
+/* placa do radar com o limite que o mapa traz, no canto inferior direito: grande quando aparece,
+ * menor depois de alguns segundos; acima do limite, bipes cada vez mais seguidos até o radar */
+#define SIGN_BIG 136
+#define SIGN_SMALL 72
+#define SIGN_SHRINK_MS 4000            /* tempo grande antes de diminuir */
+#define SIGN_ANIM_MS 400
+static lv_obj_t *sign, *sign_num, *sign_unit, *sign_dist, *scale_chip;
+static struct {
+    int idx;                          /* alerta mostrado (N.al), -1 nenhum */
+    int limit, t, last_d, over;       /* t: 0 grande .. 1024 pequena */
+    uint32_t shown_ms, fix_ms, fix_dist, next_beep;
+} RS = { .idx = -1, .last_d = -1, .over = -1 };
+static uint32_t last_say_ms;
+static lv_obj_t *col_time, *col_dist, *col_eta, *col_speed;   /* coluna da navegação */
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
 static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
 static uint16_t icon_px[80 * 80];
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
+static void anim_step(bool fix);
+static void radar_tick(void);
+static bool persp_wanted(void)
+{
+    static int env = -1;                               /* BIGGPS_PERSP=0 desliga (comparação A/B) */
+    if(env < 0) { const char *e = getenv("BIGGPS_PERSP"); env = !(e && *e == '0'); }
+    /* "Econômico" (Ajustes > Desempenho) também fica no 2D: a inclinada custa ~2x por quadro */
+    return env && pj_ok && !persp_auto_off && settings()->map_persp && follow && heading_up
+        && settings()->map_detail != BF_DETAIL_ECONOMIC;
+}
+
 static void anchor(int *ax, int *ay)
 {
+    if(persp_wanted()) { *ax = PJ.scx; *ay = PJ.sy0; return; }   /* o carro na fonte */
     *ax = MAP_W / 2;
     *ay = follow && heading_up ? MAP_H * 2 / 3 : MAP_H / 2;   /* à frente aparece mais */
 }
@@ -429,26 +726,147 @@ static void request(void)
     cur.night = theme_dark_now();
     pthread_mutex_lock(&R.mu);
     R.req = cur;
+    R.req_persp = persp_wanted();
     R.has_req = 1;
     pthread_cond_signal(&R.cv);
     pthread_mutex_unlock(&R.mu);
 }
 
 static void update_marker(void);
+static void update_offset(void);
+
+static void rot_label(void)
+{
+    bool d3 = settings()->map_persp && pj_ok && !persp_auto_off && settings()->map_detail != BF_DETAIL_ECONOMIC;
+    if(rot_lbl) lv_label_set_text(rot_lbl, !heading_up ? "N" : d3 ? "3D" : LV_SYMBOL_UP);
+}
+
+static int render_busy(void)
+{
+    pthread_mutex_lock(&R.mu);
+    int b = R.has_req || R.busy || R.done;
+    pthread_mutex_unlock(&R.mu);
+    return b;
+}
+
+/* até onde a rota já foi percorrida (o quadro seguinte a desenha mais clara) */
+static void route_progress(void)
+{
+    int k = -1;
+    uint32_t px = 0, py = 0;
+    if(N.navigating && MO.fix_on_route && MO.xy && MO.npts >= 2) {
+        int lo = 0, hi = MO.npts - 1;
+        while(hi - lo > 1) { int mid = (lo + hi) / 2; if(MO.cum_dm[mid] <= MO.s) lo = mid; else hi = mid; }
+        k = lo;
+        px = (uint32_t)llround(MO.x);
+        py = (uint32_t)llround(MO.y);
+    }
+    pthread_mutex_lock(&R.mu);
+    R.route_k = k;
+    R.route_px = px;
+    R.route_py = py;
+    pthread_mutex_unlock(&R.mu);
+}
+
+static int cam_rot(void)
+{
+    return heading_up ? -(int)lround(MO.has_disp ? MO.cam : pos_course) : 0;
+}
+
+/* um passo da animação: posição e câmera do instante atual; pede quadro novo ao motor só
+ * quando a imagem deslocada já não basta (16 px de deslocamento, 2° de giro, outro zoom, ou
+ * 1 s com o quadro fora do centro) e o motor está livre */
+static void update_scale(void);
+
+static void anim_step(bool fix)
+{
+    if(!have_pos || !MO.has_disp) return;
+    uint64_t now = perf_now_us();
+    int moved = bgmo_step(&MO, now);
+    if(!moved && !fix && (zoom_goal < 0 || zoom_goal == cur.zoom256 || !follow)) return;
+    if(!follow) { route_progress(); update_marker(); return; }
+    route_progress();
+    cur.cx = (uint32_t)llround(MO.x);
+    cur.cy = (uint32_t)llround(MO.y);
+    cur.rot = cam_rot();
+    if(zoom_goal > 0 && zoom_goal != cur.zoom256 && !render_busy()) {
+        /* ~0,1 nível por quadro; diferenças grandes (volta da visão geral) em ~6 quadros */
+        int d = zoom_goal - cur.zoom256, st = abs(d) / 6 > ZOOM_STEP ? abs(d) / 6 : ZOOM_STEP;
+        cur.zoom256 += d > st ? st : d < -st ? -st : d;
+        update_scale();
+    }
+    if(!have_shown) { if(!render_busy()) { request(); anim_req_us = now; } return; }
+    update_offset();
+    int dr = abs(shown.rot - cur.rot) % 360;
+    if(dr > 180) dr = 360 - dr;
+    int far = abs(off_x) + abs(off_y);
+    bool need = shown.zoom256 != cur.zoom256 || dr >= 2 || far >= 16 || (far && now - anim_req_us > 1000000);
+    if(need && !render_busy()) { request(); anim_req_us = now; }
+}
+
+static void anim_cb(lv_timer_t *t)
+{
+    (void)t;
+    if(!dragging) anim_step(false);
+    radar_tick();
+}
+
+/* a superfície do quadro na tela (2D) ou da fonte (inclinada) */
+static rast_surface_t shown_surf(void)
+{
+    return shown_persp ? (rast_surface_t){ NULL, PJ.sw, PJ.sh, PJ.sw } : (rast_surface_t){ NULL, MAP_W, MAP_H, MAP_W };
+}
+
+/* um ponto do mundo na tela, com o deslocamento atual (e a projeção, na vista inclinada);
+ * 0 quando cai além do fundo da vista inclinada */
+static int disp_point(uint32_t wx, uint32_t wy, int *x, int *y)
+{
+    rast_surface_t s = shown_surf();
+    bgr_world_to_screen(&shown, &s, wx, wy, x, y);
+    *x += off_x;
+    *y += off_y;
+    if(!shown_persp) return 1;
+    int px, py;
+    if(!bgp_project(&PJ, *x, *y, &px, &py)) return 0;
+    *x = px;
+    *y = py;
+    return 1;
+}
+
+/* vista inclinada: projeta a fonte (com o deslocamento atual) no quadro da tela */
+static void persp_draw(void)
+{
+    uint16_t *src = R.src[R.front];
+    bgp_remap(&PJ, src, R.buf[R.front], MAP_W, off_x, off_y, src[0]);
+}
 
 /* desloca a imagem atual para mostrar 'cur' enquanto o quadro novo é desenhado */
 static void update_offset(void)
 {
     if(!have_shown) return;
     off_x = off_y = 0;
-    if(shown.zoom256 == cur.zoom256 && shown.rot == cur.rot && shown.ox == cur.ox && shown.oy == cur.oy) {
-        rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+    int drot = abs(shown.rot - cur.rot) % 360;
+    if(drot > 180) drot = 360 - drot;
+    /* giro pequeno (a câmera virando aos poucos): desloca pelo centro, o quadro novo acerta o resto */
+    if(shown.zoom256 == cur.zoom256 && drot <= 12 && shown.ox == cur.ox && shown.oy == cur.oy) {
+        rast_surface_t s = shown_surf();
         int sx, sy;
         bgr_world_to_screen(&shown, &s, cur.cx, cur.cy, &sx, &sy);
         off_x = shown.ox - sx;
         off_y = shown.oy - sy;
     }
-    lv_obj_set_pos(img, off_x, off_y);
+    /* nada mudou em pixels (o carro anda menos de 1 px por passo da animação): não
+     * redesenha a tela inteira à toa — só o marcador, se ele girou */
+    static int last_x = INT32_MIN, last_y, last_img;
+    if(off_x == last_x && off_y == last_y && last_img == swap_serial) { update_marker(); return; }
+    last_x = off_x;
+    last_y = off_y;
+    last_img = swap_serial;
+    if(shown_persp) {                                /* a imagem fica parada; a fonte é que anda */
+        persp_draw();
+        lv_obj_set_pos(img, 0, 0);
+        lv_image_cache_drop(&dsc[R.front]);
+    } else lv_obj_set_pos(img, off_x, off_y);
     lv_obj_invalidate(layer);
     for(int i = 0; i < nrot; i++)
         if(rot[i].img) lv_obj_set_pos(rot[i].img, rot[i].cx - (int)rot[i].dsc.header.w / 2 + off_x, rot[i].cy - (int)rot[i].dsc.header.h / 2 + off_y);
@@ -474,7 +892,7 @@ static void layout_labels(const lbl_t *l, int n)
     };
     rot_clear();
     nplaced = 0;
-    for(unsigned i = 0; i < sizeof reserved / sizeof reserved[0]; i++) {
+    for(unsigned i = 0; !shown_persp && i < sizeof reserved / sizeof reserved[0]; i++) {
         placed[nplaced].a = reserved[i];
         placed[nplaced].font = NULL;
         placed[nplaced].text[0] = 0;
@@ -484,7 +902,7 @@ static void layout_labels(const lbl_t *l, int n)
     if(have_pos) {                                   /* nem sobre o marcador da posição */
         uint32_t wx, wy;
         int sx, sy;
-        rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+        rast_surface_t s = shown_surf();
         bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
         bgr_world_to_screen(&shown, &s, wx, wy, &sx, &sy);
         placed[nplaced].a = (lv_area_t){ sx - 26, sy - 26, sx + 26, sy + 26 };
@@ -512,7 +930,7 @@ static void layout_labels(const lbl_t *l, int n)
             a = (lv_area_t){ l[i].x - hw, l[i].y - hh, l[i].x + hw, l[i].y + hh };
             if(nrot >= MAXROT) continue;
         }
-        if(a.x1 < 2 || a.y1 < 2 || a.x2 > MAP_W - 2 || a.y2 > MAP_H - 2 || overlaps(&a)) continue;
+        if(a.x1 < 2 || a.y1 < 2 || a.x2 > lab_w - 2 || a.y2 > lab_h - 2 || overlaps(&a)) continue;
         placed[nplaced].a = a;
         placed[nplaced].font = f;
         placed[nplaced].angle = ang;
@@ -545,73 +963,12 @@ static uint32_t mg_px[MG * MG];                /* lupa branca (tingida pela cor 
 static lv_image_dsc_t mg_dsc;
 static lv_obj_t *mark;
 
-static bool in_poly(const float *p, int n, float x, float y)
-{
-    bool in = false;
-    for(int i = 0, j = n - 1; i < n; j = i++)
-        if(((p[2 * i + 1] > y) != (p[2 * j + 1] > y))
-           && x < (p[2 * j] - p[2 * i]) * (y - p[2 * i + 1]) / (p[2 * j + 1] - p[2 * i + 1]) + p[2 * i])
-            in = !in;
-    return in;
-}
-
 static void mk_build(void)
 {
-    static const float outer[] = { 24, 3, 40, 43, 24, 34, 8, 43 };
-    float inner[8];
-    for(int i = 0; i < 4; i++) {                       /* encolhe em volta do centro (24, 30) */
-        inner[2 * i] = 24 + (outer[2 * i] - 24) * 0.68f;
-        inner[2 * i + 1] = 30 + (outer[2 * i + 1] - 30) * 0.68f;
-    }
-    for(int y = 0; y < MK; y++)
-        for(int x = 0; x < MK; x++) {
-            int wa = 0, ba = 0, wd = 0, bd = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4;
-                    if(in_poly(inner, 4, fx, fy)) ba++;
-                    else if(in_poly(outer, 4, fx, fy)) wa++;
-                    float dx = fx - 24, dy = fy - 24, d2 = dx * dx + dy * dy;
-                    if(d2 < 8.5f * 8.5f) bd++;
-                    else if(d2 < 12.0f * 12.0f) wd++;
-                }
-            /* cor = mistura branco/azul pela cobertura; alfa = cobertura total */
-            uint32_t blue = C_POS, grey = 0x8a8f98;
-            #define MIX(w, b, col) ((w) + (b) ? (uint32_t)(((w) + (b)) * 255 / 16) << 24 | \
-                (((((col) >> 16 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 16) | \
-                (((((col) >> 8 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 8) | \
-                ((((col) & 255) * (b) + 255 * (w)) / ((w) + (b))) : 0)
-            /* alfinete do destino: gota vermelha com miolo branco, ponta em (24, 46) */
-            int pr = 0, pw = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 24, dy = fy - 18;
-                    bool head = dx * dx + dy * dy < 13.0f * 13.0f;
-                    bool tail = fy >= 18 && fy <= 46 && fabsf(dx) < 13.0f * (46 - fy) / 28;
-                    if(dx * dx + dy * dy < 5.0f * 5.0f) pw++;
-                    else if(head || tail) pr++;
-                }
-            mk_pin[y * MK + x] = MIX(pw, pr, 0xd93025u);
-            mk_arrow[y * MK + x] = MIX(wa, ba, blue);
-            mk_dot[y * MK + x] = MIX(wd, bd, blue);
-            mk_stale[y * MK + x] = MIX(wd, bd, grey);
-            #undef MIX
-        }
-    for(int y = 0; y < MG; y++)
-        for(int x = 0; x < MG; x++) {
-            int cov = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 13, dy = fy - 13;
-                    float r2 = dx * dx + dy * dy;
-                    bool ring = r2 < 9.5f * 9.5f && r2 > 6.5f * 6.5f;
-                    /* cabo: faixa de 3,2 px na diagonal de (20, 20) a (28, 28) */
-                    float t = ((fx - 20) + (fy - 20)) / 2, px = fx - 20 - t, py = fy - 20 - t;
-                    bool handle = t > -1 && t < 8.5f && px * px + py * py < 2.4f * 2.4f;
-                    if(ring || handle) cov++;
-                }
-            mg_px[y * MG + x] = cov ? (uint32_t)(cov * 255 / 16) << 24 | 0xFFFFFF : 0;
-        }
+    /* pino e lupa em inteiros (bgvehicle): o aparelho não tem FPU — a versão em float custava
+     * 433 ms a cada abertura do mapa. Os marcadores da posição saem de veh_sync. */
+    bgveh_draw(mk_pin, BGVEH_PIN, 0, 0);
+    bgveh_draw_n(mg_px, MG, BGVEH_MAGNIFIER, 0, 0);
     memset(&mg_dsc, 0, sizeof mg_dsc);
     mg_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
     mg_dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
@@ -633,15 +990,50 @@ static void mk_build(void)
     }
 }
 
+/* ------------------------------------------------- marcador da posição (perfil)
+ * mk_dsc[0] = o marcador ativo (seta ou veículo), [1] = parado (ponto, só no modelo seta),
+ * [2] = posição incerta (cinza). Refeitos só quando o perfil ou a escolha mudam. */
+static int veh_built_prof = -1, veh_gen, veh_built_gen = -1, veh_model = BGVEH_ARROW, veh_size = 1;
+
+static int veh_model_of(int prof)
+{
+    const int *m;
+    int n = bgveh_models(prof, &m), sel = settings()->map_veh_model[prof];
+    for(int i = 0; i < n; i++) if(m[i] == sel) return sel;
+    return m[0];
+}
+
+static void veh_sync(void)
+{
+    int prof = N.profile >= 0 && N.profile < BGR_PROFILES ? N.profile : BGR_CAR;
+    if(prof == veh_built_prof && veh_gen == veh_built_gen) return;
+    veh_built_prof = prof;
+    veh_built_gen = veh_gen;
+    veh_model = veh_model_of(prof);
+    veh_size = settings()->map_veh_size[prof];
+    uint32_t c = bgveh_color[settings()->map_veh_color[prof] & 7];
+    int still = veh_model == BGVEH_ARROW ? BGVEH_DOT : veh_model;
+    bgveh_draw(mk_arrow, veh_model, c, 0);
+    bgveh_draw(mk_dot, still, c, 0);
+    bgveh_draw(mk_stale, still, 0, 1);
+    for(int i = 0; i < 3; i++) lv_image_cache_drop(&mk_dsc[i]);
+    if(mark) lv_obj_invalidate(mark);
+}
+
 static void update_dest_marker(void)
 {
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) {
+        if(!stop_mk[i]) continue;
+        int sx, sy;
+        if(i >= N.nstops || !N.has_dest || !have_shown || !disp_point(N.stx[i], N.sty[i], &sx, &sy)
+           || sx < -20 || sy < -20 || sx > MAP_W + 20 || sy > MAP_H + 20) { lv_obj_add_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_set_pos(stop_mk[i], sx - 15, sy - 15);
+        lv_obj_remove_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN);
+    }
     if(!dmark) return;
     if(!N.has_dest || !have_shown) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     int sx, sy;
-    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
-    bgr_world_to_screen(&shown, &s, N.dx, N.dy, &sx, &sy);
-    sx += off_x;
-    sy += off_y;
+    if(!disp_point(N.dx, N.dy, &sx, &sy)) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     lv_obj_set_pos(dmark, sx - 24, sy - 46);
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_HIDDEN);
@@ -654,23 +1046,22 @@ static void update_marker(void)
     if(!have_pos || !have_shown) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     uint32_t wx, wy;
     int sx, sy;
-    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
-    bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
-    bgr_world_to_screen(&shown, &s, wx, wy, &sx, &sy);
-    sx += off_x;
-    sy += off_y;
+    if(MO.has_disp) { wx = (uint32_t)llround(MO.x); wy = (uint32_t)llround(MO.y); }   /* posição animada */
+    else bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
+    if(!disp_point(wx, wy, &sx, &sy)) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
-    bool moving = pos_live && pos_speed >= 3.0;
-    const lv_image_dsc_t *d = moving ? &mk_dsc[0] : pos_live ? &mk_dsc[1] : &mk_dsc[2];
+    veh_sync();
+    bool moving = pos_live && !MO.stale && pos_speed >= 3.0, ok = pos_live && !MO.stale;
+    double head = MO.has_disp && MO.head >= 0 ? MO.head : pos_course;
+    /* seta: anda = seta no rumo, parado = ponto; veículo: sempre ele, no último rumo; incerto = cinza */
+    bool turn = veh_model == BGVEH_ARROW ? moving : veh_model != BGVEH_DOT && head >= 0;
+    const lv_image_dsc_t *d = !ok ? &mk_dsc[2] : veh_model == BGVEH_ARROW && !moving ? &mk_dsc[1] : &mk_dsc[0];
     if(lv_image_get_src(mark) != d) lv_image_set_src(mark, d);
-    if(moving) {
-        lv_image_set_pivot(mark, 24, 30);
-        lv_image_set_rotation(mark, (int32_t)lround(fmod(pos_course + shown.rot + 720.0, 360.0) * 10));
-        lv_obj_set_pos(mark, sx - 24, sy - 30);
-    } else {
-        lv_image_set_rotation(mark, 0);
-        lv_obj_set_pos(mark, sx - 24, sy - 24);
-    }
+    int py = turn && veh_model == BGVEH_ARROW ? 30 : 24;
+    lv_image_set_pivot(mark, 24, py);
+    lv_image_set_scale(mark, veh_size == 0 ? 205 : veh_size == 2 ? 320 : LV_SCALE_NONE);
+    lv_image_set_rotation(mark, turn ? (int32_t)lround(fmod(head + shown.rot + 720.0, 360.0) * 10) : 0);
+    lv_obj_set_pos(mark, sx - 24, sy - py);
     lv_obj_remove_flag(mark, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -700,7 +1091,7 @@ static void ov_draw(lv_event_t *e)
     d.bg_color = ov_bg;
     d.bg_opa = LV_OPA_COVER;
     bool full = !have_shown || lv_obj_has_flag(img, LV_OBJ_FLAG_HIDDEN);
-    int ox = full ? 0 : off_x, oy = full ? 0 : off_y;
+    int ox = full || shown_persp ? 0 : off_x, oy = full || shown_persp ? 0 : off_y;
     lv_area_t a;
     if(full || ox >= MAP_W || ox <= -MAP_W || oy >= MAP_H || oy <= -MAP_H) {
         a = (lv_area_t){ 0, 0, MAP_W - 1, MAP_H - 1 };
@@ -779,11 +1170,41 @@ static void set_route_overlay(const uint32_t *xy, int n)
         if(copy) memcpy(copy, xy, (size_t)n * 2 * sizeof *copy);
         else n = 0;
     } else n = 0;
+    /* o marcador anda pela geometria da rota (só N.route tem as distâncias) */
+    if(n >= 2 && xy == N.route.xy) bgmo_set_route(&MO, N.route.xy, N.route.cum_dm, N.route.npts);
+    else bgmo_set_route(&MO, NULL, NULL, 0);
     pthread_mutex_lock(&R.mu);
     free(R.route);
     R.route = copy;
     R.route_n = n;
+    R.route_k = -1;
     pthread_mutex_unlock(&R.mu);
+}
+
+/* as alternativas que o motor desenha (cópias, como a rota) */
+static void set_alt_overlays(void)
+{
+    pthread_mutex_lock(&R.mu);
+    for(int a = 0; a < BGRT_MAXALT; a++) {
+        free(R.alt[a]);
+        R.alt[a] = NULL;
+        R.alt_n[a] = 0;
+        if(a < N.nalt && N.alt[a].npts >= 2) {
+            R.alt[a] = malloc((size_t)N.alt[a].npts * 2 * sizeof *R.alt[a]);
+            if(R.alt[a]) {
+                memcpy(R.alt[a], N.alt[a].xy, (size_t)N.alt[a].npts * 2 * sizeof *R.alt[a]);
+                R.alt_n[a] = N.alt[a].npts;
+            }
+        }
+    }
+    pthread_mutex_unlock(&R.mu);
+}
+
+static void clear_alts(void)
+{
+    for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
+    N.nalt = 0;
+    set_alt_overlays();
 }
 
 /* enquadra a rota inteira (visão geral) */
@@ -800,13 +1221,17 @@ static void fit_route(void)
         if(y > y1) y1 = y;
     }
     double w = (double)(x1 - x0) + 1, h = (double)(y1 - y0) + 1;
-    /* px = world * 2^(z - 24): z para caber em 560 x 280 px (folha e botões ocupam o resto) */
-    double z = fmin(log2(560.0 / w), log2(280.0 / h)) + 24;
+    /* px = world * 2^(z - 24): a rota cabe na área livre — à direita do painel das rotas
+     * (planejando) ou da coluna da navegação — e entre o topo e a base, com margem */
+    double left = N.navigating ? 180 : 12 + ROUTE_PANEL_W + 12, right = MAP_W - 96;
+    double aw = right - left - 24, ah = MAP_H - 48;
+    double z = fmin(log2(aw / w), log2(ah / h)) + 24;
     if(z > 17) z = 17;
     if(z < 5) z = 5;
     cur.zoom256 = (int)(z * 256);
-    cur.cx = x0 + (x1 - x0) / 2;
-    cur.cy = y0 + (y1 - y0) / 2 + (uint32_t)(h * 0.18);   /* sobe a rota acima da folha */
+    double k = pow(2.0, z - 24), shift = ((left + right) / 2 - MAP_W / 2) / k;   /* mundo por px */
+    cur.cx = x0 + (x1 - x0) / 2 - (uint32_t)(int32_t)lround(shift);
+    cur.cy = y0 + (y1 - y0) / 2;
     cur.rot = 0;
     follow = false;
     update_scale();
@@ -814,10 +1239,20 @@ static void fit_route(void)
 }
 
 /* voz: eSpeak NG (core/voice), se ligada nos ajustes e instalada no cartão */
-static void say(const char *text)
+/* text: o que se lê no registro; parts: os trechos da voz Faber separados por '|' */
+static void say(const char *text, const char *parts)
 {
     fprintf(stderr, "biggps: voz: %s\n", text);
-    if(settings()->nav_voice) voice_say(text);
+    last_say_ms = (uint32_t)(perf_now_us() / 1000);
+    if(settings()->nav_voice) voice_say(parts);
+}
+
+/* "Vire à direita|na Rua X" da manobra */
+static void man_parts(const bgn_man_t *m, char *out, int n)
+{
+    char v[96], r[96];
+    bgn_voice_parts(m, v, sizeof v, r, sizeof r);
+    snprintf(out, (size_t)n, r[0] ? "%s|%s" : "%s", v, r);
 }
 
 static const char *spoken_dist(uint32_t dm, char *buf, int n)
@@ -854,19 +1289,224 @@ static void announce(void)
     if(!N.said_near && dist <= near) {
         N.said_near = N.said_far = 1;
         /* "e depois" quando a manobra seguinte vem logo em seguida */
-        if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE) {
+        char p1[200], p2[200], parts[420];
+        man_parts(m, p1, sizeof p1);
+        if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE
+           && m->type != BGN_WAYPOINT) {
             char t2[160];
             bgn_text(&N.route.man[st->next + 1], t2, sizeof t2);
             lower_first(t2);
             snprintf(full, sizeof full, "%s, e depois %s", t, t2);
-            say(full);
-        } else say(t);
-    } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE) {
+            man_parts(&N.route.man[st->next + 1], p2, sizeof p2);
+            snprintf(parts, sizeof parts, "%s|e depois|%s", p1, p2);
+            say(full, parts);
+        } else say(t, p1);
+    } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE && m->type != BGN_WAYPOINT) {
         N.said_far = 1;
         lower_first(t);
         snprintf(full, sizeof full, "Em %s, %s", spoken_dist(st->next_dm, d, sizeof d), t);
-        say(full);
+        char p1[200], parts[260];
+        man_parts(m, p1, sizeof p1);
+        snprintf(parts, sizeof parts, "Em %s|%s", d, p1);
+        say(full, parts);
     }
+}
+
+/* ------------------------------------------------------- alertas na rota
+ * Radar, lombada e passagem de nível que estão na rota à frente: voz uma vez, com
+ * antecedência pela velocidade, e um chip enquanto se aproxima. Semáforos só no mapa (seriam
+ * avisos demais). O limite só é dito quando o próprio ponto do OSM o informa. */
+
+/* ---------------------------------------------- avisos marcados pelo usuário
+ * Lombadas que o mapa não tem, marcadas no próprio aparelho (biggps-avisos.txt: "lat lon tipo"
+ * por linha). Aparecem em azul (os do OSM são amarelos) e o aviso diz "sua". */
+
+static void upts_load(void)
+{
+    char path[512], line[128];
+    data_path(path, sizeof path, "biggps-avisos.txt");
+    FILE *f = fopen(path, "r");
+    nupt = 0;
+    while(f && nupt < MAXUPT && fgets(line, sizeof line, f)) {
+        double lat, lon;
+        int kind;
+        if(sscanf(line, "%lf %lf %d", &lat, &lon, &kind) != 3 || kind <= 0 || kind >= BGA_KINDS) continue;
+        uint32_t x, y;
+        bgr_lonlat_to_world(lon, lat, &x, &y);
+        upts[nupt++] = (bga_entry_t){ x, y, (uint8_t)kind, 0, BGA_DIR_ANY };
+    }
+    if(f) fclose(f);
+}
+
+static void upts_save(void)
+{
+    char path[512], tmp[520];
+    data_path(path, sizeof path, "biggps-avisos.txt");
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
+    if(!f) return;
+    for(int i = 0; i < nupt; i++) {
+        double lon, lat;
+        bgr_world_to_lonlat(upts[i].x, upts[i].y, &lon, &lat);
+        fprintf(f, "%.6f %.6f %d\n", lat, lon, upts[i].kind);
+    }
+    if(fclose(f) == 0) rename(tmp, path);
+}
+
+/* o aviso do usuário a até 30 m de (x, y), ou -1 */
+static int upt_near(uint32_t x, uint32_t y)
+{
+    double lat = atan(sinh(M_PI * (1.0 - 2.0 * (double)y / 4294967296.0)));
+    double mpu = 40075016.686 / 4294967296.0 * cos(lat), best = 30;
+    int k = -1;
+    for(int i = 0; i < nupt; i++) {
+        double dx = (double)(int32_t)(upts[i].x - x), dy = (double)(int32_t)(upts[i].y - y), d = sqrt(dx * dx + dy * dy) * mpu;
+        if(d < best) { best = d; k = i; }
+    }
+    return k;
+}
+
+static void route_alerts(void)
+{
+    free(N.al);
+    N.al = NULL;
+    N.nal = N.al_next = 0;
+    N.al_said = -1;
+    if(N.route.npts < 2) return;
+    uint64_t t0 = perf_now_us();
+    int n = 0;
+    bga_hit_t *h = R.alerts ? bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n) : NULL;
+    int w = 0;
+    for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
+    w = bga_route_points(upts, nupt, N.route.xy, N.route.cum_dm, N.route.npts, &h, w);   /* os seus */
+    N.al = h;
+    N.nal = w;
+    fprintf(stderr, "biggps: %d alertas na rota (de %d pontos com semáforos) em %u ms\n", w, n,
+            (unsigned)((perf_now_us() - t0) / 1000));
+}
+
+static uint32_t now_ms(void) { return (uint32_t)(perf_now_us() / 1000); }
+
+static void sign_layout(int t)
+{
+    if(!sign) return;
+    int size = SIGN_BIG + (SIGN_SMALL - SIGN_BIG) * t / 1024;
+    int x = -(12 + BTN + 12) + (BTN + 12) * t / 1024;     /* à esquerda dos botões, depois no canto */
+    lv_obj_set_size(sign, size, size);
+    lv_obj_set_style_border_width(sign, size / 10, 0);
+    lv_obj_align(sign, LV_ALIGN_BOTTOM_RIGHT, x, -12);
+    bool big = size >= 104;
+    lv_obj_set_style_text_font(sign_num, big ? BF_FONT_CLOCK : BF_FONT_L, 0);
+    lv_obj_align(sign_num, LV_ALIGN_CENTER, 0, big ? -22 : -7);
+    lv_obj_align(sign_unit, LV_ALIGN_CENTER, 0, 17);
+    if(big) lv_obj_remove_flag(sign_unit, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(sign_unit, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(sign_dist, LV_ALIGN_BOTTOM_MID, 0, big ? -9 : 0);
+    if(scale_chip) lv_obj_align(scale_chip, LV_ALIGN_BOTTOM_RIGHT, x - size - 8, -12);   /* a escala (e o © OSM) ao lado */
+}
+
+static void radar_hide(void)
+{
+    if(RS.idx < 0) return;
+    RS.idx = -1;
+    RS.next_beep = 0;
+    if(sign) lv_obj_add_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    if(scale_chip) lv_obj_align(scale_chip, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
+    if(col_speed && RS.over > 0) lv_obj_set_style_text_color(col_speed, pal()->text, 0);
+    RS.over = -1;
+}
+
+/* um radar com limite à frente (chamado a cada posição) */
+static void radar_show(int idx, int limit, uint32_t dist)
+{
+    if(!sign) return;
+    uint32_t now = now_ms();
+    if(RS.idx != idx) {
+        RS.idx = idx;
+        RS.limit = limit;
+        RS.shown_ms = now;
+        RS.t = 0;
+        RS.last_d = -1;
+        RS.next_beep = 0;
+        lv_label_set_text_fmt(sign_num, "%d", limit);
+        sign_layout(0);
+        lv_obj_remove_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    }
+    RS.fix_ms = now;
+    RS.fix_dist = dist;
+}
+
+/* 20 vezes por segundo: distância estimada entre as posições, encolher a placa, bipes */
+static void radar_tick(void)
+{
+    if(RS.idx < 0 || !sign) return;
+    uint32_t now = now_ms();
+    uint32_t el = now - RS.shown_ms;
+    int t = el < SIGN_SHRINK_MS ? 0 : el >= SIGN_SHRINK_MS + SIGN_ANIM_MS ? 1024
+            : (int)((el - SIGN_SHRINK_MS) * 1024 / SIGN_ANIM_MS);
+    if(t > 0 && t < 1024) t = 1024 - (1024 - t) * (1024 - t) / 1024;   /* desacelera no fim */
+    if(t != RS.t) { RS.t = t; sign_layout(t); }
+    double gone = pos_speed / 3.6 * (double)(now - RS.fix_ms) / 1000.0;
+    int d = (int)RS.fix_dist - (int)lround(gone);
+    if(d < 0) d = 0;
+    int dshow = d >= 100 ? d / 10 * 10 : d;
+    if(dshow != RS.last_d) { RS.last_d = dshow; lv_label_set_text_fmt(lv_obj_get_child(sign_dist, 0), "%d m", dshow); }
+    int over = (int)lround(pos_speed) > RS.limit;
+    if(over != RS.over) {
+        RS.over = over;
+        lv_obj_set_style_bg_color(sign_dist, lv_color_hex(over ? 0xd93025 : 0x202124), 0);
+        if(col_speed) lv_obj_set_style_text_color(col_speed, over ? lv_color_hex(0xff6b5e) : pal()->text, 0);
+        if(!over) RS.next_beep = 0;
+    }
+    if(!over || !settings()->nav_voice || !settings()->map_alerts) return;
+    if(RS.next_beep && (int32_t)(now - RS.next_beep) < 0) return;
+    voice_beep();
+    uint32_t gap = 200 + (uint32_t)(d < 300 ? d : 300) * 1300 / 300;   /* 1,5 s a 300 m, 0,2 s no radar */
+    RS.next_beep = now + gap;
+}
+
+static void alert_check(void)
+{
+    if(!N.nal || !N.st.valid) { if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
+    uint32_t at = N.st.progress_dm;
+    while(N.al_next < N.nal && N.al[N.al_next].at_dm + 50 < at) N.al_next++;   /* passou (5 m de folga) */
+    if(N.al_next >= N.nal) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
+    const bga_hit_t *a = &N.al[N.al_next];
+    double v = pos_speed / 3.6;
+    if(v < 8) v = 8;
+    uint32_t dist = a->at_dm > at ? (a->at_dm - at) / 10 : 0;
+    uint32_t warn = a->kind == BGA_CAMERA ? (uint32_t)fmax(300, v * 15) : (uint32_t)fmax(120, v * 8);
+    if(!settings()->map_alerts || dist > warn) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
+    char t[96];
+    if(a->kind == BGA_CAMERA && a->maxspeed) {            /* placa com o limite do mapa, em vez do aviso */
+        lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+        radar_show(N.al_next, a->maxspeed, dist);
+    } else radar_hide();
+    const char *name = tr(a->kind == BGA_CAMERA ? S_MAP_AL_CAMERA : a->kind == BGA_BUMP ? S_MAP_AL_BUMP : S_MAP_AL_RAIL);
+    if(a->kind == BGA_CAMERA && a->maxspeed) t[0] = 0;
+    else if(a->user) snprintf(t, sizeof t, "%s (%s) · %u m", name, tr(S_MAP_AL_YOURS), dist);   /* não é dado do mapa */
+    else snprintf(t, sizeof t, "%s · %u m", name, dist);
+    if(t[0]) {
+        lv_label_set_text(al_lbl, t);
+        lv_obj_remove_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(N.al_said == N.al_next) return;
+    /* não fala por cima de uma manobra que acabou de ser dita */
+    uint32_t now = (uint32_t)(perf_now_us() / 1000);
+    if(now - last_say_ms < 2500) return;
+    N.al_said = N.al_next;
+    char d[48], full[160], parts[160];
+    if(a->kind == BGA_CAMERA) {
+        if(dist >= 150) snprintf(full, sizeof full, "Radar a %s", spoken_dist(dist * 10, d, sizeof d));
+        else snprintf(full, sizeof full, "Radar à frente");
+        snprintf(parts, sizeof parts, "%s", full);
+        if(a->maxspeed) {
+            size_t o = strlen(full), q = strlen(parts);
+            snprintf(full + o, sizeof full - o, ", limite de %u quilômetros por hora", a->maxspeed);
+            snprintf(parts + q, sizeof parts - q, "|limite de %u quilômetros por hora", a->maxspeed);
+        }
+    } else snprintf(full, sizeof full, "%s", a->kind == BGA_BUMP ? "Lombada à frente" : "Passagem de nível à frente");
+    if(a->kind != BGA_CAMERA) snprintf(parts, sizeof parts, "%s", full);
+    say(full, parts);
 }
 
 static void update_banner(void)
@@ -902,28 +1542,26 @@ static void update_banner(void)
 
 static void update_botbar(void)
 {
-    if(!bot_lbl) return;
-    char d[32], line[128];
+    if(!col_time) return;
+    char d[32], tm[24];
     uint32_t rem_dm = N.navigating ? N.st.remain_dm : N.route.total_dm;
     uint32_t rem_ds = N.navigating ? N.st.remain_ds : N.route.total_ds;
     int min = (int)((rem_ds + 300) / 600);
-    char tm[24];
-    if(min >= 60) snprintf(tm, sizeof tm, "%d h %02d min", min / 60, min % 60);
+    if(min >= 60) snprintf(tm, sizeof tm, "%d h %02d", min / 60, min % 60);
     else snprintf(tm, sizeof tm, "%d min", min);
-    int n = snprintf(line, sizeof line, "%s · %s", bgn_dist_text(rem_dm, d, sizeof d), tm);
+    lv_label_set_text(col_time, tm);
+    lv_label_set_text(col_dist, bgn_dist_text(rem_dm, d, sizeof d));
     time_t now = time(NULL);
     struct tm lt;
-    if(now > 1700000000 && localtime_r(&now, &lt)) {          /* só com relógio acertado */
+    char a[32] = "";
+    if(now > 1700000000) {                                  /* só com relógio acertado */
         time_t eta = now + rem_ds / 10;
-        localtime_r(&eta, &lt);
-        if(n > 0 && n < (int)sizeof line) {
-            line[n] = 0;
-            char a[32];
-            snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
-            snprintf(line + n, sizeof line - (size_t)n, " · %s", a);
-        }
+        if(localtime_r(&eta, &lt)) snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
     }
-    lv_label_set_text(bot_lbl, line);
+    lv_label_set_text(col_eta, a);
+    char v[24] = "";                                        /* a velocidade só com GPS de verdade */
+    if(pos_live && !N.simulate ? pos_speed >= 1 : N.simulate) snprintf(v, sizeof v, "%d km/h", (int)lround(pos_speed));
+    lv_label_set_text(col_speed, v);
 }
 
 static void close_sheet(void)
@@ -934,6 +1572,16 @@ static void close_sheet(void)
 static void end_navigation(void)
 {
     N.navigating = N.simulate = N.rerouting = N.active = N.has_dest = N.waiting = 0;
+    free(N.al);
+    N.al = NULL;
+    N.nal = 0;
+    N.nstops = N.pick_stop = 0;
+    clear_alts();
+    lane_for = -1;
+    if(lane_img) lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+    if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    radar_hide();
+    if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
     memset(&N.st, 0, sizeof N.st);
     set_route_overlay(NULL, 0);
@@ -944,8 +1592,9 @@ static void end_navigation(void)
     if(info_chip) lv_obj_remove_flag(info_chip, LV_OBJ_FLAG_HIDDEN);
     if(search_btn) lv_obj_remove_flag(search_btn, LV_OBJ_FLAG_HIDDEN);
     heading_up = N.prev_heading_up;
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    rot_label();
     cur.rot = 0;
+    zoom_goal = nav_zoom = -1;
     update_marker();
     request();
 }
@@ -959,6 +1608,7 @@ static char dest_title[96];        /* nome do destino escolhido na busca (vazio:
 static void start_navigation(bool simulate)
 {
     close_sheet();
+    clear_alts();                                    /* navega pela rota escolhida */
     recent_add(dest_title[0] ? dest_title : N.dest_name[0] ? N.dest_name : tr(S_MAP_POINT), N.dx, N.dy);
     N.navigating = 1;
     N.simulate = simulate;
@@ -968,7 +1618,7 @@ static void start_navigation(bool simulate)
     N.route.off_count = 0;
     N.prev_heading_up = heading_up;
     heading_up = true;
-    lv_label_set_text(rot_lbl, LV_SYMBOL_UP);
+    rot_label();
     follow = true;
     lv_obj_remove_flag(banner, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(botbar, LV_OBJ_FLAG_HIDDEN);
@@ -979,7 +1629,12 @@ static void start_navigation(bool simulate)
     cur.zoom256 = N.profile >= BGR_BIKE ? 17 * 256 : 16 * 256 + 128;
     update_scale();
     char t[160];
-    if(N.route.nman) { bgn_text(&N.route.man[0], t, sizeof t); say(t); }
+    if(N.route.nman) {
+        char p1[200];
+        bgn_text(&N.route.man[0], t, sizeof t);
+        man_parts(&N.route.man[0], p1, sizeof p1);
+        say(t, p1);
+    }
     if(simulate) on_fix(N.route.xy[0], N.route.xy[1], 0, -1, true);
     else if(have_pos) {
         uint32_t x, y;
@@ -1033,10 +1688,22 @@ static void route_request(int profile, bool reroute)
         bgr_lonlat_to_world(pos_lon, pos_lat, &sx, &sy);
         if(pos_live && pos_speed >= 8) heading = (int)lround(pos_course);
     } else return;
-    bgrt_req_t q = { ++N.req_id, profile, sx, sy, heading, N.dx, N.dy,
-                     (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
+    /* recalculando no caminho: as paradas já alcançadas saem da lista */
+    if(reroute && N.navigating) {
+        int passed = 0;
+        for(int i = 0; i < N.route.nman; i++)
+            if(N.route.man[i].type == BGN_WAYPOINT && N.route.man[i].at_dm <= N.st.progress_dm) passed++;
+        if(passed > N.nstops) passed = N.nstops;
+        for(int i = passed; i < N.nstops; i++) { N.stx[i - passed] = N.stx[i]; N.sty[i - passed] = N.sty[i]; }
+        N.nstops -= passed;
+    }
+    bgrt_req_t q = { .id = ++N.req_id, .profile = profile, .sx = sx, .sy = sy, .heading = heading,
+                     .dx = N.dx, .dy = N.dy, .nstops = N.nstops, .alternatives = !reroute && !N.navigating,
+                     .avoid_toll = (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
+    for(int i = 0; i < N.nstops; i++) { q.stx[i] = N.stx[i]; q.sty[i] = N.sty[i]; }
     N.profile = profile;
     N.waiting = 1;
+    if(!reroute) clear_alts();
     N.rerouting = reroute;
     bgrt_request(&q);
 }
@@ -1070,6 +1737,25 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name);
 
 static void open_dest_sheet(uint32_t x, uint32_t y) { open_dest_sheet_named(x, y, NULL); }
 
+/* "Lombada aqui" no ponto do destino marcado, ou tirar o aviso seu que está ali */
+static void upt_cb(lv_event_t *e)
+{
+    int k = (int)(intptr_t)lv_event_get_user_data(e);
+    if(k >= 0 && k < nupt) upts[k] = upts[--nupt];
+    else if(k < 0 && nupt < MAXUPT) upts[nupt++] = (bga_entry_t){ N.dx, N.dy, BGA_BUMP, 0, BGA_DIR_ANY };
+    upts_save();
+    N.has_dest = 0;                                   /* era só para marcar o aviso */
+    close_sheet();
+    update_marker();
+    request();
+}
+
+static void alerts_sw_cb(lv_event_t *e)
+{
+    settings()->map_alerts = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_save();
+}
+
 static void avoid_toll_cb(lv_event_t *e)
 {
     settings()->map_avoid_toll = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
@@ -1092,6 +1778,10 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     bgn_free(&N.route);
     set_route_overlay(NULL, 0);
     N.active = 0;
+    if(!N.has_dest || pin_drag_done == 0) N.nstops = 0;   /* destino novo: sem paradas (mover o pino as mantém) */
+    pin_drag_done = 0;
+    N.pick_stop = 0;
+    clear_alts();
     N.has_dest = 1;
     N.dx = x;
     N.dy = y;
@@ -1105,6 +1795,13 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     lv_obj_t *fb = bf_button(head, LV_SYMBOL_SAVE, tr(S_MAP_SAVE_FAV), 0);
     lv_obj_set_height(fb, 40);
     lv_obj_add_event_cb(fb, fav_save_cb, LV_EVENT_CLICKED, NULL);
+    {
+        double lon, lat;
+        char line[160];
+        bgr_world_to_lonlat(x, y, &lon, &lat);
+        snprintf(line, sizeof line, "%.5f, %.5f · %s", lat, lon, tr(S_MAP_PIN_HINT));
+        bf_label(sh, line, BF_FONT_S, pal()->text_dim);
+    }
     bf_label(sh, tr(S_MAP_DEST_HINT), BF_FONT_S, pal()->text_dim);
     lv_obj_t *row = sheet_row(sh);
     static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
@@ -1129,7 +1826,67 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
         lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
     }
+    {                                               /* aviso seu: marcar ou tirar aqui */
+        lv_obj_t *ur = sheet_row(sh);
+        int k = upt_near(x, y);
+        lv_obj_t *ub = bf_button(ur, k >= 0 ? LV_SYMBOL_TRASH : LV_SYMBOL_WARNING, tr(k >= 0 ? S_MAP_UPT_DEL : S_MAP_UPT_ADD), 0);
+        lv_obj_set_height(ub, 44);
+        lv_obj_add_event_cb(ub, upt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)k);
+    }
+    if(R.alerts) {                                 /* avisos de radar e lombada na rota */
+        lv_obj_t *ar = sheet_row(sh);
+        lv_obj_set_flex_align(ar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *sw = lv_switch_create(ar);
+        lv_obj_set_size(sw, 64, 34);
+        if(settings()->map_alerts) lv_obj_add_state(sw, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(sw, alerts_sw_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_t *l = bf_label(ar, tr(S_MAP_AL_SWITCH), BF_FONT_M, pal()->text);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(l, avoid_toll_label_cb, LV_EVENT_CLICKED, sw);
+    }
 }
+
+/* "+ Parada": o próximo toque longo no mapa marca a parada e recalcula */
+static void add_stop_cb(lv_event_t *e)
+{
+    (void)e;
+    if(N.nstops >= BGRT_MAXSTOPS) return;
+    N.pick_stop = 1;
+    close_sheet();
+    if(pick_chip) lv_obj_remove_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void clear_stops_cb(lv_event_t *e)
+{
+    (void)e;
+    N.nstops = 0;
+    N.pick_stop = 0;
+    if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+    update_dest_marker();
+    route_request(N.profile, false);
+}
+
+static void route_sheet(void);
+static void route_sheet_async(void *ud) { (void)ud; if(ov && N.active && !N.navigating) route_sheet(); }
+
+/* escolher uma alternativa: ela vira a rota, a de antes vira alternativa */
+static void select_alt(int a)
+{
+    if(a < 0 || a >= N.nalt || N.navigating) return;
+    bgn_route_t t = N.route;
+    N.route = N.alt[a];
+    N.alt[a] = t;
+    int tt = N.toll_arcs;
+    N.toll_arcs = N.alt_toll[a];
+    N.alt_toll[a] = tt;
+    set_route_overlay(N.route.xy, N.route.npts);
+    set_alt_overlays();
+    route_alerts();
+    lv_async_call(route_sheet_async, NULL);          /* fora do evento do botão */
+    request();
+}
+
+static void alt_cb(lv_event_t *e) { select_alt((int)(intptr_t)lv_event_get_user_data(e)); }
 
 static void route_result(bgrt_res_t *r)
 {
@@ -1148,42 +1905,112 @@ static void route_result(bgrt_res_t *r)
     snprintf(N.dest_name, sizeof N.dest_name, "%s", r->dest_name);
     N.active = 1;
     set_route_overlay(N.route.xy, N.route.npts);
+    route_alerts();
+    lane_for = -1;                                   /* índices de manobra novos */
     if(N.rerouting) {
         N.rerouting = 0;
         N.said_next = -1;
-        say(tr(S_MAP_REROUTE));
+        say(tr(S_MAP_REROUTE), "Recalculando a rota");
         return;
     }
+    N.toll_arcs = r->toll_arcs;
+    N.toll_avoided = r->toll_avoided;
     /* visão geral com resumo */
     fit_route();
+    route_sheet();
+}
+
+/* resumo da rota: tempo, distância, pedágio, iniciar/simular, paradas e alternativas */
+/* um cartão de rota no painel lateral: tempo grande, distância e chegada; o da rota escolhida
+ * com borda azul; tocar num outro o escolhe */
+static void route_card(lv_obj_t *parent, const bgn_route_t *r, int toll_arcs, int alt, bool chosen)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *c = lv_button_create(parent);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(c, 12, 0);
+    lv_obj_set_style_bg_color(c, p->surface2, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(c, 10, 0);
+    lv_obj_set_style_border_width(c, chosen ? 3 : 0, 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(0x1a73e8), 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, 2, 0);
+    char t[48], d[24], line[96];
+    int min = (int)((r->total_ds + 300) / 600);
+    if(min >= 60) snprintf(t, sizeof t, "%d h %02d min", min / 60, min % 60);
+    else snprintf(t, sizeof t, "%d min", min);
+    bf_label(c, t, BF_FONT_L, chosen ? p->text : lv_color_hex(0x8ab4f8));
+    int n = snprintf(line, sizeof line, "%s", bgn_dist_text(r->total_dm, d, sizeof d));
+    time_t now = time(NULL);
+    struct tm lt;
+    if(now > 1700000000) {                             /* só com relógio acertado */
+        time_t eta = now + r->total_ds / 10;
+        if(localtime_r(&eta, &lt) && n > 0 && n < (int)sizeof line) {
+            char a[32];
+            snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
+            snprintf(line + n, sizeof line - (size_t)n, " · %s", a);
+        }
+    }
+    bf_label(c, line, BF_FONT_S, p->text_dim);
+    if(toll_arcs > 0) bf_label(c, tr(S_MAP_TOLL), BF_FONT_S, p->warning);
+    if(alt >= 0) lv_obj_add_event_cb(c, alt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)alt);
+    else lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
+}
+
+/* planejamento da rota (referência: o painel de rotas na lateral do modo automotivo): a lista
+ * das rotas à esquerda, o mapa enquadrado à direita, Iniciar em verde */
+static void route_sheet(void)
+{
+    const bf_palette_t *p = pal();
     lv_obj_t *sh = sheet_new();
-    char d[32], line[160];
-    int min = (int)((N.route.total_ds + 300) / 600);
-    if(min >= 60) snprintf(line, sizeof line, "%s · %d h %02d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min / 60, min % 60);
-    else snprintf(line, sizeof line, "%s · %d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min);
-    bf_label(sh, line, BF_FONT_L, pal()->text);
-    if(N.dest_name[0]) bf_label(sh, N.dest_name, BF_FONT_S, pal()->text_dim);
+    lv_obj_set_size(sh, ROUTE_PANEL_W, MAP_H - 88);
+    lv_obj_align(sh, LV_ALIGN_TOP_LEFT, 12, 76);
+    lv_obj_add_flag(sh, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(sh, LV_DIR_VER);
+    lv_obj_t *head = sheet_row(sh);                  /* destino e fechar */
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = bf_label(head, dest_title[0] ? dest_title : N.dest_name[0] ? N.dest_name : tr(S_MAP_DEST), BF_FONT_M, p->text);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(t, 1);
+    lv_obj_t *x = bf_button(head, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_size(x, 44, 40);
+    lv_obj_add_event_cb(x, cancel_cb, LV_EVENT_CLICKED, NULL);
+    route_card(sh, &N.route, N.toll_arcs, -1, true);
+    for(int a = 0; a < N.nalt; a++) route_card(sh, &N.alt[a], N.alt_toll[a], a, false);
     /* pedágio: o que se sabe pelos dados (toll=yes e cabines do OSM) */
     bool want_free = (N.profile == BGR_CAR || N.profile == BGR_MOTO) && settings()->map_avoid_toll;
     const char *tollmsg = NULL;
-    if(want_free && !r->toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
-    else if(r->toll_arcs > 0) tollmsg = tr(r->toll_avoided ? S_MAP_TOLL_NOALT : S_MAP_TOLL);
+    if(want_free && !N.toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
+    else if(N.toll_arcs > 0 && N.toll_avoided) tollmsg = tr(S_MAP_TOLL_NOALT);
     if(tollmsg) {
-        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, r->toll_avoided ? pal()->warning : pal()->text_dim);
+        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, N.toll_avoided ? p->warning : p->text_dim);
         lv_label_set_long_mode(tl, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(tl, LV_PCT(100));
     }
-    lv_obj_t *row = sheet_row(sh);
-    lv_obj_t *b = bf_button(row, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
-    lv_obj_set_height(b, 48);
+    lv_obj_t *b = bf_button(sh, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
+    lv_obj_set_size(b, LV_PCT(100), 52);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x1e8e3e), 0);            /* iniciar: verde */
+    lv_obj_set_style_text_color(b, lv_color_white(), 0);
     lv_obj_add_event_cb(b, start_cb, LV_EVENT_CLICKED, NULL);
     if(!pos_live) lv_obj_add_state(b, LV_STATE_DISABLED);       /* sem GPS: só simulação */
+    lv_obj_t *row = sheet_row(sh);                   /* simular e paradas numa linha */
     b = bf_button(row, LV_SYMBOL_SHUFFLE, tr(S_MAP_SIM), 0);
-    lv_obj_set_height(b, 48);
+    lv_obj_set_height(b, 44);
+    lv_obj_set_flex_grow(b, 1);
     lv_obj_add_event_cb(b, sim_cb, LV_EVENT_CLICKED, NULL);
-    b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
-    lv_obj_set_height(b, 48);
-    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+    if(N.nstops < BGRT_MAXSTOPS) {
+        b = bf_button(row, LV_SYMBOL_PLUS, tr(S_MAP_ADD_STOP), 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_set_flex_grow(b, 1);
+        lv_obj_add_event_cb(b, add_stop_cb, LV_EVENT_CLICKED, NULL);
+    }
+    if(N.nstops) {
+        b = bf_button(row, LV_SYMBOL_TRASH, NULL, 0);
+        lv_obj_set_size(b, 52, 44);
+        lv_obj_add_event_cb(b, clear_stops_cb, LV_EVENT_CLICKED, NULL);
+    }
 }
 
 /* uma posição (GPS ou simulação) */
@@ -1200,32 +2027,26 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         if(N.st.valid) { cx = N.st.x; cy = N.st.y; }           /* a câmera segue o ponto na via */
         if(N.st.off_route && !N.rerouting && !N.waiting && !N.simulate) route_request(N.profile, true);
         announce();
+        alert_check();
         update_banner();
+        lanes_update();
         update_botbar();
         if(N.st.arrived && !N.arrived_ms) N.arrived_ms = 1;
-        /* zoom pela velocidade: mais longe na estrada */
-        int z = N.profile >= BGR_BIKE ? 17 * 256 : speed > 80 ? 15 * 256 + 128 : speed > 50 ? 16 * 256 : 16 * 256 + 128;
-        if(follow && z != cur.zoom256) { cur.zoom256 = z; update_scale(); }
+        /* zoom pela velocidade (mais longe na estrada) e mais perto ao chegar numa manobra,
+         * mais ainda nas complexas (biggps/bgnav.c: bgn_zoom256) */
+        int z = bgn_zoom256(&N.route, &N.st, speed, N.profile);
+        nav_zoom = z;
+        /* anim_step chega lá aos poucos; um zoom feito à mão vale até a situação mudar */
+        static int last_z;
+        if(follow && z != last_z) zoom_goal = z;
+        last_z = z;
     }
-    if(follow) {
-        /* parado (posição oscilando alguns metros): só redesenha se o centro andar 2 px ou
-         * o mapa girar 2 graus — poupa CPU com o GPS ligado e o aparelho quieto */
-        int rot = heading_up ? -(int)lround(pos_course) : 0;
-        rast_surface_t sf = { NULL, MAP_W, MAP_H, MAP_W };
-        int sx, sy;
-        bgr_view_t v = cur;
-        anchor(&v.ox, &v.oy);
-        bgr_world_to_screen(&v, &sf, cx, cy, &sx, &sy);
-        int dr = abs(rot - cur.rot) % 360;
-        if(dr > 180) dr = 360 - dr;
-        if(abs(sx - v.ox) >= 2 || abs(sy - v.oy) >= 2 || dr >= 2 || !have_shown) {
-            cur.cx = cx;
-            cur.cy = cy;
-            cur.rot = rot;
-            request();
-        }
-    }
-    update_marker();
+    (void)cx; (void)cy;
+    /* a câmera e o marcador seguem a posição animada (anim_cb); parado, o ruído do GPS
+     * não mexe no mapa (bgmotion ignora menos de 6 m) */
+    bgmo_fix(&MO, perf_now_us(), x, y, speed, speed >= 3 ? pos_course : -1,
+             N.navigating && N.st.valid, N.st.progress_dm);
+    anim_step(true);
 }
 
 /* simulação: avança 1 s pela rota na velocidade dos trechos */
@@ -1399,9 +2220,16 @@ static void ref_point(uint32_t *x, uint32_t *y)
     else { *x = cur.cx; *y = cur.cy; }
 }
 
+static char sv_fixed[128];      /* a busca corrigida que achou os resultados ("" = como digitada) */
+
 static void show_results(void)
 {
     lv_obj_clean(sv_list);
+    if(sv_fixed[0] && sv_nres) {
+        char t[200];
+        snprintf(t, sizeof t, tr(S_MAP_RESULTS_FOR), sv_fixed);
+        bf_label(sv_list, t, BF_FONT_S, pal()->text_dim);
+    }
     static const char *sym[] = { LV_SYMBOL_HOME, LV_SYMBOL_RIGHT, LV_SYMBOL_GPS, LV_SYMBOL_HOME };
     for(int i = 0; i < sv_nres; i++)
         list_row(sym[sv_res[i].type & 3], sv_res[i].name, sv_res[i].context, sv_res[i].dist_m, i);
@@ -1415,6 +2243,7 @@ static void cat_cb(lv_event_t *e)
     ref_point(&x, &y);
     if(sv_poll) { lv_timer_delete(sv_poll); sv_poll = NULL; }   /* a categoria vence a busca em curso */
     sv_nres = six ? bgs_nearby(six, cat, x, y, 30000, sv_res, MAXRES) : 0;
+    sv_fixed[0] = 0;
     show_results();
 }
 
@@ -1462,6 +2291,7 @@ static struct {
     uint32_t x, y;
     bgs_result_t res[MAXRES];
     int nres;
+    char fixed[128];             /* bgs_corrected do último resultado */
 } SQ = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *search_worker(void *arg)
@@ -1478,8 +2308,10 @@ static void *search_worker(void *arg)
         pthread_mutex_unlock(&SQ.mu);
         bgs_result_t res[MAXRES];
         int n = bgs_query(six, text, x, y, res, MAXRES);
+        char fixed[128];
+        snprintf(fixed, sizeof fixed, "%s", bgs_corrected(six));   /* erro de digitação corrigido */
         pthread_mutex_lock(&SQ.mu);
-        if(seq == SQ.seq) { memcpy(SQ.res, res, sizeof res); SQ.nres = n; }
+        if(seq == SQ.seq) { memcpy(SQ.res, res, sizeof res); SQ.nres = n; memcpy(SQ.fixed, fixed, sizeof fixed); }
         SQ.done = seq;
     }
     pthread_mutex_unlock(&SQ.mu);
@@ -1504,7 +2336,7 @@ static void sv_poll_cb(lv_timer_t *t)
     (void)t;
     pthread_mutex_lock(&SQ.mu);
     int ready = SQ.done == SQ.seq;
-    if(ready) { memcpy(sv_res, SQ.res, sizeof sv_res); sv_nres = SQ.nres; }
+    if(ready) { memcpy(sv_res, SQ.res, sizeof sv_res); sv_nres = SQ.nres; memcpy(sv_fixed, SQ.fixed, sizeof sv_fixed); }
     pthread_mutex_unlock(&SQ.mu);
     if(!ready) return;
     lv_timer_delete(sv_poll);
@@ -1628,15 +2460,29 @@ static void tick_cb(lv_timer_t *t)
         R.front = !R.front;
         R.done = 0;
         shown = R.done_view;
+        shown_persp = R.done_persp;
         have_shown = 1;
         uint64_t t0 = perf_now_us();
+        /* inclinada: os rótulos vão na fonte (a projeção os leva junto); 2D: direto no quadro */
+        lab_w = shown_persp ? PJ.sw : MAP_W;
+        lab_h = shown_persp ? PJ.sh : MAP_H;
         layout_labels(R.lbl[R.front], R.nlbl[R.front]);
-        compose_labels(R.buf[R.front]);
+        compose_labels(shown_persp ? R.src[R.front] : R.buf[R.front]);
         perf_add(PERF_MAP_LABELS, (uint32_t)(perf_now_us() - t0));
         perf_add(PERF_MAP, R.us_fetch + R.us_draw);
         {
             unsigned ms = (R.us_fetch + R.us_draw) / 1000;
             frame_ema_ms = frame_ema_ms ? (frame_ema_ms * 3 + ms) / 4 : ms;
+            /* inclinada pesada de forma sustentada (6 quadros seguidos acima de 700 ms; um pico
+             * de leitura do cartão não conta): volta ao 2D nesta sessão; o botão 3D religa */
+            static int slow_run;
+            slow_run = shown_persp && ms > 700 ? slow_run + 1 : 0;
+            if(slow_run >= 6 && !persp_auto_off) {
+                persp_auto_off = true;
+                slow_run = 0;
+                fprintf(stderr, "biggps: vista inclinada desligada (6 quadros seguidos acima de 700 ms)\n");
+                rot_label();
+            }
         }
         perf_add(PERF_MAP_FETCH, R.us_fetch);
         perf_add(PERF_MAP_DRAW, R.us_draw);
@@ -1645,12 +2491,24 @@ static void tick_cb(lv_timer_t *t)
     }
     pthread_mutex_unlock(&R.mu);
     if(swapped) {
+        swap_serial++;
         lv_image_set_src(img, &dsc[R.front]);
         update_offset();
         lv_obj_invalidate(img);
     }
     bgrt_res_t rr;
     if(bgrt_poll(&rr)) route_result(&rr);
+    bgrt_alts_t ra;
+    if(bgrt_poll_alts(&ra)) {
+        if(ra.id == N.req_id && N.active && !N.navigating && !N.nstops && ra.n) {
+            clear_alts();
+            N.nalt = ra.n;
+            for(int a = 0; a < ra.n; a++) { N.alt[a] = ra.r[a]; N.alt_toll[a] = ra.toll_arcs[a]; }
+            set_alt_overlays();
+            if(sheet) route_sheet();                 /* o painel ganha os botões */
+            request();
+        } else for(int a = 0; a < ra.n; a++) bgn_free(&ra.r[a]);
+    }
     if(N.arrived_ms) {                                /* chegou: encerra depois de 5 s */
         if((N.arrived_ms += 100) > 5000) { N.arrived_ms = 0; end_navigation(); }
     }
@@ -1664,10 +2522,51 @@ static void tick_cb(lv_timer_t *t)
 static void set_follow(bool on)
 {
     follow = on;
+    if(!on) zoom_goal = -1;                         /* o usuário assumiu o mapa */
     if(follow_btn) {
         lv_obj_set_style_bg_color(follow_btn, on ? lv_color_hex(C_POS) : pal()->surface, 0);
         lv_obj_set_style_text_color(follow_btn, on ? lv_color_white() : pal()->text, 0);
     }
+}
+
+/* ------------------------------------------------------ pino arrastável
+ * Toque simples, toque longo e arrasto (tela resistiva de um ponto): segurar o pino do
+ * destino o solta do mapa; ele segue o dedo com a ponta um pouco acima (o dedo não a cobre);
+ * perto da borda o mapa rola; ao soltar, o painel do destino volta com o ponto novo. */
+#define PIN_LIFT 36                    /* a ponta fica 36 px acima do dedo */
+#define PIN_TOP 50                     /* a ponta não sobe além disso: o pino inteiro aparece */
+static bool pin_hit, pin_drag, pin_moved;
+static lv_point_t pin_grab;
+
+static bool pin_touched(lv_point_t p)
+{
+    if(!N.has_dest || N.navigating || !dmark || lv_obj_has_flag(dmark, LV_OBJ_FLAG_HIDDEN)) return false;
+    int x = lv_obj_get_x(dmark) + 24, y = lv_obj_get_y(dmark) + 46;    /* ponta */
+    return p.x >= x - 30 && p.x <= x + 30 && p.y >= y - 56 && p.y <= y + 16;
+}
+
+static void pin_move(lv_point_t p)
+{
+    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+    int px = p.x, py = p.y - PIN_LIFT;
+    /* na borda o mapa anda junto — só depois que o pino de fato saiu do lugar (pegar um pino
+     * que já está perto da borda não faz o mapa correr) */
+    if(!pin_moved) pin_moved = abs(p.x - pin_grab.x) + abs(p.y - pin_grab.y) > 16;
+    int ex = px < 40 ? -8 : px > MAP_W - 40 ? 8 : 0, ey = py < PIN_TOP + 10 ? -8 : py > MAP_H - 40 ? 8 : 0;
+    if(pin_moved && (ex || ey)) {
+        bgr_view_t v = cur;
+        anchor(&v.ox, &v.oy);
+        bgr_screen_to_world(&v, &s, v.ox + ex, v.oy + ey, &cur.cx, &cur.cy);
+        set_follow(false);
+        update_offset();
+        if(!render_busy()) request();
+    }
+    if(py < PIN_TOP) py = PIN_TOP;
+    uint32_t x, y;
+    bgr_screen_to_world(&shown, &s, px - off_x, py - off_y, &x, &y);
+    N.dx = x;
+    N.dy = y;
+    update_dest_marker();
 }
 
 static void press_cb(lv_event_t *e)
@@ -1681,6 +2580,10 @@ static void press_cb(lv_event_t *e)
         drag_start = p;
         drag_view = cur;
         dragging = false;
+        pin_drag = false;
+        pin_hit = pin_touched(p);
+    } else if(c == LV_EVENT_PRESSING && pin_drag) {
+        pin_move(p);
     } else if(c == LV_EVENT_PRESSING) {
         int dx = p.x - drag_start.x, dy = p.y - drag_start.y;
         if(!dragging && dx * dx + dy * dy < 64) return;
@@ -1696,12 +2599,40 @@ static void press_cb(lv_event_t *e)
         request();
     } else if(c == LV_EVENT_LONG_PRESSED) {
         if(dragging || N.navigating || !R.started) return;
+        if(N.pick_stop && N.has_dest) {               /* marcando uma parada */
+            rast_surface_t s = shown_surf();
+            uint32_t x, y;
+            bgr_screen_to_world(&shown, &s, p.x - off_x, p.y - off_y, &x, &y);
+            N.pick_stop = 0;
+            if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+            if(N.nstops < BGRT_MAXSTOPS) { N.stx[N.nstops] = x; N.sty[N.nstops] = y; N.nstops++; }
+            update_dest_marker();
+            route_request(N.profile, false);
+            return;
+        }
+        if(pin_hit) {                                 /* segurou o pino: passa a arrastá-lo */
+            pin_drag = true;
+            pin_moved = false;
+            pin_grab = p;
+            close_sheet();
+            lv_image_set_scale(dmark, 320);
+            lv_image_set_pivot(dmark, 24, 46);
+            pin_move(p);
+            return;
+        }
         rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
         uint32_t x, y;
         bgr_screen_to_world(&shown, &s, p.x - off_x, p.y - off_y, &x, &y);
         open_dest_sheet(x, y);
     } else if(c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
         dragging = false;
+        if(pin_drag) {                                /* soltou: novo destino, oferece a rota de novo */
+            if(c == LV_EVENT_RELEASED) pin_move(p);   /* o último ponto do dedo */
+            pin_drag = false;
+            lv_image_set_scale(dmark, LV_SCALE_NONE);
+            pin_drag_done = 1;
+            open_dest_sheet(N.dx, N.dy);
+        }
     }
 }
 
@@ -1712,6 +2643,7 @@ static void zoom_cb(lv_event_t *e)
     if(z < BGR_ZOOM_MIN) z = BGR_ZOOM_MIN;
     if(z > BGR_ZOOM_MAX) z = BGR_ZOOM_MAX;
     if(z == cur.zoom256) return;
+    zoom_goal = -1;                                  /* zoom escolhido à mão vale até a próxima mudança de velocidade */
     cur.zoom256 = z;
     update_scale();
     request();
@@ -1721,19 +2653,35 @@ static void follow_cb(lv_event_t *e)
 {
     (void)e;
     set_follow(true);
+    if(N.navigating && nav_zoom > 0) zoom_goal = nav_zoom;   /* da visão geral volta aos poucos */
     if(have_pos) {
-        bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
-        cur.rot = heading_up ? -(int)lround(pos_course) : 0;
+        if(MO.has_disp) { cur.cx = (uint32_t)llround(MO.x); cur.cy = (uint32_t)llround(MO.y); }
+        else bgr_lonlat_to_world(pos_lon, pos_lat, &cur.cx, &cur.cy);
+        cur.rot = cam_rot();
         request();
     }
 }
 
+/* visão geral da rota durante a navegação: enquadra tudo; o botão de posição volta */
+static void overview_cb(lv_event_t *e)
+{
+    (void)e;
+    if(!N.navigating) return;
+    set_follow(false);
+    fit_route();
+}
+
+/* norte para cima -> no rumo -> inclinada (3D) -> norte ... */
 static void rot_cb(lv_event_t *e)
 {
     (void)e;
-    heading_up = !heading_up;
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
-    cur.rot = heading_up && follow ? -(int)lround(pos_course) : 0;
+    if(!heading_up) { heading_up = true; settings()->map_persp = false; }
+    else if(!settings()->map_persp && pj_ok) { settings()->map_persp = true; persp_auto_off = false; }
+    else { heading_up = false; settings()->map_persp = false; }
+    settings_save();
+    rot_label();
+    cur.rot = follow ? cam_rot() : 0;
+    anchor(&cur.ox, &cur.oy);
     request();
 }
 
@@ -1750,6 +2698,122 @@ static void voice_cb(lv_event_t *e)
 
 static void close_cb(lv_event_t *e) { (void)e; nav_back(); }
 static void sats_cb(lv_event_t *e) { (void)e; nav_go(SCR_GPS, 0); }
+
+/* ------------------------------------------------------ painel "Seu marcador"
+ * Tocar no marcador da posição: perfil, modelo (com prévia na cor escolhida), cor, tamanho,
+ * restaurar o padrão. Salvo por perfil (settings: map_veh_*). */
+static int vs_prof;
+static uint32_t vs_px[5][BGVEH_SIZE * BGVEH_SIZE];
+static lv_image_dsc_t vs_dsc[5];
+static void veh_sheet(int prof);
+
+/* refaz o painel depois do toque: o botão tocado é filho do painel que será apagado */
+static void vs_rebuild(void *ud) { (void)ud; if(ov) veh_sheet(vs_prof); }
+
+static void vs_changed(void)
+{
+    settings_save();
+    veh_gen++;
+    update_marker();
+    lv_async_call(vs_rebuild, NULL);                  /* refaz as prévias e as seleções */
+}
+
+static void vs_prof_cb(lv_event_t *e) { vs_prof = (int)(intptr_t)lv_event_get_user_data(e); lv_async_call(vs_rebuild, NULL); }
+static void vs_model_cb(lv_event_t *e) { settings()->map_veh_model[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_color_cb(lv_event_t *e) { settings()->map_veh_color[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_size_cb(lv_event_t *e) { settings()->map_veh_size[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_reset_cb(lv_event_t *e)
+{
+    (void)e;
+    settings()->map_veh_model[vs_prof] = -1;
+    settings()->map_veh_color[vs_prof] = 0;
+    settings()->map_veh_size[vs_prof] = 1;
+    vs_changed();
+}
+static void vs_close_cb(lv_event_t *e) { (void)e; close_sheet(); }
+
+static void veh_sheet(int prof)
+{
+    if(N.navigating) return;
+    vs_prof = prof;
+    const bf_palette_t *p = pal();
+    lv_obj_t *sh = sheet_new();
+    lv_obj_t *head = sheet_row(sh);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = bf_label(head, tr(S_MAP_VEH_TITLE), BF_FONT_M, p->text);
+    lv_obj_set_flex_grow(t, 1);
+    lv_obj_t *x = bf_button(head, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_height(x, 44);
+    lv_obj_add_event_cb(x, vs_close_cb, LV_EVENT_CLICKED, NULL);
+    /* perfil */
+    static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
+    lv_obj_t *row = sheet_row(sh);
+    for(int i = 0; i < BGR_PROFILES; i++) {
+        lv_obj_t *b = bf_button(row, NULL, tr(names[i]), i == prof ? 1 : 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_add_event_cb(b, vs_prof_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    /* modelos, na cor escolhida */
+    const int *models;
+    int nm = bgveh_models(prof, &models), cur_m = veh_model_of(prof);
+    uint32_t col = bgveh_color[settings()->map_veh_color[prof] & 7];
+    row = sheet_row(sh);
+    uint64_t t0 = perf_now_us();
+    for(int i = 0; i < nm && i < 5; i++) {
+        bgveh_draw(vs_px[i], models[i], col, 0);
+        memset(&vs_dsc[i], 0, sizeof vs_dsc[i]);
+        vs_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
+        vs_dsc[i].header.cf = LV_COLOR_FORMAT_ARGB8888;
+        vs_dsc[i].header.w = vs_dsc[i].header.h = BGVEH_SIZE;
+        vs_dsc[i].header.stride = BGVEH_SIZE * 4;
+        vs_dsc[i].data = (const uint8_t *)vs_px[i];
+        vs_dsc[i].data_size = sizeof vs_px[i];
+        lv_image_cache_drop(&vs_dsc[i]);
+        lv_obj_t *b = lv_button_create(row);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 64, 64);
+        lv_obj_set_style_radius(b, 12, 0);
+        lv_obj_set_style_bg_color(b, p->surface2, 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(b, models[i] == cur_m ? 3 : 0, 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(C_POS), 0);
+        lv_obj_t *im = lv_image_create(b);
+        lv_image_set_src(im, &vs_dsc[i]);
+        lv_obj_center(im);
+        lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b, vs_model_cb, LV_EVENT_CLICKED, (void *)(intptr_t)models[i]);
+    }
+    fprintf(stderr, "biggps: prévias do marcador em %u ms\n", (unsigned)((perf_now_us() - t0) / 1000));
+    /* cores */
+    row = sheet_row(sh);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for(int i = 0; i < BGVEH_COLORS; i++) {
+        lv_obj_t *b = lv_button_create(row);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 44, 44);
+        lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(bgveh_color[i]), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        bool sel = (settings()->map_veh_color[prof] & 7) == i;
+        lv_obj_set_style_border_width(b, sel ? 4 : 2, 0);
+        lv_obj_set_style_border_color(b, sel ? lv_color_hex(C_POS) : p->surface2, 0);
+        lv_obj_add_event_cb(b, vs_color_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    /* tamanho e padrão */
+    row = sheet_row(sh);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    static const char *sz[3] = { "P", "M", "G" };
+    for(int i = 0; i < 3; i++) {
+        lv_obj_t *b = bf_button(row, NULL, sz[i], settings()->map_veh_size[prof] == i ? 1 : 0);
+        lv_obj_set_size(b, 64, 44);
+        lv_obj_add_event_cb(b, vs_size_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    lv_obj_t *rb = bf_button(row, LV_SYMBOL_REFRESH, tr(S_MAP_VEH_RESET), 0);
+    lv_obj_set_height(rb, 44);
+    lv_obj_add_event_cb(rb, vs_reset_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void mark_cb(lv_event_t *e) { (void)e; veh_sheet(N.profile >= 0 && N.profile < BGR_PROFILES ? N.profile : BGR_CAR); }
 
 /* --------------------------------------------------------------- criação */
 static lv_obj_t *round_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb, intptr_t ud)
@@ -1801,7 +2865,7 @@ static int bench_zoom = 15;
 static uint64_t bench_cpu0, bench_t0;
 static const struct { const char *name; int ticks; } bench_ph[] = {
     { "parado", 100 }, { "arrasto", 80 }, { "assentar", 60 }, { "arrasto-so-lvgl", 60 }, { "assentar2", 40 }, { "zoom", 160 },
-    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 },
+    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 }, { "radar", 240 },
 };
 #define BENCH_TICK_MS 50
 
@@ -1887,6 +2951,10 @@ static void bench_cb(lv_timer_t *t)
     } else if(!strcmp(ph, "navegacao")) {           /* rota de demonstração e simulação */
         if(k == 0) scr_map_demo(0);
         if(k == 100) scr_map_demo(1);
+    } else if(!strcmp(ph, "radar")) {               /* placa de 60 km/h a 300 m, chegando a 80 km/h: bipes */
+        if(k == 0) { end_navigation(); radar_show(1000, 60, 300); }
+        if(k % 20 == 0) bench_fix(bench_lat, bench_lon + (k / 20) * 0.0002, 90, 80);
+        if(k == 239) radar_hide();
     }
     if(bench_tick >= bench_ph[bench_phase].ticks) {
         bench_end_phase();
@@ -1969,6 +3037,54 @@ static int find_maps(char paths[][1024], int max)
     return 0;
 }
 
+/* guia de faixas: o primeiro .bgl em big-gps/rotas (opcional) */
+static bgl_pack_t *open_lanes(void)
+{
+    const char *base = getenv("BIGFOSTON_BIGGPS");
+    if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
+    char dir[512], path[1024], err[256];
+    snprintf(dir, sizeof dir, "%s/rotas", base);
+    DIR *dp = opendir(dir);
+    if(!dp) return NULL;
+    bgl_pack_t *p = NULL;
+    struct dirent *de;
+    while(!p && (de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bgl") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        p = bgl_open(path, err, sizeof err);
+        if(!p) fprintf(stderr, "biggps: %s\n", err);
+    }
+    closedir(dp);
+    if(p) fprintf(stderr, "biggps: faixas de %u cruzamentos\n", bgl_count(p));
+    return p;
+}
+
+/* pontos de alerta: o .bga mais novo em big-gps/alertas (opcional; sem ele o mapa funciona igual) */
+static bga_pack_t *open_alerts(void)
+{
+    const char *base = getenv("BIGFOSTON_BIGGPS");
+    if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
+    char dir[512], path[1024], err[256];
+    snprintf(dir, sizeof dir, "%s/alertas", base);
+    DIR *dp = opendir(dir);
+    if(!dp) return NULL;
+    bga_pack_t *best = NULL;
+    struct dirent *de;
+    while((de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bga") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        bga_pack_t *p = bga_open(path, err, sizeof err);
+        if(!p) { fprintf(stderr, "biggps: %s\n", err); continue; }
+        if(!best || bga_built(p) > bga_built(best)) { bga_close(best); best = p; }
+        else bga_close(p);
+    }
+    closedir(dp);
+    if(best) fprintf(stderr, "biggps: %u pontos de alerta\n", bga_count(best));
+    return best;
+}
+
 static void show_message(const char *title, const char *sub)
 {
     msg = bf_card(ov);
@@ -1989,7 +3105,11 @@ static void create(lv_obj_t *parent, int arg)
     const bf_palette_t *p = pal();
     bool night = theme_dark_now();
 
-    if(!mk_dsc[0].data) mk_build();
+    if(!mk_dsc[0].data) {
+        uint64_t t0 = perf_now_us();
+        mk_build();
+        fprintf(stderr, "biggps: marcadores em %u ms\n", (unsigned)((perf_now_us() - t0) / 1000));
+    }
     ov = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, MAP_W, MAP_H);
@@ -2014,13 +3134,32 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_size(layer, MAP_W, MAP_H);
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(layer, layer_draw, LV_EVENT_DRAW_MAIN, NULL);
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) {        /* paradas: círculo laranja numerado */
+        stop_mk[i] = lv_obj_create(ov);
+        lv_obj_remove_style_all(stop_mk[i]);
+        lv_obj_set_size(stop_mk[i], 30, 30);
+        lv_obj_set_style_radius(stop_mk[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(stop_mk[i], lv_color_hex(0xe8710a), 0);
+        lv_obj_set_style_bg_opa(stop_mk[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(stop_mk[i], lv_color_white(), 0);
+        lv_obj_set_style_border_width(stop_mk[i], 3, 0);
+        lv_obj_remove_flag(stop_mk[i], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        char n[4];
+        snprintf(n, sizeof n, "%d", i + 1);
+        lv_obj_t *l = bf_label(stop_mk[i], n, BF_FONT_S, lv_color_white());
+        lv_obj_center(l);
+        lv_obj_add_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN);
+    }
     dmark = lv_image_create(ov);
     lv_image_set_src(dmark, &mk_dsc[3]);
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN);
     mark = lv_image_create(ov);
-    lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(mark, LV_OBJ_FLAG_CLICKABLE);    /* tocar abre "Seu marcador" */
+    lv_obj_set_ext_click_area(mark, 10);
+    lv_obj_add_event_cb(mark, mark_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+    veh_built_prof = -1;                             /* refaz o marcador com a escolha salva */
 
     /* controles */
     lv_obj_t *b = round_btn(ov, LV_SYMBOL_LEFT, close_cb, 0);
@@ -2053,7 +3192,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_align(info_chip, LV_ALIGN_BOTTOM_LEFT, 12, -12);
     info_lbl = bf_label(info_chip, "", BF_FONT_S, p->text);
 
-    lv_obj_t *sc = chip(ov);
+    lv_obj_t *sc = scale_chip = chip(ov);
     lv_obj_set_flex_flow(sc, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_align(sc, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
@@ -2101,15 +3240,31 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_width(ban_then, 516);
     lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
 
+    /* coluna da navegação (à esquerda, abaixo da faixa da manobra): o que falta e a velocidade;
+     * visão geral e encerrar embaixo */
     botbar = chip(ov);
     lv_obj_add_flag(botbar, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_flex_flow(botbar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(botbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(botbar, BF_SP_M, 0);
-    lv_obj_align(botbar, LV_ALIGN_BOTTOM_LEFT, 12, -12);
-    bot_lbl = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_set_size(botbar, NAV_COL_W, MAP_H - 124 - 12);
+    lv_obj_set_style_pad_all(botbar, 10, 0);
+    lv_obj_set_style_radius(botbar, 14, 0);
+    lv_obj_set_flex_flow(botbar, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(botbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(botbar, 4, 0);
+    lv_obj_align(botbar, LV_ALIGN_TOP_LEFT, 12, 124);
+    col_time = bf_label(botbar, "", BF_FONT_L, p->text);
+    col_dist = bf_label(botbar, "", BF_FONT_M, p->text);
+    col_eta = bf_label(botbar, "", BF_FONT_S, p->text_dim);
+    col_speed = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_set_style_pad_top(col_speed, 8, 0);
+    bot_lbl = col_time;
+    lv_obj_t *grow = bf_plain(botbar);                               /* empurra os botões para baixo */
+    lv_obj_set_width(grow, 1);
+    lv_obj_set_flex_grow(grow, 1);
+    lv_obj_t *vb = bf_button(botbar, LV_SYMBOL_EYE_OPEN, NULL, 0);     /* visão geral da rota */
+    lv_obj_set_size(vb, LV_PCT(100), 44);
+    lv_obj_add_event_cb(vb, overview_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *eb = bf_button(botbar, LV_SYMBOL_CLOSE, tr(S_MAP_END), 2);
-    lv_obj_set_height(eb, 44);
+    lv_obj_set_size(eb, LV_PCT(100), 48);
     lv_obj_add_event_cb(eb, end_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(botbar, LV_OBJ_FLAG_HIDDEN);
 
@@ -2117,11 +3272,53 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_bg_color(sim_chip, lv_color_hex(0xd93025), 0);
     lv_obj_set_style_bg_opa(sim_chip, LV_OPA_COVER, 0);
     bf_label(sim_chip, tr(S_MAP_SIMULATING), BF_FONT_S, lv_color_white());
-    lv_obj_align(sim_chip, LV_ALIGN_TOP_MID, 6, 124);
+    lv_obj_align(sim_chip, LV_ALIGN_TOP_RIGHT, -96, 124);
     lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
 
+    pick_chip = chip(ov);                         /* marcando uma parada */
+    lv_obj_set_style_bg_color(pick_chip, lv_color_hex(0xe8710a), 0);
+    bf_label(pick_chip, tr(S_MAP_PICK_STOP), BF_FONT_M, lv_color_white());
+    lv_obj_align(pick_chip, LV_ALIGN_TOP_MID, 0, 14);
+    lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+
+    al_chip = chip(ov);                           /* radar / lombada à frente */
+    lv_obj_set_style_bg_color(al_chip, lv_color_hex(0xf5b83d), 0);
+    al_lbl = bf_label(al_chip, "", BF_FONT_M, lv_color_hex(0x202124));
+    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 12 + NAV_COL_W + 12, 180);   /* abaixo das faixas, ao lado da coluna */
+
+    lane_img = lv_image_create(ov);                  /* faixas da próxima manobra */
+    lv_obj_align(lane_img, LV_ALIGN_TOP_MID, -20, 124);
+    lv_obj_set_style_radius(lane_img, 8, 0);
+    lv_obj_set_style_clip_corner(lane_img, true, 0);
+    lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
+    lane_for = -1;
+    lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+
+    sign = lv_obj_create(ov);                        /* placa do radar: branca, borda vermelha */
+    lv_obj_remove_style_all(sign);
+    lv_obj_set_style_radius(sign, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(sign, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(sign, lv_color_hex(0xd93025), 0);
+    lv_obj_set_style_border_opa(sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_width(sign, 12, 0);
+    lv_obj_set_style_shadow_opa(sign, LV_OPA_40, 0);
+    lv_obj_remove_flag(sign, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    sign_num = bf_label(sign, "", BF_FONT_CLOCK, lv_color_hex(0x111111));
+    sign_unit = bf_label(sign, "km/h", BF_FONT_S, lv_color_hex(0x111111));
+    sign_dist = chip(sign);
+    lv_obj_set_style_radius(sign_dist, 8, 0);
+    lv_obj_set_style_pad_ver(sign_dist, 1, 0);
+    lv_obj_set_style_pad_hor(sign_dist, 6, 0);
+    lv_obj_set_style_bg_color(sign_dist, lv_color_hex(0x202124), 0);
+    bf_label(sign_dist, "", BF_FONT_S, lv_color_white());
+    lv_obj_add_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    RS.idx = -1;
+    RS.over = -1;
+
     set_follow(follow);
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    rot_label();
 
     static char paths[MAXMAPS][1024];
     char err[256];
@@ -2132,6 +3329,9 @@ static void create(lv_obj_t *parent, int arg)
         tick = lv_timer_create(tick_cb, 100, NULL);
         return;
     }
+    R.alerts = open_alerts();
+    upts_load();
+    lanes_pack = open_lanes();
     R.pack = bgm_open(paths[0], err, sizeof err);
     for(int i = 1; R.pack && i < nmaps; i++)
         if(bgm_add(R.pack, paths[i], err, sizeof err)) fprintf(stderr, "biggps: %s\n", err);
@@ -2154,6 +3354,14 @@ static void create(lv_obj_t *parent, int arg)
         dsc[i].data = (const uint8_t *)R.buf[i];
         dsc[i].data_size = MAP_W * MAP_H * 2;
     }
+    /* vista inclinada: fontes de ~1,5 MB cada; sem memória, fica só o 2D */
+    pj_ok = false;
+    if(bgp_init(&PJ, MAP_W, MAP_H, PERSP_Y0, PERSP_YH) == 0) {
+        for(int i = 0; i < 2; i++) R.src[i] = malloc((size_t)PJ.sw * PJ.sh * 2);
+        pj_ok = R.src[0] && R.src[1];
+        if(!pj_ok) { free(R.src[0]); free(R.src[1]); R.src[0] = R.src[1] = NULL; }
+    }
+    rot_label();
     if(!R.buf[0] || !R.buf[1]) {
         show_message(tr(S_MAP_NOMAP), "sem memória");
         return;
@@ -2204,8 +3412,9 @@ static void create(lv_obj_t *parent, int arg)
             closedir(dp);
         }
     }
-    R.stop = R.has_req = R.done = 0;
+    R.stop = R.has_req = R.done = R.busy = 0;
     R.front = 0;
+    bgmo_reset(&MO);
     int rc = pthread_create(&R.th, NULL, worker, NULL);
     if(rc == 0) R.started = 1;
     else fprintf(stderr, "biggps: pthread_create: %s\n", strerror(rc));
@@ -2213,6 +3422,7 @@ static void create(lv_obj_t *parent, int arg)
     gps_update();
     request();
     tick = lv_timer_create(tick_cb, 100, NULL);
+    anim = lv_timer_create(anim_cb, ANIM_MS, NULL);
     bench_start();
     /* teste no aparelho sem toque (docs/big-gps): BIGGPS_DEMO=1 marca o destino da
      * demonstração e, 6 s depois, simula o percurso */
@@ -2230,6 +3440,7 @@ static void destroy(void)
     demo_alive = false;
     if(bench_tm) { lv_timer_delete(bench_tm); bench_tm = NULL; }
     if(tick) { lv_timer_delete(tick); tick = NULL; }
+    if(anim) { lv_timer_delete(anim); anim = NULL; }
     if(R.started) {
         pthread_mutex_lock(&R.mu);
         R.stop = 1;
@@ -2246,7 +3457,11 @@ static void destroy(void)
     voice_stop();
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
+    free(N.al);
+    for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
+    for(int a = 0; a < BGRT_MAXALT; a++) { free(R.alt[a]); R.alt[a] = NULL; R.alt_n[a] = 0; }
     memset(&N, 0, sizeof N);
+    bgmo_reset(&MO);
     free(R.route);
     R.route = NULL;
     R.route_n = 0;
@@ -2256,16 +3471,31 @@ static void destroy(void)
     if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
-    for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
+    bga_close(R.alerts);
+    R.alerts = NULL;
+    bgl_close(lanes_pack);
+    lanes_pack = NULL;
+    lane_img = NULL;
+    lane_e = NULL;
+    al_chip = al_lbl = pick_chip = NULL;
+    sign = sign_num = sign_unit = sign_dist = scale_chip = NULL;
+    RS.idx = -1;
+    for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
+    pj_ok = shown_persp = false;
+    lab_w = MAP_W;
+    lab_h = MAP_H;
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) stop_mk[i] = NULL;
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
     voice_lbl = search_btn = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;
+    col_time = col_dist = col_eta = col_speed = NULL;
     have_shown = 0;
     nplaced = 0;
 }
 
 /* --screenshot: 0 destino em Taguatinga (carro), 1 começa a simulação, 2 avança 60 s,
- * 3 abre a busca, 4 busca "hospital", 5 fecha a busca */
+ * 3 abre a busca, 4 busca "hospital", 5 fecha a busca, 6 abre "Seu marcador",
+ * 7 escolhe o sedã vermelho grande, 8 fecha o painel */
 void scr_map_demo(int step)
 {
     if(step == 0) {
@@ -2283,6 +3513,50 @@ void scr_map_demo(int step)
         if(sv_ta) { lv_textarea_set_text(sv_ta, "hospital"); sv_query(NULL); }
     } else if(step == 5) {
         search_close();
+    } else if(step == 6) {
+        veh_sheet(BGR_CAR);                          /* "Seu marcador" */
+    } else if(step == 7) {
+        settings()->map_veh_model[BGR_CAR] = BGVEH_SEDAN;   /* escolhe o sedã vermelho, G */
+        settings()->map_veh_color[BGR_CAR] = 1;
+        settings()->map_veh_size[BGR_CAR] = 2;
+        vs_changed();
+    } else if(step == 8) {
+        close_sheet();
+    } else if(step == 9) {                           /* escolhe a 1ª alternativa, se houver */
+        bgrt_alts_t ra;
+        for(int i = 0; i < 100 && !N.nalt; i++) {     /* espera as alternativas (segundo plano) */
+            if(bgrt_poll_alts(&ra)) {
+                if(ra.id == N.req_id && ra.n) {
+                    N.nalt = ra.n;
+                    for(int k = 0; k < ra.n; k++) { N.alt[k] = ra.r[k]; N.alt_toll[k] = ra.toll_arcs[k]; }
+                    set_alt_overlays();
+                } else for(int k = 0; k < ra.n; k++) bgn_free(&ra.r[k]);
+            }
+            if(!N.nalt) usleep(20000);
+        }
+        if(N.nalt) select_alt(0);
+    } else if(step == 11) {                          /* painel do destino no centro do mapa */
+        open_dest_sheet(cur.cx + 6400, cur.cy);       /* ~60 m a leste da posição */
+    } else if(step == 12) {                          /* marca "Lombada aqui" nesse ponto */
+        if(nupt < MAXUPT && upt_near(N.dx, N.dy) < 0) { upts[nupt++] = (bga_entry_t){ N.dx, N.dy, BGA_BUMP, 0, BGA_DIR_ANY }; upts_save(); }
+        N.has_dest = 0;
+        close_sheet();
+        cur.zoom256 = 17 * 256;
+        update_scale();
+        request();
+    } else if(step == 13 || step == 14) {           /* placa do radar: grande; pequena e acima do limite */
+        radar_show(1000, 60, 240);
+        if(step == 14) { RS.shown_ms = now_ms() - SIGN_SHRINK_MS - SIGN_ANIM_MS; pos_speed = 72; }
+        radar_tick();
+    } else if(step == 15) {
+        radar_hide();
+    } else if(step == 10) {                          /* guia de faixas de exemplo (captura) */
+        static bgl_entry_t ex = { .n = 4, .lane = { BGL_LEFT, BGL_THROUGH, BGL_THROUGH, BGL_THROUGH | BGL_RIGHT } };
+        lane_e = &ex;
+        lane_fit = bgl_fit(&ex, BGN_RIGHT);
+        lane_for = -2;                                /* não é de nenhuma manobra: a próxima refaz */
+        lanes_draw(BGN_RIGHT);
+        lv_obj_remove_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

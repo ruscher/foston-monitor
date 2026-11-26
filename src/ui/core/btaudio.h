@@ -12,4 +12,10 @@ bool btaudio_live(void);
 bool btaudio_samples(int16_t *out, int n);
 /* true: o bluealsa-aplay solta o dispositivo e descarta o áudio; false: volta a tocar */
 void btaudio_hold(bool on);
+/* Toca a voz (mono, rate Hz) junto com a música do celular, que abaixa enquanto ela fala
+ * (patch 0002 do bluealsa-aplay, /run/bluealsa-voice). Bloqueia até a voz sair. Devolve
+ * quantas amostras foram tocadas: 0 quando o bluealsa-aplay não está tocando música agora,
+ * menos que n quando a música parou no meio (o resto fica para o /dev/dsp). stopped() true
+ * descarta o que falta e devolve n. */
+uint32_t btaudio_say(const int16_t *pcm, uint32_t n, uint32_t rate, bool (*stopped)(void));
 #endif
