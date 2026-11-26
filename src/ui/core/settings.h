@@ -69,6 +69,7 @@ typedef struct {
     /* Big GPS: marcador da posição por perfil (carro, moto, bicicleta, a pé): modelo
      * (BGVEH_*; -1 = o padrão do perfil), cor (0..7) e tamanho (0 P, 1 M, 2 G) */
     signed char map_veh_model[4], map_veh_color[4], map_veh_size[4];
+    bool map_persp;     /* Big GPS: vista inclinada (3D) quando o mapa segue no rumo */
     int  kbd_layout;    /* teclado físico: BF_KBD_* (core/hwkbd.h); 0 = pelo idioma */
 } bf_settings_t;
 

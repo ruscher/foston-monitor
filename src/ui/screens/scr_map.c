@@ -24,6 +24,7 @@
 #include "../biggps/bgmotion.h"
 #include "../biggps/bgalert.h"
 #include "../biggps/bgvehicle.h"
+#include "../biggps/bgpersp.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -38,6 +39,8 @@
 
 #define MAP_W   800
 #define MAP_H   480
+/* superfície onde os rótulos são postos: a tela (2D) ou a fonte da vista inclinada */
+static int lab_w = MAP_W, lab_h = MAP_H;
 #define MAXLBL  96
 #define BTN     56
 #define BIGGPS_DIR_DEFAULT "/mnt/sd/BigFoston/big-gps"
@@ -240,12 +243,12 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
         int x0 = cx - w / 2, y0 = cy - h / 2;
         for(int y = 0; y < h; y++) {
             int Y = y0 + y;
-            if(Y < 0 || Y >= MAP_H) continue;
+            if(Y < 0 || Y >= lab_h) continue;
             for(int x = 0; x < w; x++) {
                 int X = x0 + x;
-                if(X < 0 || X >= MAP_W) continue;
+                if(X < 0 || X >= lab_w) continue;
                 uint32_t c = px[y * w + x];
-                blend565(&buf[Y * MAP_W + X], c, c >> 24);
+                blend565(&buf[Y * lab_w + X], c, c >> 24);
             }
         }
         return;
@@ -255,9 +258,9 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
     int32_t cs = (int32_t)lround(cos(r) * 65536), sn = (int32_t)lround(sin(r) * 65536);
     int hw = (int)(fabs(w * cos(r)) + fabs(h * sin(r))) / 2 + 2, hh = (int)(fabs(w * sin(r)) + fabs(h * cos(r))) / 2 + 2;
     for(int Y = cy - hh; Y <= cy + hh; Y++) {
-        if(Y < 0 || Y >= MAP_H) continue;
+        if(Y < 0 || Y >= lab_h) continue;
         for(int X = cx - hw; X <= cx + hw; X++) {
-            if(X < 0 || X >= MAP_W) continue;
+            if(X < 0 || X >= lab_w) continue;
             int dx = X - cx, dy = Y - cy;
             /* rotação inversa: fonte = R(-ang) * destino */
             int32_t u = (int32_t)(((int64_t)dx * cs + (int64_t)dy * sn) >> 8) + (w << 7) - 128;
@@ -281,10 +284,19 @@ static void compose_bitmap(uint16_t *buf, const uint32_t *px, int w, int h, int 
             }
             if(!A) continue;
             uint32_t c = (Rr / A) << 16 | (G / A) << 8 | (B / A);
-            blend565(&buf[Y * MAP_W + X], c, A >> 16);
+            blend565(&buf[Y * lab_w + X], c, A >> 16);
         }
     }
 }
+
+/* ------------------------------------------------ vista inclinada (biggps/bgpersp.h)
+ * Carro na linha 350, horizonte 800 px acima da tela: a fonte tem ~1,9x a área da tela e o
+ * remapeamento custa ~27 ms no FOSTON. Liga com o acompanhamento no rumo e o botão em "3D";
+ * volta sozinha ao 2D se os quadros do motor passarem de 500 ms em média. */
+#define PERSP_Y0 350
+#define PERSP_YH (-800)
+static bgp_t PJ;
+static bool pj_ok, shown_persp, persp_auto_off;
 
 /* ------------------------------------------------ pontos de alerta no quadro
  * Pequenos e desenhados com o rasterizador (sem imagem nem SVG por quadro). Cada tipo só
@@ -347,7 +359,7 @@ static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t
     int z = v->zoom256 >> 8;
     if(!p || z < 13) return;
     uint32_t x0 = UINT32_MAX, y0 = UINT32_MAX, x1 = 0, y1 = 0;
-    static const int cx[4] = { 0, MAP_W, 0, MAP_W }, cy[4] = { 0, 0, MAP_H, MAP_H };
+    const int cx[4] = { 0, s->w, 0, s->w }, cy[4] = { 0, 0, s->h, s->h };
     for(int i = 0; i < 4; i++) {                       /* caixa do quadro (girado) no mundo */
         uint32_t wx, wy;
         bgr_screen_to_world(v, s, cx[i], cy[i], &wx, &wy);
@@ -368,7 +380,7 @@ static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t
             if(found[i]->kind != k) continue;
             int sx, sy;
             bgr_world_to_screen(v, s, found[i]->x, found[i]->y, &sx, &sy);
-            if(sx < -14 || sy < -14 || sx > MAP_W + 14 || sy > MAP_H + 14) continue;
+            if(sx < -14 || sy < -14 || sx > s->w + 14 || sy > s->h + 14) continue;
             if(k == BGA_SIGNAL) icon_signal(s, sx, sy);
             else if(k == BGA_CAMERA) icon_camera(s, sx, sy);
             else if(k == BGA_BUMP) icon_bump(s, sx, sy);
@@ -396,6 +408,8 @@ static struct {
     int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
+    uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
+    int req_persp, done_persp;
 } R = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
 static void *worker(void *arg)
@@ -417,6 +431,7 @@ static void *worker(void *arg)
         while(!R.stop && (!R.has_req || R.done)) pthread_cond_wait(&R.cv, &R.mu);
         if(R.stop) break;
         bgr_view_t v = R.req;
+        int persp = R.req_persp;
         R.has_req = 0;
         R.busy = 1;
         int back = !R.front;
@@ -431,7 +446,9 @@ static void *worker(void *arg)
         uint32_t rpx = R.route_px, rpy = R.route_py;
         pthread_mutex_unlock(&R.mu);
 
-        rast_surface_t s = { R.buf[back], MAP_W, MAP_H, MAP_W };
+        /* vista inclinada: o motor desenha a fonte (maior); a interface projeta na tela */
+        rast_surface_t s = persp ? (rast_surface_t){ R.src[back], PJ.sw, PJ.sh, PJ.sw }
+                                 : (rast_surface_t){ R.buf[back], MAP_W, MAP_H, MAP_W };
         bgr_stats_t st;
         int n = bgr_render(R.pack, &v, &s, tmp, MAXLBL, &st);
         if(rn >= 2) {
@@ -463,6 +480,7 @@ static void *worker(void *arg)
         pthread_mutex_lock(&R.mu);
         R.nlbl[back] = n;
         R.done_view = v;
+        R.done_persp = persp;
         R.ms = (st.us_fetch + st.us_draw) / 1000;
         R.us_fetch = st.us_fetch;
         R.us_draw = st.us_draw;
@@ -528,8 +546,18 @@ static uint16_t icon_px[80 * 80];
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
 static void anim_step(bool fix);
+static bool persp_wanted(void)
+{
+    static int env = -1;                               /* BIGGPS_PERSP=0 desliga (comparação A/B) */
+    if(env < 0) { const char *e = getenv("BIGGPS_PERSP"); env = !(e && *e == '0'); }
+    /* "Econômico" (Ajustes > Desempenho) também fica no 2D: a inclinada custa ~2x por quadro */
+    return env && pj_ok && !persp_auto_off && settings()->map_persp && follow && heading_up
+        && settings()->map_detail != BF_DETAIL_ECONOMIC;
+}
+
 static void anchor(int *ax, int *ay)
 {
+    if(persp_wanted()) { *ax = PJ.scx; *ay = PJ.sy0; return; }   /* o carro na fonte */
     *ax = MAP_W / 2;
     *ay = follow && heading_up ? MAP_H * 2 / 3 : MAP_H / 2;   /* à frente aparece mais */
 }
@@ -561,6 +589,7 @@ static void request(void)
     cur.night = theme_dark_now();
     pthread_mutex_lock(&R.mu);
     R.req = cur;
+    R.req_persp = persp_wanted();
     R.has_req = 1;
     pthread_cond_signal(&R.cv);
     pthread_mutex_unlock(&R.mu);
@@ -568,6 +597,12 @@ static void request(void)
 
 static void update_marker(void);
 static void update_offset(void);
+
+static void rot_label(void)
+{
+    bool d3 = settings()->map_persp && pj_ok && !persp_auto_off && settings()->map_detail != BF_DETAIL_ECONOMIC;
+    if(rot_lbl) lv_label_set_text(rot_lbl, !heading_up ? "N" : d3 ? "3D" : LV_SYMBOL_UP);
+}
 
 static int render_busy(void)
 {
@@ -638,6 +673,35 @@ static void anim_cb(lv_timer_t *t)
     if(!dragging) anim_step(false);
 }
 
+/* a superfície do quadro na tela (2D) ou da fonte (inclinada) */
+static rast_surface_t shown_surf(void)
+{
+    return shown_persp ? (rast_surface_t){ NULL, PJ.sw, PJ.sh, PJ.sw } : (rast_surface_t){ NULL, MAP_W, MAP_H, MAP_W };
+}
+
+/* um ponto do mundo na tela, com o deslocamento atual (e a projeção, na vista inclinada);
+ * 0 quando cai além do fundo da vista inclinada */
+static int disp_point(uint32_t wx, uint32_t wy, int *x, int *y)
+{
+    rast_surface_t s = shown_surf();
+    bgr_world_to_screen(&shown, &s, wx, wy, x, y);
+    *x += off_x;
+    *y += off_y;
+    if(!shown_persp) return 1;
+    int px, py;
+    if(!bgp_project(&PJ, *x, *y, &px, &py)) return 0;
+    *x = px;
+    *y = py;
+    return 1;
+}
+
+/* vista inclinada: projeta a fonte (com o deslocamento atual) no quadro da tela */
+static void persp_draw(void)
+{
+    uint16_t *src = R.src[R.front];
+    bgp_remap(&PJ, src, R.buf[R.front], MAP_W, off_x, off_y, src[0]);
+}
+
 /* desloca a imagem atual para mostrar 'cur' enquanto o quadro novo é desenhado */
 static void update_offset(void)
 {
@@ -647,7 +711,7 @@ static void update_offset(void)
     if(drot > 180) drot = 360 - drot;
     /* giro pequeno (a câmera virando aos poucos): desloca pelo centro, o quadro novo acerta o resto */
     if(shown.zoom256 == cur.zoom256 && drot <= 12 && shown.ox == cur.ox && shown.oy == cur.oy) {
-        rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+        rast_surface_t s = shown_surf();
         int sx, sy;
         bgr_world_to_screen(&shown, &s, cur.cx, cur.cy, &sx, &sy);
         off_x = shown.ox - sx;
@@ -660,7 +724,11 @@ static void update_offset(void)
     last_x = off_x;
     last_y = off_y;
     last_img = swap_serial;
-    lv_obj_set_pos(img, off_x, off_y);
+    if(shown_persp) {                                /* a imagem fica parada; a fonte é que anda */
+        persp_draw();
+        lv_obj_set_pos(img, 0, 0);
+        lv_image_cache_drop(&dsc[R.front]);
+    } else lv_obj_set_pos(img, off_x, off_y);
     lv_obj_invalidate(layer);
     for(int i = 0; i < nrot; i++)
         if(rot[i].img) lv_obj_set_pos(rot[i].img, rot[i].cx - (int)rot[i].dsc.header.w / 2 + off_x, rot[i].cy - (int)rot[i].dsc.header.h / 2 + off_y);
@@ -686,7 +754,7 @@ static void layout_labels(const lbl_t *l, int n)
     };
     rot_clear();
     nplaced = 0;
-    for(unsigned i = 0; i < sizeof reserved / sizeof reserved[0]; i++) {
+    for(unsigned i = 0; !shown_persp && i < sizeof reserved / sizeof reserved[0]; i++) {
         placed[nplaced].a = reserved[i];
         placed[nplaced].font = NULL;
         placed[nplaced].text[0] = 0;
@@ -696,7 +764,7 @@ static void layout_labels(const lbl_t *l, int n)
     if(have_pos) {                                   /* nem sobre o marcador da posição */
         uint32_t wx, wy;
         int sx, sy;
-        rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+        rast_surface_t s = shown_surf();
         bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
         bgr_world_to_screen(&shown, &s, wx, wy, &sx, &sy);
         placed[nplaced].a = (lv_area_t){ sx - 26, sy - 26, sx + 26, sy + 26 };
@@ -724,7 +792,7 @@ static void layout_labels(const lbl_t *l, int n)
             a = (lv_area_t){ l[i].x - hw, l[i].y - hh, l[i].x + hw, l[i].y + hh };
             if(nrot >= MAXROT) continue;
         }
-        if(a.x1 < 2 || a.y1 < 2 || a.x2 > MAP_W - 2 || a.y2 > MAP_H - 2 || overlaps(&a)) continue;
+        if(a.x1 < 2 || a.y1 < 2 || a.x2 > lab_w - 2 || a.y2 > lab_h - 2 || overlaps(&a)) continue;
         placed[nplaced].a = a;
         placed[nplaced].font = f;
         placed[nplaced].angle = ang;
@@ -819,10 +887,7 @@ static void update_dest_marker(void)
     if(!dmark) return;
     if(!N.has_dest || !have_shown) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     int sx, sy;
-    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
-    bgr_world_to_screen(&shown, &s, N.dx, N.dy, &sx, &sy);
-    sx += off_x;
-    sy += off_y;
+    if(!disp_point(N.dx, N.dy, &sx, &sy)) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     lv_obj_set_pos(dmark, sx - 24, sy - 46);
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_HIDDEN);
@@ -835,12 +900,9 @@ static void update_marker(void)
     if(!have_pos || !have_shown) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     uint32_t wx, wy;
     int sx, sy;
-    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
     if(MO.has_disp) { wx = (uint32_t)llround(MO.x); wy = (uint32_t)llround(MO.y); }   /* posição animada */
     else bgr_lonlat_to_world(pos_lon, pos_lat, &wx, &wy);
-    bgr_world_to_screen(&shown, &s, wx, wy, &sx, &sy);
-    sx += off_x;
-    sy += off_y;
+    if(!disp_point(wx, wy, &sx, &sy)) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
     veh_sync();
     bool moving = pos_live && !MO.stale && pos_speed >= 3.0, ok = pos_live && !MO.stale;
@@ -883,7 +945,7 @@ static void ov_draw(lv_event_t *e)
     d.bg_color = ov_bg;
     d.bg_opa = LV_OPA_COVER;
     bool full = !have_shown || lv_obj_has_flag(img, LV_OBJ_FLAG_HIDDEN);
-    int ox = full ? 0 : off_x, oy = full ? 0 : off_y;
+    int ox = full || shown_persp ? 0 : off_x, oy = full || shown_persp ? 0 : off_y;
     lv_area_t a;
     if(full || ox >= MAP_W || ox <= -MAP_W || oy >= MAP_H || oy <= -MAP_H) {
         a = (lv_area_t){ 0, 0, MAP_W - 1, MAP_H - 1 };
@@ -1213,7 +1275,7 @@ static void end_navigation(void)
     if(info_chip) lv_obj_remove_flag(info_chip, LV_OBJ_FLAG_HIDDEN);
     if(search_btn) lv_obj_remove_flag(search_btn, LV_OBJ_FLAG_HIDDEN);
     heading_up = N.prev_heading_up;
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    rot_label();
     cur.rot = 0;
     zoom_goal = nav_zoom = -1;
     update_marker();
@@ -1238,7 +1300,7 @@ static void start_navigation(bool simulate)
     N.route.off_count = 0;
     N.prev_heading_up = heading_up;
     heading_up = true;
-    lv_label_set_text(rot_lbl, LV_SYMBOL_UP);
+    rot_label();
     follow = true;
     lv_obj_remove_flag(banner, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(botbar, LV_OBJ_FLAG_HIDDEN);
@@ -1921,15 +1983,24 @@ static void tick_cb(lv_timer_t *t)
         R.front = !R.front;
         R.done = 0;
         shown = R.done_view;
+        shown_persp = R.done_persp;
         have_shown = 1;
         uint64_t t0 = perf_now_us();
+        /* inclinada: os rótulos vão na fonte (a projeção os leva junto); 2D: direto no quadro */
+        lab_w = shown_persp ? PJ.sw : MAP_W;
+        lab_h = shown_persp ? PJ.sh : MAP_H;
         layout_labels(R.lbl[R.front], R.nlbl[R.front]);
-        compose_labels(R.buf[R.front]);
+        compose_labels(shown_persp ? R.src[R.front] : R.buf[R.front]);
         perf_add(PERF_MAP_LABELS, (uint32_t)(perf_now_us() - t0));
         perf_add(PERF_MAP, R.us_fetch + R.us_draw);
         {
             unsigned ms = (R.us_fetch + R.us_draw) / 1000;
             frame_ema_ms = frame_ema_ms ? (frame_ema_ms * 3 + ms) / 4 : ms;
+            if(shown_persp && frame_ema_ms > 500 && !persp_auto_off) {
+                persp_auto_off = true;                   /* pesado demais: volta ao 2D nesta sessão */
+                fprintf(stderr, "biggps: vista inclinada desligada (quadros de %u ms)\n", frame_ema_ms);
+                rot_label();
+            }
         }
         perf_add(PERF_MAP_FETCH, R.us_fetch);
         perf_add(PERF_MAP_DRAW, R.us_draw);
@@ -2095,12 +2166,17 @@ static void overview_cb(lv_event_t *e)
     fit_route();
 }
 
+/* norte para cima -> no rumo -> inclinada (3D) -> norte ... */
 static void rot_cb(lv_event_t *e)
 {
     (void)e;
-    heading_up = !heading_up;
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    if(!heading_up) { heading_up = true; settings()->map_persp = false; }
+    else if(!settings()->map_persp && pj_ok) { settings()->map_persp = true; persp_auto_off = false; }
+    else { heading_up = false; settings()->map_persp = false; }
+    settings_save();
+    rot_label();
     cur.rot = follow ? cam_rot() : 0;
+    anchor(&cur.ox, &cur.oy);
     request();
 }
 
@@ -2645,7 +2721,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
 
     set_follow(follow);
-    lv_label_set_text(rot_lbl, heading_up ? LV_SYMBOL_UP : "N");
+    rot_label();
 
     static char paths[MAXMAPS][1024];
     char err[256];
@@ -2679,6 +2755,14 @@ static void create(lv_obj_t *parent, int arg)
         dsc[i].data = (const uint8_t *)R.buf[i];
         dsc[i].data_size = MAP_W * MAP_H * 2;
     }
+    /* vista inclinada: fontes de ~1,5 MB cada; sem memória, fica só o 2D */
+    pj_ok = false;
+    if(bgp_init(&PJ, MAP_W, MAP_H, PERSP_Y0, PERSP_YH) == 0) {
+        for(int i = 0; i < 2; i++) R.src[i] = malloc((size_t)PJ.sw * PJ.sh * 2);
+        pj_ok = R.src[0] && R.src[1];
+        if(!pj_ok) { free(R.src[0]); free(R.src[1]); R.src[0] = R.src[1] = NULL; }
+    }
+    rot_label();
     if(!R.buf[0] || !R.buf[1]) {
         show_message(tr(S_MAP_NOMAP), "sem memória");
         return;
@@ -2789,7 +2873,10 @@ static void destroy(void)
     bga_close(R.alerts);
     R.alerts = NULL;
     al_chip = al_lbl = NULL;
-    for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; }
+    for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
+    pj_ok = shown_persp = false;
+    lab_w = MAP_W;
+    lab_h = MAP_H;
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
     voice_lbl = search_btn = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;

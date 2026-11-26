@@ -66,6 +66,7 @@ void settings_defaults(bf_settings_t *s)
     s->map_detail = BF_DETAIL_AUTO;
     s->map_avoid_toll = false;
     s->map_alerts = true;
+    s->map_persp = true;
     for(int i = 0; i < 4; i++) { s->map_veh_model[i] = -1; s->map_veh_color[i] = 0; s->map_veh_size[i] = 1; }
     s->kbd_layout = 0;                  /* automático: ABNT2 em português, EUA nas outras */
 }
@@ -171,6 +172,7 @@ void settings_load(void)
         else if(!strcmp(k, "map_detail"))    { int d = atoi(v); cur.map_detail = d >= 0 && d < BF_DETAIL__N ? d : BF_DETAIL_AUTO; }
         else if(!strcmp(k, "map_avoid_toll")) cur.map_avoid_toll = atoi(v) != 0;
         else if(!strcmp(k, "map_alerts"))   cur.map_alerts = atoi(v) != 0;
+        else if(!strcmp(k, "map_persp"))    cur.map_persp = atoi(v) != 0;
         else if(!strncmp(k, "map_veh_", 8) && k[8] >= '0' && k[8] <= '3' && !k[9]) {
             int i = k[8] - '0', m = -1, c = 0, z = 1;
             if(sscanf(v, "%d %d %d", &m, &c, &z) == 3) {
@@ -230,6 +232,7 @@ bool settings_save(void)
     fprintf(f, "map_detail = %d\n", cur.map_detail);
     fprintf(f, "map_avoid_toll = %d\n", cur.map_avoid_toll ? 1 : 0);
     fprintf(f, "map_alerts = %d\n", cur.map_alerts ? 1 : 0);
+    fprintf(f, "map_persp = %d\n", cur.map_persp ? 1 : 0);
     for(int i = 0; i < 4; i++)
         fprintf(f, "map_veh_%d = %d %d %d\n", i, cur.map_veh_model[i], cur.map_veh_color[i], cur.map_veh_size[i]);
     fprintf(f, "show_date = %d\n", cur.show_date);
