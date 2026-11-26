@@ -39,7 +39,7 @@ void bgn_icon(rast_surface_t *s, int type, int exit, uint16_t fg, uint16_t dim, 
     case BGN_LEFT: ang = -90; break;
     case BGN_SHARP_LEFT: ang = -135; break;
     }
-    if (type == BGN_ARRIVE) {
+    if (type == BGN_ARRIVE || type == BGN_WAYPOINT) {
         /* map pin */
         double r = W * 0.24;
         int32_t q[6] = { (int32_t)((cx - r * 0.85) * S), (int32_t)(H * 0.42 * S), (int32_t)((cx + r * 0.85) * S), (int32_t)(H * 0.42 * S),

@@ -49,7 +49,8 @@ def frases():
     verbos = ["Siga em frente", "Siga", "Continue em frente", "Vire levemente à direita", "Vire à direita",
               "Vire acentuadamente à direita", "Faça o retorno", "Vire acentuadamente à esquerda", "Vire à esquerda",
               "Vire levemente à esquerda", "Mantenha-se à direita", "Mantenha-se à esquerda",
-              "Pegue o acesso à direita", "Pegue o acesso à esquerda", "Você chegou ao destino"]
+              "Pegue o acesso à direita", "Pegue o acesso à esquerda", "Você chegou ao destino",
+              "Você chegou à parada"]
     f += verbos
     f += [v[0].lower() + v[1:] for v in verbos]      # depois de "Em 300 metros," vem minúsculo (mesma chave)
     f += [f"Na rotatória, pegue a {n}ª saída" for n in range(1, 9)]

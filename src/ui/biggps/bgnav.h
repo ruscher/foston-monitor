@@ -10,7 +10,8 @@
 typedef enum {
     BGN_DEPART, BGN_STRAIGHT, BGN_SLIGHT_RIGHT, BGN_RIGHT, BGN_SHARP_RIGHT, BGN_UTURN,
     BGN_SHARP_LEFT, BGN_LEFT, BGN_SLIGHT_LEFT, BGN_KEEP_RIGHT, BGN_KEEP_LEFT,
-    BGN_RAMP_RIGHT, BGN_RAMP_LEFT, BGN_ROUNDABOUT, BGN_ARRIVE
+    BGN_RAMP_RIGHT, BGN_RAMP_LEFT, BGN_ROUNDABOUT, BGN_ARRIVE,
+    BGN_WAYPOINT               /* a stop on the way (route made of legs, bgn_append) */
 } bgn_type_t;
 
 typedef struct {
@@ -49,6 +50,10 @@ typedef struct {
 /* Build the polyline and the maneuvers.  0 on success. */
 int bgn_build(bgr_pack_t *p, const bgr_route_t *r, bgn_route_t *out);
 void bgn_free(bgn_route_t *r);
+/* Route a, then leg b from where a ends (a stop): a's arrival becomes BGN_WAYPOINT, b's
+ * departure is dropped, distances and times of b continue a's.  b is consumed (freed) in
+ * every case.  0 on success; -1 out of memory (a unchanged). */
+int bgn_append(bgn_route_t *a, bgn_route_t *b);
 
 /* Track one GPS fix (world coordinates; heading in degrees or -1). */
 void bgn_update(bgn_route_t *r, uint32_t x, uint32_t y, double speed_kmh, double heading, bgn_state_t *st);

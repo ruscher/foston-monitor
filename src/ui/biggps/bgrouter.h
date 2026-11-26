@@ -14,9 +14,12 @@ typedef struct {
     uint32_t sx, sy;           /* start (world) */
     int heading;               /* degrees, -1 = unknown (prefers the road going that way) */
     uint32_t dx, dy;           /* destination (world) */
+    int nstops;                /* stops on the way, in order (0..BGRT_MAXSTOPS) */
+    uint32_t stx[3], sty[3];
     int avoid_toll;            /* use the "sem pedágio" pack when there is one */
 } bgrt_req_t;
 
+#define BGRT_MAXSTOPS 3
 enum { BGRT_OK = 0, BGRT_NOROUTE = -1, BGRT_ERROR = -2, BGRT_NOFILE = -3, BGRT_NOSTART = -4, BGRT_NODEST = -5 };
 
 typedef struct {

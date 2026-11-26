@@ -26,7 +26,9 @@ static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static bool started, has_text, stop_now;
 static char pending[512];
-static bgv_pack_t *pack;
+#define MAXPACKS 4
+static bgv_pack_t *packs[MAXPACKS];             /* o maior primeiro; um trecho vem do primeiro que o tiver */
+static int npacks;
 
 static const char *base_dir(void)
 {
@@ -34,37 +36,44 @@ static const char *base_dir(void)
     return b && *b ? b : BIGGPS_DIR_DEFAULT;
 }
 
-/* o .bgv da pasta voz com mais frases (um pacote com nomes de ruas ganha do só com as fixas) */
-static bgv_pack_t *open_pack(void)
+/* os .bgv da pasta voz, o de mais frases primeiro: um pacote regional (com nomes de ruas) e o
+ * das frases fixas, que pode ser refeito sozinho quando entra uma frase nova */
+static void open_packs(void)
 {
     char dir[600], path[900], err[256];
     snprintf(dir, sizeof dir, "%s/voz", base_dir());
     DIR *dp = opendir(dir);
-    if(!dp) return NULL;
-    bgv_pack_t *best = NULL;
+    if(!dp) return;
     struct dirent *de;
-    while((de = readdir(dp))) {
+    while((de = readdir(dp)) && npacks < MAXPACKS) {
         size_t l = strlen(de->d_name);
         if(l < 5 || strcasecmp(de->d_name + l - 4, ".bgv") || de->d_name[0] == '.') continue;
         snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
         bgv_pack_t *p = bgv_open(path, err, sizeof err);
         if(!p) { fprintf(stderr, "voz: %s\n", err); continue; }
-        if(!best || bgv_count(p) > bgv_count(best)) { bgv_close(best); best = p; }
-        else bgv_close(p);
+        if(npacks && bgv_rate(p) != bgv_rate(packs[0])) { fprintf(stderr, "voz: %s com outra taxa, ignorado\n", path); bgv_close(p); continue; }
+        int i = npacks++;
+        while(i > 0 && bgv_count(packs[i - 1]) < bgv_count(p)) { packs[i] = packs[i - 1]; i--; }
+        packs[i] = p;
     }
     closedir(dp);
-    if(best) fprintf(stderr, "voz: Faber, %u frases\n", bgv_count(best));
-    return best;
+    for(int i = 0; i < npacks; i++) fprintf(stderr, "voz: Faber, %u frases\n", bgv_count(packs[i]));
+}
+
+static int find_clip(const char *text, bgv_clip_t *c)
+{
+    for(int i = 0; i < npacks; i++) if(bgv_find(packs[i], text, c)) return 1;
+    return 0;
 }
 
 static pthread_once_t pack_once = PTHREAD_ONCE_INIT;
-static void load_pack(void) { pack = open_pack(); }
+static void load_pack(void) { open_packs(); }
 
 /* a interface e a thread da fala chamam: abre uma vez só */
 static bgv_pack_t *get_pack(void)
 {
     pthread_once(&pack_once, load_pack);
-    return pack;
+    return npacks ? packs[0] : NULL;
 }
 
 bool voice_available(void)
@@ -106,7 +115,7 @@ static void speak(const char *text)
         if(l >= sizeof part) l = sizeof part - 1;
         memcpy(part, s, l);
         part[l] = 0;
-        if(bgv_find(p, part, &clips[nc])) total += clips[nc++].nsamples + gap;
+        if(find_clip(part, &clips[nc])) total += clips[nc++].nsamples + gap;
         else if(part[0]) fprintf(stderr, "voz: sem o trecho \"%s\" no pacote\n", part);
         s = bar ? bar + 1 : s + l;
     }

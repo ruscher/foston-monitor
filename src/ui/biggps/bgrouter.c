@@ -74,23 +74,34 @@ static void compute(const bgrt_req_t *q, bgrt_res_t *r)
     bgr_pack_t *p = pack_for(q->profile, q->avoid_toll, &variant);
     if (!p) { r->rc = BGRT_NOFILE; return; }
     r->toll_avoided = variant == 1 && bgr_avoids_toll(p);
-    bgr_snap_t s[2], d[2];
-    int ns = bgr_snap(p, q->sx, q->sy, q->heading, 200, s, 2);
-    int nd = bgr_snap(p, q->dx, q->dy, -1, 500, d, 2);
-    if (!ns) { r->rc = BGRT_NOSTART; return; }
-    if (!nd) { r->rc = BGRT_NODEST; return; }
-    /* moving: only the road in the direction of travel (no U-turn on the spot) */
-    if (q->heading >= 0 && ns > 1) {
-        int diff = abs(((s[1].bearing - q->heading) % 360 + 540) % 360 - 180);
-        if (diff > 90) ns = 1;
+    /* start -> stops -> destination: one ordinary query per leg, joined (bgn_append) */
+    uint32_t px[BGRT_MAXSTOPS + 2], py[BGRT_MAXSTOPS + 2];
+    int np = 0, nst = q->nstops < 0 ? 0 : q->nstops > BGRT_MAXSTOPS ? BGRT_MAXSTOPS : q->nstops;
+    px[np] = q->sx; py[np++] = q->sy;
+    for (int i = 0; i < nst; i++) { px[np] = q->stx[i]; py[np++] = q->sty[i]; }
+    px[np] = q->dx; py[np++] = q->dy;
+    for (int leg = 0; leg + 1 < np; leg++) {
+        bgr_snap_t s[2], d[2];
+        int hd = leg == 0 ? q->heading : -1;
+        int ns = bgr_snap(p, px[leg], py[leg], hd, leg == 0 ? 200 : 500, s, 2);
+        int nd = bgr_snap(p, px[leg + 1], py[leg + 1], -1, 500, d, 2);
+        if (!ns) { bgn_free(&r->route); r->rc = leg == 0 ? BGRT_NOSTART : BGRT_NODEST; return; }
+        if (!nd) { bgn_free(&r->route); r->rc = BGRT_NODEST; return; }
+        /* moving: only the road in the direction of travel (no U-turn on the spot) */
+        if (hd >= 0 && ns > 1) {
+            int diff = abs(((s[1].bearing - hd) % 360 + 540) % 360 - 180);
+            if (diff > 90) ns = 1;
+        }
+        bgr_route_t rt;
+        int rc = bgr_route(p, s, ns, d, nd, &rt, NULL);
+        if (rc) { bgn_free(&r->route); r->rc = rc == -1 ? BGRT_NOROUTE : BGRT_ERROR; return; }
+        bgn_route_t part;
+        if (bgn_build(p, &rt, &part)) { bgr_route_free(&rt); bgn_free(&r->route); r->rc = BGRT_ERROR; return; }
+        if (leg + 2 == np) bgr_way_name(p, bgr_arc_way(p, rt.arcs[rt.narcs - 1]), r->dest_name, sizeof r->dest_name);
+        r->toll_arcs += rt.toll_arcs;
+        bgr_route_free(&rt);
+        if (bgn_append(&r->route, &part)) { bgn_free(&r->route); r->rc = BGRT_ERROR; return; }
     }
-    bgr_route_t rt;
-    int rc = bgr_route(p, s, ns, d, nd, &rt, NULL);
-    if (rc) { r->rc = rc == -1 ? BGRT_NOROUTE : BGRT_ERROR; return; }
-    if (bgn_build(p, &rt, &r->route)) { bgr_route_free(&rt); r->rc = BGRT_ERROR; return; }
-    bgr_way_name(p, bgr_arc_way(p, rt.arcs[rt.narcs - 1]), r->dest_name, sizeof r->dest_name);
-    r->toll_arcs = rt.toll_arcs;
-    bgr_route_free(&rt);
     r->ms = now_ms() - t0;
     fprintf(stderr, "biggps: rota %.1f km em %u ms\n", r->route.total_dm / 1e4, r->ms);
 }

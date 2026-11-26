@@ -536,7 +536,12 @@ static struct {
     char dest_name[64];
     bga_hit_t *al;             /* alertas na rota (radar, lombada, passagem de nível) */
     int nal, al_next, al_said;
+    int nstops, pick_stop;     /* paradas no caminho (em ordem); esperando o toque longo da próxima */
+    uint32_t stx[BGRT_MAXSTOPS], sty[BGRT_MAXSTOPS];
 } N;
+static lv_obj_t *stop_mk[BGRT_MAXSTOPS];   /* círculos numerados das paradas */
+static lv_obj_t *pick_chip;                /* "toque e segure onde fica a parada" */
+static int pin_drag_done;      /* o painel reabre depois de mover o pino: mantém as paradas */
 static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
 static uint32_t last_say_ms;
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
@@ -884,6 +889,14 @@ static void veh_sync(void)
 
 static void update_dest_marker(void)
 {
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) {
+        if(!stop_mk[i]) continue;
+        int sx, sy;
+        if(i >= N.nstops || !N.has_dest || !have_shown || !disp_point(N.stx[i], N.sty[i], &sx, &sy)
+           || sx < -20 || sy < -20 || sx > MAP_W + 20 || sy > MAP_H + 20) { lv_obj_add_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_set_pos(stop_mk[i], sx - 15, sy - 15);
+        lv_obj_remove_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN);
+    }
     if(!dmark) return;
     if(!N.has_dest || !have_shown) { lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN); return; }
     int sx, sy;
@@ -1115,7 +1128,8 @@ static void announce(void)
         /* "e depois" quando a manobra seguinte vem logo em seguida */
         char p1[200], p2[200], parts[420];
         man_parts(m, p1, sizeof p1);
-        if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE) {
+        if(st->next + 1 < N.route.nman && N.route.man[st->next + 1].at_dm - m->at_dm < 1500 && m->type != BGN_ARRIVE
+           && m->type != BGN_WAYPOINT) {
             char t2[160];
             bgn_text(&N.route.man[st->next + 1], t2, sizeof t2);
             lower_first(t2);
@@ -1124,7 +1138,7 @@ static void announce(void)
             snprintf(parts, sizeof parts, "%s|e depois|%s", p1, p2);
             say(full, parts);
         } else say(t, p1);
-    } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE) {
+    } else if(!N.said_far && dist <= far && dist > near + 50 && m->type != BGN_ARRIVE && m->type != BGN_WAYPOINT) {
         N.said_far = 1;
         lower_first(t);
         snprintf(full, sizeof full, "Em %s, %s", spoken_dist(st->next_dm, d, sizeof d), t);
@@ -1264,7 +1278,9 @@ static void end_navigation(void)
     free(N.al);
     N.al = NULL;
     N.nal = 0;
+    N.nstops = N.pick_stop = 0;
     if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
     memset(&N.st, 0, sizeof N.st);
     set_route_overlay(NULL, 0);
@@ -1370,8 +1386,19 @@ static void route_request(int profile, bool reroute)
         bgr_lonlat_to_world(pos_lon, pos_lat, &sx, &sy);
         if(pos_live && pos_speed >= 8) heading = (int)lround(pos_course);
     } else return;
-    bgrt_req_t q = { ++N.req_id, profile, sx, sy, heading, N.dx, N.dy,
-                     (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
+    /* recalculando no caminho: as paradas já alcançadas saem da lista */
+    if(reroute && N.navigating) {
+        int passed = 0;
+        for(int i = 0; i < N.route.nman; i++)
+            if(N.route.man[i].type == BGN_WAYPOINT && N.route.man[i].at_dm <= N.st.progress_dm) passed++;
+        if(passed > N.nstops) passed = N.nstops;
+        for(int i = passed; i < N.nstops; i++) { N.stx[i - passed] = N.stx[i]; N.sty[i - passed] = N.sty[i]; }
+        N.nstops -= passed;
+    }
+    bgrt_req_t q = { .id = ++N.req_id, .profile = profile, .sx = sx, .sy = sy, .heading = heading,
+                     .dx = N.dx, .dy = N.dy, .nstops = N.nstops,
+                     .avoid_toll = (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
+    for(int i = 0; i < N.nstops; i++) { q.stx[i] = N.stx[i]; q.sty[i] = N.sty[i]; }
     N.profile = profile;
     N.waiting = 1;
     N.rerouting = reroute;
@@ -1435,6 +1462,9 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     bgn_free(&N.route);
     set_route_overlay(NULL, 0);
     N.active = 0;
+    if(!N.has_dest || pin_drag_done == 0) N.nstops = 0;   /* destino novo: sem paradas (mover o pino as mantém) */
+    pin_drag_done = 0;
+    N.pick_stop = 0;
     N.has_dest = 1;
     N.dx = x;
     N.dy = y;
@@ -1492,6 +1522,26 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     }
 }
 
+/* "+ Parada": o próximo toque longo no mapa marca a parada e recalcula */
+static void add_stop_cb(lv_event_t *e)
+{
+    (void)e;
+    if(N.nstops >= BGRT_MAXSTOPS) return;
+    N.pick_stop = 1;
+    close_sheet();
+    if(pick_chip) lv_obj_remove_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void clear_stops_cb(lv_event_t *e)
+{
+    (void)e;
+    N.nstops = 0;
+    N.pick_stop = 0;
+    if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+    update_dest_marker();
+    route_request(N.profile, false);
+}
+
 static void route_result(bgrt_res_t *r)
 {
     N.waiting = 0;
@@ -1546,6 +1596,18 @@ static void route_result(bgrt_res_t *r)
     b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
     lv_obj_set_height(b, 48);
     lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
+    /* paradas no caminho */
+    row = sheet_row(sh);
+    if(N.nstops < BGRT_MAXSTOPS) {
+        b = bf_button(row, LV_SYMBOL_PLUS, tr(S_MAP_ADD_STOP), 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_add_event_cb(b, add_stop_cb, LV_EVENT_CLICKED, NULL);
+    }
+    if(N.nstops) {
+        b = bf_button(row, LV_SYMBOL_TRASH, tr(S_MAP_CLEAR_STOPS), 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_add_event_cb(b, clear_stops_cb, LV_EVENT_CLICKED, NULL);
+    }
 }
 
 /* uma posição (GPS ou simulação) */
@@ -2106,6 +2168,17 @@ static void press_cb(lv_event_t *e)
         request();
     } else if(c == LV_EVENT_LONG_PRESSED) {
         if(dragging || N.navigating || !R.started) return;
+        if(N.pick_stop && N.has_dest) {               /* marcando uma parada */
+            rast_surface_t s = shown_surf();
+            uint32_t x, y;
+            bgr_screen_to_world(&shown, &s, p.x - off_x, p.y - off_y, &x, &y);
+            N.pick_stop = 0;
+            if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+            if(N.nstops < BGRT_MAXSTOPS) { N.stx[N.nstops] = x; N.sty[N.nstops] = y; N.nstops++; }
+            update_dest_marker();
+            route_request(N.profile, false);
+            return;
+        }
         if(pin_hit) {                                 /* segurou o pino: passa a arrastá-lo */
             pin_drag = true;
             pin_moved = false;
@@ -2126,6 +2199,7 @@ static void press_cb(lv_event_t *e)
             if(c == LV_EVENT_RELEASED) pin_move(p);   /* o último ponto do dedo */
             pin_drag = false;
             lv_image_set_scale(dmark, LV_SCALE_NONE);
+            pin_drag_done = 1;
             open_dest_sheet(N.dx, N.dy);
         }
     }
@@ -2602,6 +2676,22 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_size(layer, MAP_W, MAP_H);
     lv_obj_remove_flag(layer, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_event_cb(layer, layer_draw, LV_EVENT_DRAW_MAIN, NULL);
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) {        /* paradas: círculo laranja numerado */
+        stop_mk[i] = lv_obj_create(ov);
+        lv_obj_remove_style_all(stop_mk[i]);
+        lv_obj_set_size(stop_mk[i], 30, 30);
+        lv_obj_set_style_radius(stop_mk[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(stop_mk[i], lv_color_hex(0xe8710a), 0);
+        lv_obj_set_style_bg_opa(stop_mk[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(stop_mk[i], lv_color_white(), 0);
+        lv_obj_set_style_border_width(stop_mk[i], 3, 0);
+        lv_obj_remove_flag(stop_mk[i], LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        char n[4];
+        snprintf(n, sizeof n, "%d", i + 1);
+        lv_obj_t *l = bf_label(stop_mk[i], n, BF_FONT_S, lv_color_white());
+        lv_obj_center(l);
+        lv_obj_add_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN);
+    }
     dmark = lv_image_create(ov);
     lv_image_set_src(dmark, &mk_dsc[3]);
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_CLICKABLE);
@@ -2713,6 +2803,12 @@ static void create(lv_obj_t *parent, int arg)
     bf_label(sim_chip, tr(S_MAP_SIMULATING), BF_FONT_S, lv_color_white());
     lv_obj_align(sim_chip, LV_ALIGN_TOP_RIGHT, -96, 124);
     lv_obj_add_flag(sim_chip, LV_OBJ_FLAG_HIDDEN);
+
+    pick_chip = chip(ov);                         /* marcando uma parada */
+    lv_obj_set_style_bg_color(pick_chip, lv_color_hex(0xe8710a), 0);
+    bf_label(pick_chip, tr(S_MAP_PICK_STOP), BF_FONT_M, lv_color_white());
+    lv_obj_align(pick_chip, LV_ALIGN_TOP_MID, 0, 14);
+    lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
 
     al_chip = chip(ov);                           /* radar / lombada à frente */
     lv_obj_set_style_bg_color(al_chip, lv_color_hex(0xf5b83d), 0);
@@ -2872,11 +2968,12 @@ static void destroy(void)
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     bga_close(R.alerts);
     R.alerts = NULL;
-    al_chip = al_lbl = NULL;
+    al_chip = al_lbl = pick_chip = NULL;
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
     pj_ok = shown_persp = false;
     lab_w = MAP_W;
     lab_h = MAP_H;
+    for(int i = 0; i < BGRT_MAXSTOPS; i++) stop_mk[i] = NULL;
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
     voice_lbl = search_btn = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;

@@ -253,6 +253,55 @@ static uint32_t first_out_arc(bgr_pack_t *p, uint32_t node, uint32_t *end)
     return bgr_node_first_out(p, node);
 }
 
+int bgn_append(bgn_route_t *a, bgn_route_t *b)
+{
+    if (b->npts < 2) { bgn_free(b); return 0; }
+    if (a->npts < 2) { bgn_free(a); *a = *b; memset(b, 0, sizeof *b); return 0; }
+    int skip = a->xy[2 * a->npts - 2] == b->xy[0] && a->xy[2 * a->npts - 1] == b->xy[1];   /* same point */
+    int np = a->npts + b->npts - skip, nm = a->nman + b->nman;
+    uint32_t *xy = realloc(a->xy, (size_t)np * 2 * sizeof *xy);
+    if (!xy) { bgn_free(b); return -1; }
+    a->xy = xy;
+    uint32_t *cd = realloc(a->cum_dm, (size_t)np * sizeof *cd);
+    if (!cd) { bgn_free(b); return -1; }
+    a->cum_dm = cd;
+    uint32_t *ct = realloc(a->cum_ds, (size_t)np * sizeof *ct);
+    if (!ct) { bgn_free(b); return -1; }
+    a->cum_ds = ct;
+    bgn_man_t *man = realloc(a->man, (size_t)nm * sizeof *man);
+    if (!man) { bgn_free(b); return -1; }
+    a->man = man;
+    uint32_t dm0 = a->total_dm, ds0 = a->total_ds;
+    if (!skip) {          /* the gap between the two snapped ends counts as straight distance */
+        double dx = (double)(int32_t)(b->xy[0] - a->xy[2 * a->npts - 2]), dy = (double)(int32_t)(b->xy[1] - a->xy[2 * a->npts - 1]);
+        double lat = atan(sinh(M_PI * (1.0 - 2.0 * b->xy[1] / 4294967296.0)));
+        double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+        dm0 += (uint32_t)lround(sqrt(dx * dx + dy * dy) * mpu * 10);
+    }
+    for (int i = skip; i < b->npts; i++) {
+        int o = a->npts + i - skip;
+        a->xy[2 * o] = b->xy[2 * i];
+        a->xy[2 * o + 1] = b->xy[2 * i + 1];
+        a->cum_dm[o] = dm0 + b->cum_dm[i];
+        a->cum_ds[o] = ds0 + b->cum_ds[i];
+    }
+    if (a->nman && a->man[a->nman - 1].type == BGN_ARRIVE) {
+        a->man[a->nman - 1].type = BGN_WAYPOINT;
+        a->man[a->nman - 1].at_dm = a->total_dm;
+    }
+    for (int i = 0; i < b->nman; i++) {
+        if (i == 0 && b->man[0].type == BGN_DEPART) continue;
+        bgn_man_t m = b->man[i];
+        m.at_dm += dm0;
+        a->man[a->nman++] = m;
+    }
+    a->npts = np;
+    a->total_dm = dm0 + b->total_dm;
+    a->total_ds = ds0 + b->total_ds;
+    bgn_free(b);
+    return 0;
+}
+
 void bgn_free(bgn_route_t *r)
 {
     free(r->xy);
@@ -332,7 +381,7 @@ int bgn_zoom256(const bgn_route_t *r, const bgn_state_t *st, double speed_kmh, i
     int z = speed_kmh > 80 ? 15 * 256 + 128 : speed_kmh > 50 ? 16 * 256 : 16 * 256 + 128;
     if (!st->valid || st->next < 0 || st->next >= r->nman) return z;
     int t = r->man[st->next].type;
-    if (t == BGN_ARRIVE || t == BGN_STRAIGHT || t == BGN_DEPART) return z;
+    if (t == BGN_ARRIVE || t == BGN_WAYPOINT || t == BGN_STRAIGHT || t == BGN_DEPART) return z;
     int complex = t == BGN_ROUNDABOUT || t == BGN_RAMP_LEFT || t == BGN_RAMP_RIGHT || t == BGN_KEEP_LEFT
                || t == BGN_KEEP_RIGHT || t == BGN_UTURN || t == BGN_SHARP_LEFT || t == BGN_SHARP_RIGHT;
     double v = speed_kmh / 3.6, d = st->next_dm / 10.0;
@@ -354,7 +403,7 @@ void bgn_voice_parts(const bgn_man_t *m, char *verb, int vn, char *road, int rn)
         snprintf(verb, (size_t)vn, "Siga em frente");
     } else {
         snprintf(verb, (size_t)vn, "%s", verb_of(m->type));
-        if (m->type != BGN_ARRIVE && m->name[0]) snprintf(road, (size_t)rn, "%s %s", prep(m->name), m->name);
+        if (m->type != BGN_ARRIVE && m->type != BGN_WAYPOINT && m->name[0]) snprintf(road, (size_t)rn, "%s %s", prep(m->name), m->name);
     }
 }
 
@@ -367,8 +416,9 @@ static const char *verb_of(int type)
         [BGN_SLIGHT_LEFT] = "Vire levemente à esquerda", [BGN_KEEP_RIGHT] = "Mantenha-se à direita",
         [BGN_KEEP_LEFT] = "Mantenha-se à esquerda", [BGN_RAMP_RIGHT] = "Pegue o acesso à direita",
         [BGN_RAMP_LEFT] = "Pegue o acesso à esquerda", [BGN_ROUNDABOUT] = "Na rotatória", [BGN_ARRIVE] = "Você chegou ao destino",
+        [BGN_WAYPOINT] = "Você chegou à parada",
     };
-    return type >= 0 && type <= BGN_ARRIVE ? verb[type] : "";
+    return type >= 0 && type <= BGN_WAYPOINT ? verb[type] : "";
 }
 
 const char *bgn_text(const bgn_man_t *m, char *buf, int n)
@@ -377,7 +427,7 @@ const char *bgn_text(const bgn_man_t *m, char *buf, int n)
     if (m->type == BGN_ROUNDABOUT) {
         if (m->name[0]) snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída para %c %s", m->exit, prep(m->name)[1], m->name);
         else snprintf(buf, (size_t)n, "Na rotatória, pegue a %dª saída", m->exit);
-    } else if (m->type == BGN_ARRIVE || !m->name[0]) {
+    } else if (m->type == BGN_ARRIVE || m->type == BGN_WAYPOINT || !m->name[0]) {
         snprintf(buf, (size_t)n, "%s", m->type == BGN_DEPART ? "Siga em frente" : v);
     } else if (m->type == BGN_DEPART) {
         snprintf(buf, (size_t)n, "Siga pel%c %s", prep(m->name)[1], m->name);
