@@ -52,7 +52,7 @@ static HBITMAP base_bmp, frame_bmp, base_old, frame_old;
 static u16 *base_px, *frame_px;
 static HFONT f_small, f_text, f_bold;
 static int base_key = -1;
-static RECT card_l, card_r;
+static RECT card_l, card_r, link_r, ov_card, ov_ok, ov_cancel;
 
 /* ------------------------------------------------------------ cores */
 
@@ -344,7 +344,13 @@ static void build_base(const ui_state_t *s)
     blit_rgba(px, &art_flag, rx + 20 + (92 - art_flag.w) / 2, y + 20 + (92 - art_flag.h) / 2);
     blit_a8(px, &art_wince, rx + 128, y + 26, C_TEXT, 255);
 
-    if (!s->linux_ok) {
+    if (s->setup == UI_SETUP_READY) {
+        lsub = L"Grava o sistema na memória interna";
+        lbtn = s->busy ? L"Instalando..." : L"Instalar o Dual Boot";
+    } else if (s->setup == UI_SETUP_NOFILES) {
+        lsub = L"Prepare o cartão com o BigFoston OS Installer no computador";
+        lbtn = L"Indisponível";
+    } else if (!s->linux_ok) {
         lsub = L"Linux não instalado na memória interna";
         lbtn = L"Indisponível";
     } else if (booting) {
@@ -360,12 +366,25 @@ static void build_base(const ui_state_t *s)
     text(base_dc, f_text, C_DIM, lx + 128, y + 64, lx + cw - 16, y + 118, lsub, DT_LEFT | DT_TOP | DT_WORDBREAK);
     text(base_dc, f_text, C_DIM, rx + 128, y + 64, rx + cw - 16, y + 118, rsub, DT_LEFT | DT_TOP | DT_WORDBREAK);
     UI_FLUSH();
-    pill(px, base_dc, lx + 20, y + CARD_H - 66, cw - 40, 46, 1, s->linux_ok && !booting, s->pressed == UI_HIT_LINUX,
+    pill(px, base_dc, lx + 20, y + CARD_H - 66, cw - 40, 46, 1,
+         !s->busy && !booting && (s->setup ? s->setup == UI_SETUP_READY : s->linux_ok), s->pressed == UI_HIT_LINUX,
          &art_ic_power, lbtn);
     UI_FLUSH();
-    pill(px, base_dc, rx + 20, y + CARD_H - 66, cw - 40, 46, 0, !booting, s->pressed == UI_HIT_CE, &art_ic_back, rbtn);
+    pill(px, base_dc, rx + 20, y + CARD_H - 66, cw - 40, 46, 0, !booting && !s->busy, s->pressed == UI_HIT_CE,
+         &art_ic_back, rbtn);
     UI_FLUSH();
     text(base_dc, f_small, C_DIM, W / 2, 0, W - MARGIN, TOP_H - 2, s->version, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    if (s->can_restore && !s->busy) {               /* "Restaurar o original": pílula discreta */
+        rr(px, link_r.left, link_r.top, link_r.right - link_r.left, link_r.bottom - link_r.top, 15,
+           s->pressed == UI_HIT_RESTORE ? C_BORDER : C_SURF2, 0, G_SOLID, 255, 0);
+        rr(px, link_r.left, link_r.top, link_r.right - link_r.left, link_r.bottom - link_r.top, 15, C_BORDER, 0,
+           G_SOLID, 255, 1);
+        blit_a8(px, &art_ic_back, link_r.left + 10, link_r.top + (link_r.bottom - link_r.top - art_ic_back.h) / 2,
+                C_DIM, 255);
+        UI_FLUSH();
+        text(base_dc, f_small, C_TEXT, link_r.left + 34, link_r.top, link_r.right - 8, link_r.bottom,
+             L"Restaurar o original", DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
 
     /* caixa do registro (o texto entra a cada quadro) */
     rr(px, MARGIN, LOG_Y, W - 2 * MARGIN, H - LOG_Y - 12, 14, C_LOGBG, 0, G_SOLID, 215, 0);
@@ -385,6 +404,12 @@ static void draw_progress(const ui_state_t *s)
     const WCHAR *hint = L"";
     u32 col = C_TEXT;
     int bar = 0, fill = 0, bw = W - 2 * MARGIN;
+    if (s->status) {                                /* instalando, restaurando, pelo cartão */
+        wcsncpy(b, s->status, 119);
+        b[119] = 0;
+        col = s->busy ? C_TEXT : C_DIM;
+        goto draw;
+    }
     switch (s->cd_total_ms || s->autoboot != 1 ? s->autoboot : 4) {
     case 4:                                         /* antes da contagem: conferindo o cartão */
         _snwprintf(b, 119, L"Preparando o início do BigFoston...");
@@ -423,6 +448,7 @@ static void draw_progress(const ui_state_t *s)
         break;
     }
     b[119] = 0;
+draw:
     if (fill > bw)
         fill = bw;
     blit_a8(px, &art_ic_power, MARGIN, PROG_Y + 3, s->autoboot == 1 || s->autoboot == 3 ? C_ACCENT : C_DIM, 255);
@@ -444,7 +470,8 @@ static void draw_progress(const ui_state_t *s)
         }
     }
     UI_FLUSH();
-    text(frame_dc, f_bold, col, MARGIN + 28, PROG_Y, W / 2 + 120, PROG_Y + 26, b, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    text(frame_dc, f_bold, col, MARGIN + 28, PROG_Y, hint[0] ? W / 2 + 120 : W - MARGIN, PROG_Y + 26, b,
+         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     text(frame_dc, f_small, C_DIM, W / 2, PROG_Y, W - MARGIN, PROG_Y + 26, hint, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -478,6 +505,62 @@ static void draw_log(const ui_state_t *s)
              DT_LEFT | DT_TOP | DT_WORDBREAK);
         y += hgt[i] + 2;
     }
+}
+
+/* ------------------------------------------------------------ confirmação */
+
+static void draw_overlay(const ui_state_t *s)
+{
+    u16 *px = frame_px;
+    const WCHAR *title, *body, *ok, *cancel = L"Cancelar";
+    int x, y, danger = 0, w = ov_card.right - ov_card.left, h = ov_card.bottom - ov_card.top;
+    for (y = 0; y < H; y++)                          /* escurece a tela inteira */
+        for (x = 0; x < W; x++)
+            px[y * stride + x] = mix(px[y * stride + x], 0x000000, 150);
+    switch (s->overlay) {
+    case UI_OV_INSTALL:
+        title = L"Instalar o Dual Boot?";
+        body = L"Grava o BigFoston OS na memória interna (pasta BigFoston, sem tocar no Windows CE) e faz "
+               L"esta tela abrir sozinha ao ligar. Os valores originais ficam guardados no cartão para "
+               L"desfazer depois. Não desligue o aparelho até terminar.";
+        ok = L"Instalar";
+        break;
+    case UI_OV_RESTORE:
+        title = L"Restaurar o FOSTON original?";
+        body = L"Desliga o início automático, apaga a pasta BigFoston da memória interna e devolve os "
+               L"valores guardados. Os arquivos do cartão continuam lá para instalar de novo quando quiser.";
+        ok = L"Restaurar";
+        danger = 1;
+        break;
+    default:
+        title = s->ov_title ? s->ov_title : L"";
+        body = s->ov_body ? s->ov_body : L"";
+        ok = L"OK";
+        cancel = NULL;
+        break;
+    }
+    rr(px, ov_card.left + 2, ov_card.top + 8, w, h, 22, 0x000000, 0, G_SOLID, 90, 0);
+    rr(px, ov_card.left, ov_card.top, w, h, 22, C_SURF, 0, G_SOLID, 255, 0);
+    rr(px, ov_card.left, ov_card.top, w, h, 22, danger ? C_ERR : C_PRIMARY, danger ? C_ERR : C_ACCENT, G_HORZ, 255, 2);
+    UI_FLUSH();
+    text(frame_dc, f_bold, C_TEXT, ov_card.left + 28, ov_card.top + 22, ov_card.right - 28, ov_card.top + 50, title,
+         DT_LEFT | DT_TOP | DT_SINGLELINE);
+    text(frame_dc, f_text, C_DIM, ov_card.left + 28, ov_card.top + 60, ov_card.right - 28, ov_card.bottom - 84, body,
+         DT_LEFT | DT_TOP | DT_WORDBREAK);
+    UI_FLUSH();
+    if (cancel)
+        pill(px, frame_dc, ov_cancel.left, ov_cancel.top, ov_cancel.right - ov_cancel.left, ov_cancel.bottom - ov_cancel.top,
+             0, 1, s->pressed == UI_HIT_OV_CANCEL, &art_ic_back, cancel);
+    UI_FLUSH();
+    if (danger) {
+        rr(px, ov_ok.left, ov_ok.top, ov_ok.right - ov_ok.left, ov_ok.bottom - ov_ok.top, 25,
+           s->pressed == UI_HIT_OV_OK ? 0xa8323a : C_ERR, 0, G_SOLID, 255, 0);
+        UI_FLUSH();
+        text(frame_dc, f_bold, C_TEXT, ov_ok.left, ov_ok.top, ov_ok.right, ov_ok.bottom, ok,
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    } else
+        pill(px, frame_dc, ov_ok.left, ov_ok.top, ov_ok.right - ov_ok.left, ov_ok.bottom - ov_ok.top, 1, 1,
+             s->pressed == UI_HIT_OV_OK, cancel ? &art_ic_power : &art_ic_check, ok);
 }
 
 /* ------------------------------------------------------------ interface */
@@ -527,6 +610,10 @@ int ui_init(HDC screen, int width, int height)
     cw = (W - 3 * MARGIN) / 2;
     SetRect(&card_l, MARGIN, CARD_Y, MARGIN + cw, CARD_Y + CARD_H);
     SetRect(&card_r, W - MARGIN - cw, CARD_Y, W - MARGIN, CARD_Y + CARD_H);
+    SetRect(&link_r, W - 330, 11, W - 150, TOP_H - 13);
+    SetRect(&ov_card, (W - 560) / 2, (H - 280) / 2, (W + 560) / 2, (H + 280) / 2);
+    SetRect(&ov_cancel, ov_card.left + 24, ov_card.bottom - 74, (ov_card.left + ov_card.right) / 2 - 8, ov_card.bottom - 24);
+    SetRect(&ov_ok, (ov_card.left + ov_card.right) / 2 + 8, ov_card.bottom - 74, ov_card.right - 24, ov_card.bottom - 24);
     make_bg();
     base_key = -1;
     return 1;
@@ -557,7 +644,8 @@ void ui_paint(HDC dst, const ui_state_t *s, const RECT *clip)
     if (!base_dc)
         return;
     /* a base (fundo, barra, cartões) só muda com o estado dos botões */
-    key = (s->autoboot & 7) | (s->linux_ok ? 8 : 0) | (s->pressed << 4);
+    key = (s->autoboot & 7) | (s->linux_ok ? 8 : 0) | (s->pressed << 4) | (s->setup << 8) |
+          (s->can_restore ? 1 << 10 : 0) | (s->busy ? 1 << 11 : 0);
     if (key != base_key) {
         build_base(s);
         base_key = key;
@@ -565,6 +653,8 @@ void ui_paint(HDC dst, const ui_state_t *s, const RECT *clip)
     memcpy(frame_px, base_px, (size_t)stride * H * 2);
     draw_progress(s);
     draw_log(s);
+    if (s->overlay)
+        draw_overlay(s);
     UI_FLUSH();
     SetRect(&all, 0, 0, W, H);
     if (!clip)
@@ -573,11 +663,25 @@ void ui_paint(HDC dst, const ui_state_t *s, const RECT *clip)
            clip->top, SRCCOPY);
 }
 
+int ui_hit_overlay(int x, int y)
+{
+    POINT p;
+    p.x = x;
+    p.y = y;
+    if (PtInRect(&ov_ok, p))
+        return UI_HIT_OV_OK;
+    if (PtInRect(&ov_cancel, p))
+        return UI_HIT_OV_CANCEL;
+    return UI_HIT_NONE;
+}
+
 int ui_hit(int x, int y)
 {
     POINT p;
     p.x = x;
     p.y = y;
+    if (PtInRect(&link_r, p))
+        return UI_HIT_RESTORE;
     if (PtInRect(&card_l, p))
         return UI_HIT_LINUX;
     if (PtInRect(&card_r, p))

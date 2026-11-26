@@ -31,7 +31,7 @@ M=$(lsblk -no MOUNTPOINT "$PART" | head -n1)
 echo "Cartao: $PART em $M"
 mkdir -p "$M/BigFoston/linux"
 cp "$AGENT" "$M/BigFoston/bfagent.exe"
-for f in zImage initrd.gz "$IMG"/*.dtb; do f=$(basename "$f"); cp "$IMG/$f" "$M/BigFoston/linux/$f"; done
+for f in zImage initrd.img fs707dc.dtb; do f=$(basename "$f"); cp "$IMG/$f" "$M/BigFoston/linux/$f"; done
 sync
 udisksctl unmount -b "$PART" >/dev/null
 udisksctl mount -b "$PART" >/dev/null
@@ -39,6 +39,6 @@ M=$(lsblk -no MOUNTPOINT "$PART" | head -n1)
 ok=1
 check() { if [ "$(sha256sum < "$1")" = "$(sha256sum < "$2")" ]; then echo "ok $(basename "$2") $(sha256sum < "$2" | cut -c1-16)"; else echo "FALHOU $2" >&2; ok=0; fi; }
 check "$AGENT" "$M/BigFoston/bfagent.exe"
-for f in zImage initrd.gz "$IMG"/*.dtb; do f=$(basename "$f"); check "$IMG/$f" "$M/BigFoston/linux/$f"; done
+for f in zImage initrd.img fs707dc.dtb; do f=$(basename "$f"); check "$IMG/$f" "$M/BigFoston/linux/$f"; done
 udisksctl unmount -b "$PART" >/dev/null
 [ "$ok" = 1 ] && echo "Pronto: pode tirar o cartao e devolve-lo ao FOSTON."

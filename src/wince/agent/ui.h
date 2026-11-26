@@ -16,7 +16,11 @@
 #define BF_AGENT_UI_H
 #include <windows.h>
 
-enum { UI_HIT_NONE, UI_HIT_LINUX, UI_HIT_CE };
+enum { UI_HIT_NONE, UI_HIT_LINUX, UI_HIT_CE, UI_HIT_RESTORE, UI_HIT_OV_OK, UI_HIT_OV_CANCEL };
+/* janela de confirmação desenhada por cima (só ela recebe toques) */
+enum { UI_OV_NONE, UI_OV_INSTALL, UI_OV_RESTORE, UI_OV_DONE };
+/* aberto pelo cartão sem o Dual Boot instalado */
+enum { UI_SETUP_NO, UI_SETUP_READY, UI_SETUP_NOFILES };
 /* tipo da linha do registro: o ícone e a cor */
 enum { UI_L_INFO, UI_L_OK, UI_L_WARN, UI_L_ERR, UI_L_PC };
 
@@ -39,6 +43,12 @@ typedef struct {
     const WCHAR *port;          /* porta USB serial ("" sem cabo) */
     int nlines;                 /* registro, a mais antiga primeiro */
     const ui_line_t *lines;
+    int setup;                  /* UI_SETUP_*: o cartão BigFoston vira "Instalar o Dual Boot" */
+    int can_restore;            /* "Restaurar o original" na barra superior */
+    int busy;                   /* instalando ou restaurando: os cartões não respondem */
+    int overlay;                /* UI_OV_* */
+    const WCHAR *ov_title, *ov_body;   /* textos de UI_OV_DONE */
+    const WCHAR *status;        /* a faixa do meio quando busy/setup (NULL: pela contagem) */
 } ui_state_t;
 
 /* cria os buffers e as fontes (uma vez); 0 = falhou (a tela fica sem desenho próprio) */
@@ -47,6 +57,8 @@ void ui_free(void);
 /* desenha o estado e copia para dst a área clip (NULL = tudo) */
 void ui_paint(HDC dst, const ui_state_t *s, const RECT *clip);
 int ui_hit(int x, int y);
+/* com a confirmação aberta, só os botões dela */
+int ui_hit_overlay(int x, int y);
 /* a faixa da contagem (para redesenhar só ela durante a animação) */
 void ui_progress_rect(RECT *r);
 #endif

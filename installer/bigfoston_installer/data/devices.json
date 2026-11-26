@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "devices": [
+    {
+      "id": "foston-fs707dc",
+      "name": "FOSTON FS-707DC",
+      "state": "tested",
+      "cpu": "MediaTek MT3351 (ARM1176, ARMv6, sem VFP)",
+      "os": "Windows CE 5.0 build 1400, plataforma APOLLO, OEM MTK",
+      "screen": "7\" 800×480, toque resistivo de um ponto",
+      "notes": "Testado numa unidade (firmware com navegador iGO 8). Outras revisões vendidas com o mesmo nome podem ter hardware diferente.",
+      "match": {
+        "os": "Windows CE 5.0 build 1400",
+        "oem": "MTK",
+        "platform": "APOLLO",
+        "screen": "800x480"
+      }
+    }
+  ]
+}

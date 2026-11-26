@@ -79,7 +79,7 @@ int main(int argc, char **argv)
         return 1;
     }
     memset(&s, 0, sizeof s);
-    s.version = L"bfagent 0.7.0";
+    s.version = L"bfagent 0.8.0";
     s.port = L"COM9";
     s.linux_ok = 1;
 
@@ -126,6 +126,47 @@ int main(int argc, char **argv)
     s.linux_ok = 0;
     s.requests = 0;
     shot(mem, (unsigned short *)bits, dir, "06-sem-linux", &s);
+    /* aberto pelo cartão, sem o Dual Boot: instalar no toque */
+    nlines = 0;
+    add(UI_L_INFO, L"bfagent 0.8.0 iniciado (\\SDMMC\\BigFoston).");
+    add(UI_L_INFO, L"Dual Boot não instalado: toque em Instalar o Dual Boot para gravar o BigFoston OS.");
+    add(UI_L_OK, L"Pronto na porta COM6. No PC: tools/bigfoston/bfagent.py info");
+    s.autoboot = 0;
+    s.linux_ok = 0;
+    s.setup = UI_SETUP_READY;
+    s.can_restore = 0;
+    s.status = L"Aberto pelo cartão: Dual Boot não instalado";
+    shot(mem, (unsigned short *)bits, dir, "07-pelo-cartao", &s);
+    s.overlay = UI_OV_INSTALL;
+    shot(mem, (unsigned short *)bits, dir, "08-confirmar-instalar", &s);
+    s.overlay = UI_OV_NONE;
+    s.busy = 1;
+    add(UI_L_INFO, L"Guardando os valores originais...");
+    add(UI_L_OK, L"Agente copiado e conferido.");
+    add(UI_L_INFO, L"Gravando initrd.img na memória interna...");
+    s.status = L"Gravando o BigFoston OS na memória interna...";
+    shot(mem, (unsigned short *)bits, dir, "09-instalando", &s);
+    s.busy = 0;
+    add(UI_L_OK, L"Dual Boot instalado e conferido.");
+    s.setup = UI_SETUP_NO;
+    s.linux_ok = 1;
+    s.can_restore = 1;
+    s.status = L"Dual Boot instalado";
+    s.overlay = UI_OV_DONE;
+    s.ov_title = L"Dual Boot instalado";
+    s.ov_body = L"Desligue e ligue o FOSTON: a tela Dual Boot aparece sozinha e inicia o BigFoston OS. O botão "
+                L"Navegação ainda abre este agente; para voltar a abrir o GPS por ele: Ajustes \x00bb Caminho da "
+                L"navegação \x00bb o navegador original.";
+    shot(mem, (unsigned short *)bits, dir, "10-instalado", &s);
+    s.overlay = UI_OV_RESTORE;
+    s.status = NULL;
+    shot(mem, (unsigned short *)bits, dir, "11-confirmar-restaurar", &s);
+    s.overlay = UI_OV_NONE;
+    s.setup = UI_SETUP_NOFILES;
+    s.can_restore = 0;
+    s.linux_ok = 0;
+    s.status = L"O cartão não tem o BigFoston OS";
+    shot(mem, (unsigned short *)bits, dir, "12-cartao-sem-sistema", &s);
     ui_free();
     return 0;
 }
