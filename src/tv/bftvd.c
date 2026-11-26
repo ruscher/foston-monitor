@@ -486,6 +486,10 @@ static void *show_thread(void *a)
 /* ------------------------------------------------------------ PC decodificando (tvrelay.h) */
 
 static int listen_fd = -1, relay_fd = -1;
+static FILE *play_fp;                                     /* gravação indo para o PC (-p com o relay) */
+static double play_start;                                 /* horário do começo da gravação */
+static volatile int play_done;
+static volatile int play_sent;                            /* o arquivo todo já foi */
 static double relay_t0;                                   /* começo do modo PC (para o log) */
 static volatile int relay_stop;
 static pthread_mutex_t tx_mx = PTHREAD_MUTEX_INITIALIZER;
@@ -530,6 +534,16 @@ static void relay_target(int full, char *t, size_t n)
     snprintf(t, n, "%d %d", w > 0 ? w / 2 : 0, h > 0 ? h / 2 : 0);
 }
 
+/* anel do som do PC (relay_audio) */
+#define AR (TVRELAY_RATE * 16)                            /* o PC pode mandar uns segundos de uma vez ao abrir */
+static unsigned long ar_dropped;                          /* amostras que não couberam (não deve acontecer) */
+#define AB 2048
+static int16_t ar[AR];
+static unsigned ar_w, ar_r;                               /* amostras (contadores) */
+static struct { unsigned at; double pts; } ab[AB];        /* começo de cada bloco no anel */
+static unsigned ab_w, ab_r;
+static pthread_mutex_t aq_mx = PTHREAD_MUTEX_INITIALIZER;
+
 /* TS do anel para o PC */
 static void *relay_tx(void *a)
 {
@@ -539,6 +553,32 @@ static void *relay_tx(void *a)
      * (medido: 21 cortes de som com esta thread abaixo do desenho). Gasta 2-3 % */
     setpriority(PRIO_PROCESS, 0, -14);
     static uint8_t buf[16384];
+    size_t sent = 0;
+    /* a trava abaixo só vê o som que já voltou; sem limite de taxa o laço mandava o arquivo inteiro
+     * antes da primeira resposta (medido: 16 s de som na fila e amostras perdidas). No máximo 2x a
+     * taxa do arquivo */
+    double rate = 60000, next_send = 0;
+    if(play_fp && play_dur > 1) {
+        long cur = ftell(play_fp);
+        if(fseek(play_fp, 0, SEEK_END) == 0) { rate = ftell(play_fp) / play_dur; fseek(play_fp, cur, SEEK_SET); }
+    }
+    while(play_fp && !quit && !relay_stop) {               /* gravação: no ritmo do som, ~2 s na frente */
+        pthread_mutex_lock(&aq_mx);
+        unsigned ahead = ar_w - ar_r, have_audio = ar_w != 0;
+        pthread_mutex_unlock(&aq_mx);
+        pthread_mutex_lock(&q_mx);
+        int vq = q_w - q_r;
+        pthread_mutex_unlock(&q_mx);
+        /* antes do primeiro som o PC ainda analisa o fluxo (~200 KB): mais que isso viria de uma vez */
+        if(ahead > TVRELAY_RATE * 2 || (!have_audio && (vq > 60 || sent >= 256 * 1024))) { usleep(20000); continue; }
+        double now = mono();
+        if(have_audio && now < next_send) { usleep((useconds_t)((next_send - now) * 1e6)); continue; }
+        size_t n = fread(buf, 1, sizeof buf, play_fp);
+        sent += n;
+        next_send = (next_send > now ? next_send : now) + n / (2 * rate);
+        if(n == 0) { play_sent = 1; return NULL; }
+        if(relay_send('T', buf, (uint32_t)n)) { relay_stop = 1; return NULL; }
+    }
     while(!quit && !relay_stop) {
         pthread_mutex_lock(&r_mx);
         if(r_head == r_tail) {
@@ -562,13 +602,6 @@ static void *relay_tx(void *a)
  * a trava do alocador com as de prioridade menor e esperava; medido: o som secava com 0,3-0,5 s
  * na fila, em pares a cada ~2 s) e o horário de cada bloco à parte. Reserva de 300 ms antes de
  * começar e depois de secar. */
-#define AR (TVRELAY_RATE * 4)
-#define AB 512
-static int16_t ar[AR];
-static unsigned ar_w, ar_r;                               /* amostras (contadores) */
-static struct { unsigned at; double pts; } ab[AB];        /* começo de cada bloco no anel */
-static unsigned ab_w, ab_r;
-static pthread_mutex_t aq_mx = PTHREAD_MUTEX_INITIALIZER;
 
 static void audio_push(const uint8_t *d, int ns, double pts)
 {
@@ -579,6 +612,8 @@ static void audio_push(const uint8_t *d, int ns, double pts)
         ab[ab_w % AB].pts = pts;
         ab_w++;
         ar_w += (unsigned)ns;
+    } else {
+        ar_dropped += (unsigned long)ns;
     }
     pthread_mutex_unlock(&aq_mx);
 }
@@ -677,7 +712,8 @@ static int relay_play(void)
     if(relay_send('H', h, (uint32_t)strlen(h))) { close(relay_fd); relay_fd = -1; return -1; }
     relay_on = 1;
     relay_t0 = mono();
-    write_state("abrindo");
+    write_state(play_path ? "tocando" : "abrindo");
+    double next_state = 0, quiet_since = 0;
     for(int i = 0; i < QN; i++) if(!q[i]) q[i] = av_frame_alloc();
     dsp_open();
     pthread_t st, tx, au;
@@ -710,6 +746,20 @@ static int relay_play(void)
             relay_target(last_full, t, sizeof t);
             if(relay_send('S', t, (uint32_t)strlen(t))) break;
         }
+        if(play_path) {                                    /* gravação: posição para a barra e o fim */
+            double now = mono();
+            if(audio_pts >= 0) play_pos = audio_pts - play_start;
+            if(now >= next_state) { write_state("tocando"); next_state = now + 1; }
+            pthread_mutex_lock(&aq_mx);
+            int a_empty = ar_w == ar_r;
+            pthread_mutex_unlock(&aq_mx);
+            pthread_mutex_lock(&q_mx);
+            int v_empty = q_w == q_r;
+            pthread_mutex_unlock(&q_mx);
+            if(!play_sent || !a_empty || !v_empty) quiet_since = 0;
+            else if(!quiet_since) quiet_since = now;
+            else if(now - quiet_since > 1.5) { play_done = 1; break; }   /* tudo tocado */
+        }
         struct pollfd p = { relay_fd, POLLIN, 0 };
         if(poll(&p, 1, 200) <= 0) continue;
         if(rx.n == rx.cap) break;
@@ -739,7 +789,7 @@ static int relay_play(void)
         }
         if(used) { memmove(rx.buf, rx.buf + used, rx.n - used); rx.n -= used; }
     }
-    int lost = !quit;
+    int lost = !quit && !play_done;
     relay_stop = 1;
     shutdown(relay_fd, SHUT_RDWR);
     pthread_join(tx, NULL);
@@ -756,6 +806,7 @@ static int relay_play(void)
     audio_pts = -1;
     if(dsp >= 0) { close(dsp); dsp = -1; }             /* aqui o buffer volta ao curto (dsp_open) */
     if(lost) fprintf(stderr, "bftvd: o PC saiu; decodificando aqui\n");
+    if(ar_dropped) fprintf(stderr, "bftvd: %lu amostras de som não couberam no anel\n", ar_dropped);
     return lost ? -1 : 0;
 }
 
@@ -904,18 +955,74 @@ static int audio_buffered_ms(void)
     return bytes / 64;                                         /* 64 bytes por ms */
 }
 
+/* ------------------------------------------------------------ decodificando aqui (sem o PC)
+ * Três threads: a leitura do TS só distribui os pacotes (nunca espera o vídeo); o som (nice
+ * -15) decodifica o AAC e toca; o vídeo decodifica com o que sobra e, atrasado em relação ao
+ * relógio do som, pula até o próximo quadro-chave. Antes era uma thread só: o som esperava cada
+ * quadro de vídeo e secava (medido na Globo: 10-12 qps e 95 cortes em 36 s). */
+
+static volatile int local_switch;                         /* o PC conectou: a decodificação daqui para */
+#define PKN 1024
+typedef struct {
+    AVPacket *p[PKN];
+    int r, w, eof;
+    pthread_mutex_t mx;
+    pthread_cond_t cv;
+} pktq_t;
+static pktq_t apq = { .mx = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
+static pktq_t vpq = { .mx = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
+
+static int pktq_len(pktq_t *q) { pthread_mutex_lock(&q->mx); int n = q->w - q->r; pthread_mutex_unlock(&q->mx); return n; }
+
+/* 0: entrou; -1: cheia (o pacote fica com quem chamou) */
+static int pktq_put(pktq_t *q, AVPacket *pk)
+{
+    pthread_mutex_lock(&q->mx);
+    if(q->w - q->r >= PKN) { pthread_mutex_unlock(&q->mx); return -1; }
+    AVPacket *d = q->p[q->w % PKN];
+    if(!d) d = q->p[q->w % PKN] = av_packet_alloc();
+    av_packet_move_ref(d, pk);
+    q->w++;
+    pthread_cond_signal(&q->cv);
+    pthread_mutex_unlock(&q->mx);
+    return 0;
+}
+
+/* 1: pacote em out; 0: acabou (eof ou quit) */
+static int pktq_get(pktq_t *q, AVPacket *out)
+{
+    pthread_mutex_lock(&q->mx);
+    while(q->r == q->w && !q->eof && !quit && !local_switch) {
+        struct timespec t;
+        clock_gettime(CLOCK_REALTIME, &t);
+        t.tv_nsec += 100000000;
+        if(t.tv_nsec >= 1000000000) { t.tv_sec++; t.tv_nsec -= 1000000000; }
+        pthread_cond_timedwait(&q->cv, &q->mx, &t);
+    }
+    int ok = q->r != q->w && !quit && !local_switch;
+    if(ok) av_packet_move_ref(out, q->p[q->r++ % PKN]);
+    pthread_mutex_unlock(&q->mx);
+    return ok;
+}
+
+static void pktq_reset(pktq_t *q)
+{
+    pthread_mutex_lock(&q->mx);
+    for(; q->r < q->w; q->r++) av_packet_unref(q->p[q->r % PKN]);
+    q->eof = 0;
+    pthread_mutex_unlock(&q->mx);
+}
+
 static void ladder_step(AVCodecContext *vc)
 {
     static const enum AVDiscard lv[3] = { AVDISCARD_DEFAULT, AVDISCARD_NONREF, AVDISCARD_BIDIR };
     static double hold = 8, went_down = -100;
     double now = mono();
-    pthread_mutex_lock(&r_mx);
-    size_t backlog = r_head - r_tail;                          /* TS chegado e ainda não lido */
-    pthread_mutex_unlock(&r_mx);
-    /* ~1 s atrás do ar e sem diminuir (ao abrir há ~2,5 s da análise do fluxo, que se esvaziam) */
-    static size_t prev_backlog;
-    bool behind = backlog > 48 * 1024 && backlog + 4096 >= prev_backlog;
-    prev_backlog = backlog;
+    /* atrás: pacotes de vídeo acumulando (mais de ~0,5 s) e sem diminuir */
+    static int prev_len;
+    int len = pktq_len(&vpq);
+    bool behind = len > 15 && len + 2 >= prev_len;
+    prev_len = len;
     bool tight = behind || (audio_pts >= 0 && audio_buffered_ms() < 30) || now - late_at < 1;
     if(ladder_ok < 0) ladder_ok = now;
     if(tight) {
@@ -931,74 +1038,155 @@ static void ladder_step(AVCodecContext *vc)
     vc->skip_frame = lv[ladder];
 }
 
+static HANDLE_AACDECODER l_aac;
+static AVCodecContext *l_vc;
+static AVRational l_atb, l_vtb;
+static unsigned long video_skipped;                       /* pacotes pulados até um quadro-chave */
+
+/* buraco no áudio (pacotes perdidos no ar ou na gravação): silêncio pelo tempo que falta, para o
+ * relógio do som seguir o tempo real e o vídeo ficar no lugar (sem isto a gravação da Record de
+ * 38 s tocava em 27 s, pulando o vídeo dos buracos; e antes do áudio em thread própria, 167 cortes) */
+static unsigned long gap_ms;
+static void audio_gap(double from, double to)
+{
+    static const int16_t z[1024];
+    long n = (long)((to - from) * 32000);
+    while(n > 0 && dsp >= 0 && !quit) {
+        long k = n < 1024 ? n : 1024;
+        if(write(dsp, z, (size_t)k * 2) < 0 && errno != EINTR) break;
+        n -= k;
+    }
+    gap_ms += (unsigned long)((to - from) * 1000);
+    audio_pts = to;
+}
+
+static void *local_audio(void *a)
+{
+    (void)a;
+    pthread_setname_np(pthread_self(), "tv-som");
+    setpriority(PRIO_PROCESS, 0, -15);
+    static INT_PCM pcm[8192];
+    AVPacket *pk = av_packet_alloc();
+    while(pktq_get(&apq, pk)) {
+        double pts = pk->pts == AV_NOPTS_VALUE ? -1 : pk->pts * av_q2d(l_atb);
+        UCHAR *b = pk->data;
+        UINT sz = (UINT)pk->size, valid = sz;
+        int first = 1;
+        while(valid > 0 && !quit) {
+            if(aacDecoder_Fill(l_aac, &b, &sz, &valid) != AAC_DEC_OK) break;
+            b = pk->data + (pk->size - valid);
+            sz = valid;
+            while(aacDecoder_DecodeFrame(l_aac, pcm, 8192, 0) == AAC_DEC_OK) {
+                CStreamInfo *si = aacDecoder_GetStreamInfo(l_aac);
+                double fp = first && pts >= 0 ? pts : audio_pts;
+                first = 0;
+                if(audio_pts >= 0 && fp > audio_pts + 0.03 && fp < audio_pts + 3) audio_gap(audio_pts, fp);
+                audio_out(pcm, si->frameSize, si->numChannels, fp);
+            }
+        }
+        av_packet_unref(pk);
+    }
+    av_packet_free(&pk);
+    if(gap_ms) fprintf(stderr, "bftvd: %lu ms de silêncio nos buracos do áudio\n", gap_ms);
+    return NULL;
+}
+
+static void *local_video(void *a)
+{
+    (void)a;
+    pthread_setname_np(pthread_self(), "tv-video");
+    int skip_ok = !getenv("BFTV_NOSKIP"), need_key = 0;
+    AVPacket *pk = av_packet_alloc();
+    AVFrame *fr = av_frame_alloc();
+    while(pktq_get(&vpq, pk)) {
+        int key = (pk->flags & AV_PKT_FLAG_KEY) != 0;
+        double pts = pk->pts == AV_NOPTS_VALUE ? -1 : pk->pts * av_q2d(l_vtb);
+        double ac = audio_clock();
+        /* atrasado em relação ao som: o que sair daqui já passou da hora; pula até o próximo
+         * quadro-chave (decodificar P sem as referências daria lixo na tela) */
+        if(skip_ok && !key && !need_key && ac >= 0 && pts >= 0 && pts < ac - 1.0) need_key = 1;
+        if(need_key) {
+            if(!key) { video_skipped++; av_packet_unref(pk); continue; }
+            need_key = 0;
+            avcodec_flush_buffers(l_vc);
+        }
+        if(skip_ok && key) ladder_step(l_vc);
+        avcodec_send_packet(l_vc, pk);
+        av_packet_unref(pk);
+        while(avcodec_receive_frame(l_vc, fr) == 0) {
+            double fp = fr->best_effort_timestamp == AV_NOPTS_VALUE ? -1 : fr->best_effort_timestamp * av_q2d(l_vtb);
+            for(;;) {                                      /* fila cheia: espera o mostrador */
+                pthread_mutex_lock(&q_mx);
+                int full = q_w - q_r >= QN;
+                if(!full) {
+                    av_frame_move_ref(q[q_w % QN], fr);
+                    q_pts[q_w % QN] = fp;
+                    q_w++;
+                }
+                pthread_mutex_unlock(&q_mx);
+                if(!full || quit) break;
+                usleep(5000);
+            }
+            av_frame_unref(fr);
+        }
+    }
+    av_frame_free(&fr);
+    av_packet_free(&pk);
+    return NULL;
+}
+
 /* demux já aberto: decodifica e mostra até o fim ou SIGTERM */
 static void run_player(AVFormatContext *fc, pthread_t *st)
 {
     double next_state = 0, start_s = fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time / (double)AV_TIME_BASE;
     int vi = quit ? -1 : av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
     int ai = quit ? -1 : av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, vi, NULL, 0);
-    AVCodecContext *vc = NULL;
+    l_vc = NULL;
     if(vi >= 0) {
         const AVCodec *c = avcodec_find_decoder(fc->streams[vi]->codecpar->codec_id);
-        vc = avcodec_alloc_context3(c);
-        avcodec_parameters_to_context(vc, fc->streams[vi]->codecpar);
-        vc->skip_loop_filter = AVDISCARD_ALL;              /* -30 % de CPU, perda pequena em 320x180 */
-        vc->flags2 |= AV_CODEC_FLAG2_FAST;
-        if(avcodec_open2(vc, c, NULL) < 0) vi = -1;
+        l_vc = avcodec_alloc_context3(c);
+        avcodec_parameters_to_context(l_vc, fc->streams[vi]->codecpar);
+        l_vc->skip_loop_filter = AVDISCARD_ALL;            /* -30 % de CPU, perda pequena em 320x180 */
+        l_vc->flags2 |= AV_CODEC_FLAG2_FAST;
+        if(avcodec_open2(l_vc, c, NULL) < 0) { avcodec_free_context(&l_vc); vi = -1; }
+        else l_vtb = fc->streams[vi]->time_base;
     }
-    HANDLE_AACDECODER aac = ai >= 0 ? aacDecoder_Open(TT_MP4_LOAS, 1) : NULL;
-    if(aac) {
+    l_aac = ai >= 0 ? aacDecoder_Open(TT_MP4_LOAS, 1) : NULL;
+    if(l_aac) {
         /* a saída é mono: a mistura no decodificador pula o estéreo paramétrico (HE-AAC v2);
          * QMF real (baixo consumo) no SBR; sem o limitador (o volume vem do mixer) */
-        aacDecoder_SetParam(aac, AAC_PCM_MAX_OUTPUT_CHANNELS, 1);
-        aacDecoder_SetParam(aac, AAC_QMF_LOWPOWER, 1);
-        aacDecoder_SetParam(aac, AAC_PCM_LIMITER_ENABLE, 0);
+        aacDecoder_SetParam(l_aac, AAC_PCM_MAX_OUTPUT_CHANNELS, 1);
+        aacDecoder_SetParam(l_aac, AAC_QMF_LOWPOWER, 1);
+        aacDecoder_SetParam(l_aac, AAC_PCM_LIMITER_ENABLE, 0);
+        l_atb = fc->streams[ai]->time_base;
+        dsp_open();
     }
-    if(aac) dsp_open();
     for(int i = 0; i < QN; i++) if(!q[i]) q[i] = av_frame_alloc();
+    show_stop = 0;
     pthread_create(st, NULL, show_thread, NULL);
+    pktq_reset(&apq);
+    pktq_reset(&vpq);
+    pthread_t at, vt;
+    int have_a = l_aac != NULL, have_v = l_vc != NULL;
+    if(have_a) pthread_create(&at, NULL, local_audio, NULL);
+    if(have_v) pthread_create(&vt, NULL, local_video, NULL);
     write_state(vi < 0 ? "sem_video" : play_path ? "tocando" : "abrindo");
+    setpriority(PRIO_PROCESS, 0, -14);                     /* a leitura só distribui: barata */
 
     AVPacket *pk = av_packet_alloc();
-    AVFrame *fr = av_frame_alloc();
-    int skip_ok = !getenv("BFTV_NOSKIP");
-    static INT_PCM pcm[8192];
+    double next_accept = mono() + 0.5;
     while(!quit && av_read_frame(fc, pk) >= 0) {
-        AVStream *s = fc->streams[pk->stream_index];
-        double pts = pk->pts == AV_NOPTS_VALUE ? -1 : pk->pts * av_q2d(s->time_base);
-        if(pk->stream_index == ai && aac) {
-            UCHAR *b = pk->data;
-            UINT sz = (UINT)pk->size, valid = sz;
-            int first = 1;
-            while(valid > 0 && !quit) {
-                if(aacDecoder_Fill(aac, &b, &sz, &valid) != AAC_DEC_OK) break;
-                b = pk->data + (pk->size - valid);
-                sz = valid;
-                while(aacDecoder_DecodeFrame(aac, pcm, 8192, 0) == AAC_DEC_OK) {
-                    CStreamInfo *si = aacDecoder_GetStreamInfo(aac);
-                    double fp = first && pts >= 0 ? pts : audio_pts;
-                    first = 0;
-                    audio_out(pcm, si->frameSize, si->numChannels, fp);
-                }
-            }
-        } else if(pk->stream_index == vi && vc) {
-            if(skip_ok && (pk->flags & AV_PKT_FLAG_KEY)) ladder_step(vc);
-            avcodec_send_packet(vc, pk);
-            while(avcodec_receive_frame(vc, fr) == 0) {
-                double fp = fr->best_effort_timestamp == AV_NOPTS_VALUE ? -1 : fr->best_effort_timestamp * av_q2d(s->time_base);
-                for(;;) {                                  /* fila cheia: espera o mostrador */
-                    pthread_mutex_lock(&q_mx);
-                    int full = q_w - q_r >= QN;
-                    if(!full) {
-                        av_frame_move_ref(q[q_w % QN], fr);
-                        q_pts[q_w % QN] = fp;
-                        q_w++;
-                    }
-                    pthread_mutex_unlock(&q_mx);
-                    if(!full || quit) break;
-                    usleep(5000);
-                }
-            }
+        if(!play_path && listen_fd >= 0 && mono() >= next_accept) {   /* o PC chegou depois? */
+            next_accept = mono() + 0.5;
+            if((relay_fd = relay_accept(0)) >= 0) { local_switch = 1; av_packet_unref(pk); break; }
+        }
+        if(pk->stream_index == ai && have_a) {
+            /* gravação: o arquivo chega todo de uma vez; o som (tocado no tempo real) dá o ritmo,
+             * com até ~2 s na frente. Ao vivo a antena já dá o ritmo e isto nunca espera */
+            while(!quit && pktq_len(&apq) > 100) usleep(10000);
+            if(pktq_put(&apq, pk)) av_packet_unref(pk);
+        } else if(pk->stream_index == vi && have_v) {
+            if(pktq_put(&vpq, pk)) { video_skipped++; av_packet_unref(pk); }   /* nunca espera o vídeo */
         }
         av_packet_unref(pk);
         if(play_path) {                                    /* arquivo: posição para a barra do shell */
@@ -1007,6 +1195,19 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
             if(t >= next_state) { write_state("tocando"); next_state = t + 1; }
         }
     }
+    av_packet_free(&pk);
+    /* fim do arquivo: as threads esvaziam o que ficou e saem */
+    pthread_mutex_lock(&apq.mx); apq.eof = 1; pthread_cond_signal(&apq.cv); pthread_mutex_unlock(&apq.mx);
+    pthread_mutex_lock(&vpq.mx); vpq.eof = 1; pthread_cond_signal(&vpq.cv); pthread_mutex_unlock(&vpq.mx);
+    while(play_path && !quit && (pktq_len(&apq) || pktq_len(&vpq))) {
+        if(audio_pts >= 0) play_pos = audio_pts - start_s;
+        usleep(100000);
+    }
+    if(have_a) pthread_join(at, NULL);
+    if(have_v) pthread_join(vt, NULL);
+    avcodec_free_context(&l_vc);
+    if(l_aac) { aacDecoder_Close(l_aac); l_aac = NULL; }
+    if(video_skipped) fprintf(stderr, "bftvd: %lu pacotes de vídeo pulados até um quadro-chave\n", video_skipped);
 }
 
 static int play_file(void)
@@ -1015,7 +1216,25 @@ static int play_file(void)
     if(avformat_open_input(&fc, play_path, NULL, NULL) < 0) { write_state("erro_arquivo"); return 1; }
     avformat_find_stream_info(fc, NULL);
     play_dur = fc->duration > 0 ? fc->duration / (double)AV_TIME_BASE : 0;
+    play_start = fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time / (double)AV_TIME_BASE;
     write_state("tocando");
+    /* com o PC na rede USB, ele decodifica a gravação também */
+    if((!getenv("BFTV_RELAY") || atoi(getenv("BFTV_RELAY"))) && (listen_fd = relay_listen()) >= 0 &&
+       (relay_fd = relay_accept(1500)) >= 0 && (play_fp = fopen(play_path, "rb"))) {
+        fprintf(stderr, "bftvd: o PC decodifica a gravação (relay)\n");
+        int r = relay_play();
+        fclose(play_fp);
+        play_fp = NULL;
+        if(r == 0 || quit) {
+            int done = !quit || play_done;
+            if(dsp >= 0) close(dsp);
+            avformat_close_input(&fc);
+            write_state(done ? "fim" : "parado");
+            return 0;
+        }
+        /* o PC saiu no meio: toca daqui, do começo */
+        av_seek_frame(fc, -1, fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time, AVSEEK_FLAG_BACKWARD);
+    } else if(relay_fd >= 0) { close(relay_fd); relay_fd = -1; }
     pthread_t st;
     run_player(fc, &st);
     int done = !quit;
@@ -1101,31 +1320,38 @@ int main(int argc, char **argv)
     pthread_t tt;
     pthread_create(&tt, NULL, tuner_thread, NULL);
 
-    if(listen_fd >= 0 && (relay_fd = relay_accept(1500)) >= 0) {
-        fprintf(stderr, "bftvd: o PC decodifica (relay)\n");
-        if(relay_play() == 0 || quit) {
-            quit = 1;
-            pthread_join(tt, NULL);
-            if(dsp >= 0) close(dsp);
-            if(rec) { fclose(rec); rec = NULL; }
-            write_state("parado");
-            return 0;
+    /* PC ou aqui, e troca no meio: o PC que conecta depois (ele tenta a cada 1 s; numa troca de
+     * canal pode chegar depois da espera inicial) assume; o PC que sai devolve para cá */
+    if(listen_fd >= 0) relay_fd = relay_accept(1500);
+    AVFormatContext *fc = NULL;
+    while(!quit) {
+        if(relay_fd >= 0) {
+            fprintf(stderr, "bftvd: o PC decodifica (relay)\n");
+            if(relay_play() == 0 || quit) break;
         }
+        if(!fc) {                                      /* demux daqui (uma vez; segue lendo o anel) */
+            fc = avformat_alloc_context();
+            uint8_t *iob = av_malloc(32768);
+            fc->pb = avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL);
+            fc->probesize = 120000;                    /* ~2,5 s de TS 1seg: abre o canal mais rápido */
+            fc->max_analyze_duration = AV_TIME_BASE;
+            const AVInputFormat *ts = av_find_input_format("mpegts");
+            if(avformat_open_input(&fc, NULL, ts, NULL) < 0) { write_state("erro_fluxo"); quit = 1; break; }
+            avformat_find_stream_info(fc, NULL);
+        }
+        pthread_t st;
+        local_switch = 0;
+        run_player(fc, &st);
+        show_stop = 1;
+        pthread_join(st, NULL);
+        show_stop = 0;
+        if(!local_switch) break;                       /* fim ou SIGTERM */
+        queues_clear();                                /* o PC chegou: daqui para lá */
+        if(dsp >= 0) { close(dsp); dsp = -1; }
+        audio_pts = -1;
+        ladder = 0;
     }
-
-    /* demux */
-    AVFormatContext *fc = avformat_alloc_context();
-    uint8_t *iob = av_malloc(32768);
-    fc->pb = avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL);
-    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg: abre o canal mais rápido */
-    fc->max_analyze_duration = AV_TIME_BASE;
-    const AVInputFormat *ts = av_find_input_format("mpegts");
-    if(avformat_open_input(&fc, NULL, ts, NULL) < 0) { write_state("erro_fluxo"); quit = 1; }
-    if(!quit) avformat_find_stream_info(fc, NULL);
-    pthread_t st;
-    run_player(fc, &st);
     quit = 1;
-    pthread_join(st, NULL);
     pthread_join(tt, NULL);
     if(dsp >= 0) close(dsp);
     if(rec) { fclose(rec); rec = NULL; }

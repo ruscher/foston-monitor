@@ -184,8 +184,8 @@ static void session(void)
     AVFormatContext *fc = avformat_alloc_context();
     uint8_t *iob = av_malloc(32768);
     fc->pb = avio_alloc_context(iob, 32768, 0, NULL, read_cb, NULL, NULL);
-    fc->probesize = 200000;
-    fc->max_analyze_duration = AV_TIME_BASE * 3 / 2;
+    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg, como no FOSTON */
+    fc->max_analyze_duration = AV_TIME_BASE;
     AVCodecContext *vc = NULL, *ac = NULL;
     SwrContext *swr = NULL;
     struct SwsContext *sws = NULL;

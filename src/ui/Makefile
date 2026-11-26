@@ -14,7 +14,7 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.6.0
+VERSION   := 0.6.1
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')

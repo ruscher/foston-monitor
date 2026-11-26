@@ -106,9 +106,61 @@ anterior.
 `BFTV_RELAY=0` desliga o relay no `bftvd` (para comparar). O estado em `/run/bigfoston-tv` ganhou
 `relay=1` quando o PC está decodificando.
 
+## Sem o PC: o som em thread própria (26/11/2026)
+
+O modo local (no carro) também foi refeito. Antes uma thread só lia o TS, decodificava o vídeo e
+o som; o som esperava cada quadro e secava. Agora são três:
+
+- **Leitura**: só distribui os pacotes (nice -14) e nunca espera o vídeo.
+- **Som**: decodifica o AAC e toca, com nice -15. Um buraco nos horários do áudio (pacotes
+  perdidos no ar ou na gravação) vira silêncio pelo tempo que falta, para o relógio seguir o
+  tempo real.
+- **Vídeo**: decodifica com o que sobra. Se um pacote já está 1 s atrás do relógio do som, pula
+  até o próximo quadro-chave (decodificar P sem as referências daria lixo).
+
+A escada de decodificação mede o atraso pela fila de pacotes de vídeo.
+
+Medido na Globo sem o PC (mesmo canal, GPS pausado como no app):
+
+| | Quadros/s | Cortes de som |
+|---|---|---|
+| Antes (4 rodadas no total) | 11–14 | 0, 102, 62, 95 (depende de quanto o vídeo pesa no trecho) |
+| Agora (5 rodadas) | 11–13 (o que o processador decodifica) | **0** em todas |
+
+Gravação da Record com interferência (38 s, com 15 s de áudio perdidos no ar):
+
+| | Duração | Cortes |
+|---|---|---|
+| Antes | 37 s | 167 |
+| Agora, aqui | 41 s (tempo real) | **0** |
+| Agora, pelo PC | 39 s (tempo real) | **0**, 730 quadros contra 327 |
+
+## Gravações pelo PC
+
+- Com o PC conectado, a gravação (`-p`) também vai para ele. O `bftvd` lê o arquivo no ritmo do
+  som, com até 2 s na frente e no máximo 2× a taxa do arquivo.
+- Sem o limite de taxa, o laço mandava o arquivo inteiro antes da primeira resposta: 16 s de som
+  na fila e amostras perdidas, e a gravação tocava em 23 s em vez de 38.
+- Se o PC sai no meio, a gravação recomeça aqui.
+
+## Troca no meio
+
+- O `bftvd` continua escutando enquanto decodifica aqui. Se o PC conecta depois, ele assume na
+  hora.
+- Isso resolve a troca de canal: o `bftvd` novo esperava só 1,5 s, e às vezes o relay ainda não
+  tinha reconectado. Aquele canal ficava inteiro decodificado no FOSTON.
+- Testado:
+  - o PC chegando depois: passou a 28 qps, 0 cortes;
+  - 4 trocas de canal seguidas: 4 pelo PC;
+  - ida e volta na mesma TV (PC, PC sai, aqui, PC volta, PC): 0 cortes em todas as etapas.
+
+## Na tela
+
+O rodapé do app TV mostra "Decodificado no PC" quando o PC está decodificando (BigFoston OS
+0.6.1). Captura do simulador: `46i-tv-pc`.
+
 ## Falta
 
-- **Sem o PC, o som ainda corta.** O próximo passo é o mesmo princípio no modo local: o som em
-  thread própria, de prioridade mais alta, com o vídeo descendo a escada.
-- **Gravações (`-p`) ainda são decodificadas no FOSTON.**
-- **O app TV não mostra quando o PC está decodificando.** O dado já está no estado (`relay=1`).
+- Testar a recuperação do som com interferência em outros canais e lugares (só a Record foi
+  medida).
+- Sem o PC, o vídeo continua limitado a ~12 qps: é o que o ARM11 decodifica.
