@@ -17,13 +17,14 @@ modo automotivo horizontal, com a lista de rotas na lateral e o mapa em destaque
 
 ## Navegação
 
-- No alto, a **faixa verde** da manobra (seta, distância, via, a manobra seguinte) e, embaixo
-  dela, o **guia de faixas** quando há dados.
+- No alto, a **faixa da manobra** em material escuro (seta, distância, via, a manobra seguinte)
+  e, embaixo dela, o **guia de faixas** quando há dados.
 - **Coluna à esquerda** (150 px):
   - tempo que falta (grande), distância, hora de chegada;
   - velocidade atual (só com GPS de verdade ou na simulação);
   - embaixo, visão geral (olho) e **Encerrar** em vermelho.
-- À direita, os controles redondos: zoom, N/↑/3D, seguir, satélites e voz.
+- À direita, os controles redondos: zoom (+ e − numa cápsula só), N/↑/3D, seguir, satélites
+  e voz.
 - Avisos: radar ou lombada em amarelo ao lado da coluna; "SIMULAÇÃO" em vermelho à direita.
 
 ## Cores
@@ -39,3 +40,44 @@ modo automotivo horizontal, com a lista de rotas na lateral e o mapa em destaque
 
 Capturas no simulador: `42b` (planejamento com alternativa), `42d` (navegação), `42j` (depois de
 trocar de rota), `42k` (faixas).
+
+## Revisão visual (26/11/2026, BigFoston OS 0.6.4)
+
+As imagens de referência continuaram sem chegar: só fotos da tela do FOSTON aparecem nas
+conversas do projeto. Esta revisão segue os princípios do Apple Maps sem copiar cores, ícones
+nem marca:
+- mapa calmo, para a rota ser o que mais aparece;
+- informação legível num relance;
+- materiais sóbrios.
+
+**Paleta do mapa** (`src/ui/biggps/bgrender.c`): própria, no lugar da do OpenStreetMap Carto
+(rodovias rosa, troncais salmão e secundárias amarelas competiam com a rota).
+
+- **Noite**:
+  - fundo `#1B1E24`;
+  - ruas em cinza-azulado neutro, cada vez mais claras por categoria: serviço `#3B404B`,
+    residencial `#474D5A`, terciária `#545B6A`, secundária `#666E80`, primária `#7D8597`;
+  - troncais e rodovias num dourado suave (`#8C7D5C`, `#A08A5C`);
+  - água azul fundo `#15334B`;
+  - parques e matas verdes de pouca saturação.
+- **Dia**:
+  - fundo `#F4F2EE`;
+  - ruas brancas com contorno claro;
+  - primárias, troncais e rodovias em amarelo-laranja suave (`#FFF6DC`, `#FFE6A8`, `#FFD685`).
+- Só a tabela de cores mudou: o custo de desenho é o mesmo. No FOSTON, seguir 16,3–16,8 qps e
+  navegação 11,1–11,2 qps, iguais às medições anteriores.
+
+**Faixa da manobra:**
+- material escuro (`#1F232B`) com borda fina e sombra, no lugar do verde forte;
+- distância em branco, via em cinza-claro e "Depois:" em cinza médio;
+- o detalhe da seta em azul-claro (a cor da rota).
+
+**Zoom:** + e − numa cápsula, com divisória. O fundo é da cápsula; o botão só realça ao tocar.
+
+**Alertas na navegação:**
+- navegando, o mapa mostra só os alertas **na rota** (semáforos, lombadas, radares, passagens de
+  nível) e os seus. No centro de Brasília, os semáforos de todas as ruas enchiam a tela (visto
+  no aparelho).
+- fora da navegação, o mapa continua mostrando todos.
+
+Capturas do simulador: `42`, `42b`, `42c`, `42d`, `42p`, `42q`.

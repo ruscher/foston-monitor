@@ -382,6 +382,31 @@ static void draw_user_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_e
     }
 }
 
+/* navegando: os alertas da rota (bga_route, semáforos inclusive), não todos os da área. No
+ * centro de Brasília os semáforos de todas as ruas enchiam a tela (visto no FOSTON) */
+static void draw_alert_list(const bgr_view_t *v, rast_surface_t *s, const bga_entry_t *e, int n)
+{
+    int z = v->zoom256 >> 8, drawn = 0;
+    if(z < 13) return;
+    static const int order[] = { BGA_CAMERA, BGA_RAIL, BGA_BUMP, BGA_SIGNAL };
+    static const int minz[BGA_KINDS] = { 99, 14, 13, 14, 14 };
+    for(int o = 0; o < 4 && drawn < MAXAL; o++) {
+        int k = order[o];
+        if(z < minz[k]) continue;
+        for(int i = 0; i < n && drawn < MAXAL; i++) {
+            if(e[i].kind != k) continue;
+            int sx, sy;
+            bgr_world_to_screen(v, s, e[i].x, e[i].y, &sx, &sy);
+            if(sx < -14 || sy < -14 || sx > s->w + 14 || sy > s->h + 14) continue;
+            if(k == BGA_SIGNAL) icon_signal(s, sx, sy);
+            else if(k == BGA_CAMERA) icon_camera(s, sx, sy);
+            else if(k == BGA_BUMP) icon_bump(s, sx, sy);
+            else icon_rail(s, sx, sy);
+            drawn++;
+        }
+    }
+}
+
 static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t *p)
 {
     int z = v->zoom256 >> 8;
@@ -436,6 +461,8 @@ static struct {
     int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
+    bga_entry_t *ral;          /* navegando: só os alertas na rota (semáforos inclusive) vão para o mapa */
+    int nral, ral_on;
     bgk_pack_t *speeds;        /* limites de velocidade das vias (maxspeed do OSM; mapeado) */
     uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
     uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
@@ -477,6 +504,11 @@ static void *worker(void *arg)
         static bga_entry_t ucopy[MAXUPT];
         int nu = nupt;                                /* os avisos do usuário (mudam na interface) */
         memcpy(ucopy, upts, (size_t)nu * sizeof ucopy[0]);
+        static bga_entry_t *alcopy;                   /* navegando: os alertas da rota */
+        static int alcap;
+        int nal = R.ral_on && R.ral ? R.nral : -1;
+        if(nal > alcap) { bga_entry_t *nb = realloc(alcopy, (size_t)nal * sizeof *nb); if(nb) { alcopy = nb; alcap = nal; } else nal = -1; }
+        if(nal > 0) memcpy(alcopy, R.ral, (size_t)nal * sizeof *alcopy);
         static uint32_t *acopy[BGRT_MAXALT];
         static int acap[BGRT_MAXALT];
         int an[BGRT_MAXALT];
@@ -520,7 +552,8 @@ static void *worker(void *arg)
                 bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
             }
         }
-        draw_alerts(&v, &s, R.alerts);              /* por cima da rota: o radar na via aparece */
+        if(nal >= 0) draw_alert_list(&v, &s, alcopy, nal);   /* navegando: só o que está na rota */
+        else draw_alerts(&v, &s, R.alerts);         /* por cima da rota: o radar na via aparece */
         draw_user_alerts(&v, &s, ucopy, nu);
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
@@ -686,6 +719,7 @@ static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *bo
 static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
 static uint16_t icon_px[80 * 80];
+#define BANNER_BG 0x1F232B                           /* faixa da manobra e fundo do ícone dela */
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
 static void anim_step(bool fix);
@@ -734,6 +768,7 @@ static void request(void)
     pthread_mutex_lock(&R.mu);
     R.req = cur;
     R.req_persp = persp_wanted();
+    R.ral_on = N.navigating;
     R.has_req = 1;
     pthread_cond_signal(&R.cv);
     pthread_mutex_unlock(&R.mu);
@@ -1487,6 +1522,13 @@ static void route_alerts(void)
     uint64_t t0 = perf_now_us();
     int n = 0;
     bga_hit_t *h = R.alerts ? bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n) : NULL;
+    bga_entry_t *pub = n ? malloc((size_t)n * sizeof *pub) : NULL;      /* para o mapa: todos os da rota */
+    for(int i = 0; pub && i < n; i++) pub[i] = (bga_entry_t){ h[i].x, h[i].y, h[i].kind, h[i].maxspeed, BGA_DIR_ANY };
+    pthread_mutex_lock(&R.mu);
+    free(R.ral);
+    R.ral = pub;
+    R.nral = pub ? n : 0;
+    pthread_mutex_unlock(&R.mu);
     int w = 0;
     for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
     w = bga_route_points(upts, nupt, N.route.xy, N.route.cum_dm, N.route.npts, &h, w);   /* os seus */
@@ -1669,7 +1711,7 @@ static void update_banner(void)
     const bgn_man_t *m = &N.route.man[st->next];
     if(m->type != icon_type || m->exit != icon_exit) {
         rast_surface_t s = { icon_px, 80, 80, 80 };
-        bgn_icon(&s, m->type, m->exit, rgb565(0xffffff), rgb565(0x9fd4a8), rgb565(0x1e6e34));
+        bgn_icon(&s, m->type, m->exit, rgb565(0xffffff), rgb565(0x8AB4F8), rgb565(BANNER_BG));
         icon_type = m->type;
         icon_exit = m->exit;
         lv_image_cache_drop(&icon_dsc);
@@ -2237,8 +2279,10 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
 }
 
 /* simulação: avança 1 s pela rota na velocidade dos trechos */
+static bool demo_freeze;                          /* capturas: a simulação não mexe no estado montado */
 static void sim_step(void)
 {
+    if(demo_freeze) return;
     const bgn_route_t *r = &N.route;
     if(r->npts < 2) return;
     uint32_t total = r->cum_ds[r->npts - 1];
@@ -3449,10 +3493,31 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_image_recolor_opa(mg, LV_OPA_COVER, 0);
     lv_obj_center(mg);
     lv_obj_remove_flag(mg, LV_OBJ_FLAG_CLICKABLE);
-    b = round_btn(ov, LV_SYMBOL_PLUS, zoom_cb, 1);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12);
-    b = round_btn(ov, LV_SYMBOL_MINUS, zoom_cb, -1);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + BTN + 10);
+    {   /* + e −: uma cápsula só (os dois fazem a mesma coisa em sentidos opostos) */
+        lv_obj_t *cap = lv_obj_create(ov);
+        lv_obj_remove_style_all(cap);
+        lv_obj_set_size(cap, BTN, 2 * BTN + 1);
+        lv_obj_set_style_radius(cap, 14, 0);
+        lv_obj_set_style_bg_color(cap, pal()->surface, 0);
+        lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
+        lv_obj_set_style_shadow_width(cap, 10, 0);
+        lv_obj_set_style_shadow_opa(cap, LV_OPA_30, 0);
+        lv_obj_remove_flag(cap, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(cap, LV_ALIGN_TOP_RIGHT, -12, 12);
+        for(int k = 0; k < 2; k++) {
+            b = round_btn(cap, k ? LV_SYMBOL_MINUS : LV_SYMBOL_PLUS, zoom_cb, k ? -1 : 1);
+            lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);   /* a cápsula é o fundo; realce só ao tocar */
+            lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+            lv_obj_set_style_shadow_width(b, 0, 0);
+            lv_obj_set_pos(b, 0, k ? BTN + 1 : 0);
+        }
+        lv_obj_t *div = lv_obj_create(cap);           /* linha entre os dois */
+        lv_obj_remove_style_all(div);
+        lv_obj_set_size(div, BTN - 20, 1);
+        lv_obj_set_pos(div, 10, BTN);
+        lv_obj_set_style_bg_color(div, pal()->text_dim, 0);
+        lv_obj_set_style_bg_opa(div, LV_OPA_40, 0);
+    }
     b = round_btn(ov, "N", rot_cb, 0);
     rot_lbl = lv_obj_get_child(b, 0);
     lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + 2 * (BTN + 10));
@@ -3488,11 +3553,14 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_remove_style_all(banner);
     lv_obj_set_size(banner, 632, 104);
     lv_obj_set_pos(banner, 80, 12);
-    lv_obj_set_style_bg_color(banner, lv_color_hex(0x1e6e34), 0);
+    /* material escuro e sóbrio: a distância em destaque, o mapa calmo por baixo */
+    lv_obj_set_style_bg_color(banner, lv_color_hex(BANNER_BG), 0);
     lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(banner, 14, 0);
-    lv_obj_set_style_shadow_width(banner, 14, 0);
-    lv_obj_set_style_shadow_opa(banner, LV_OPA_40, 0);
+    lv_obj_set_style_radius(banner, 18, 0);
+    lv_obj_set_style_border_color(banner, lv_color_hex(0x343A46), 0);
+    lv_obj_set_style_border_width(banner, 1, 0);
+    lv_obj_set_style_shadow_width(banner, 18, 0);
+    lv_obj_set_style_shadow_opa(banner, LV_OPA_50, 0);
     lv_obj_remove_flag(banner, LV_OBJ_FLAG_SCROLLABLE);
     memset(&icon_dsc, 0, sizeof icon_dsc);
     icon_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -3507,11 +3575,11 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_pos(ban_icon, 12, 12);
     ban_dist = bf_label(banner, "", BF_FONT_L, lv_color_white());
     lv_obj_set_pos(ban_dist, 104, 8);
-    ban_text = bf_label(banner, "", BF_FONT_M, lv_color_white());
+    ban_text = bf_label(banner, "", BF_FONT_M, lv_color_hex(0xE3E6EB));
     lv_obj_set_pos(ban_text, 104, 44);
     lv_label_set_long_mode(ban_text, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ban_text, 516);
-    ban_then = bf_label(banner, "", BF_FONT_S, lv_color_hex(0xcfe8d4));
+    ban_then = bf_label(banner, "", BF_FONT_S, lv_color_hex(0x9AA3B2));
     lv_obj_set_pos(ban_then, 104, 74);
     lv_label_set_long_mode(ban_then, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ban_then, 516);
@@ -3766,6 +3834,9 @@ static void destroy(void)
     if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
+    free(R.ral);
+    R.ral = NULL;
+    R.nral = 0;
     bga_close(R.alerts);
     R.alerts = NULL;
     for(int i = 0; i < 300; i++) {                /* o cálculo dos limites ainda lê o arquivo: espera */
@@ -3811,6 +3882,7 @@ static void destroy(void)
  * 7 escolhe o sedã vermelho grande, 8 fecha o painel */
 void scr_map_demo(int step)
 {
+    demo_freeze = step == 16;
     if(step == 0) {
         uint32_t x, y;
         bgr_lonlat_to_world(-48.0560, -15.8335, &x, &y);
@@ -3875,6 +3947,7 @@ void scr_map_demo(int step)
             route_request(N.profile, false);
         }
     } else if(step == 16) {                          /* limite da via num trecho com maxspeed, acima dele */
+        for(int t = 0; t < 100 && !N.lim; t++) { lim_poll(); if(!N.lim) usleep(10000); }   /* vem em segundo plano */
         for(int i = 0; N.lim && i < N.route.npts - 1; i++) if(N.lim[i] >= 70) { N.route.seg = i; break; }
         pos_speed = 95;
         update_botbar();

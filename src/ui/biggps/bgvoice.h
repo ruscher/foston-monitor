@@ -23,14 +23,18 @@ typedef struct bgv_pack bgv_pack_t;
 typedef struct {
     const uint8_t *data;       /* predictor, index, nibbles */
     uint32_t nsamples;
+    uint8_t *buf;              /* bgv_find: read from the file (free with bgv_clip_release) */
 } bgv_clip_t;
 
 bgv_pack_t *bgv_open(const char *path, char *err, int errlen);
 void bgv_close(bgv_pack_t *p);
 uint32_t bgv_count(const bgv_pack_t *p);
 uint32_t bgv_rate(const bgv_pack_t *p);
-/* Clip for a phrase (any case/spacing; normalized here).  0 when the pack does not have it. */
+/* Clip for a phrase (any case/spacing; normalized here).  0 when the pack does not have it.
+ * Only the index and keys are mapped (a 32-bit process has ~3 GB of addresses and a regional
+ * pack can be gigabytes); the clip is read from the file into out->buf: release it. */
 int bgv_find(const bgv_pack_t *p, const char *text, bgv_clip_t *out);
+void bgv_clip_release(bgv_clip_t *c);
 
 /* Lowercase (ASCII and Latin-1 letters), single spaces, no leading/trailing spaces or
  * punctuation (, . ; : ! ? …).  Same rule as make-faber-voice.py. */
