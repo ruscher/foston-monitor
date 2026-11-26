@@ -1181,6 +1181,12 @@ int screenshot_run(const char *dir)
         ts->home_mode = BF_HOME_GLASS;
         app_rebuild_now(); pump(50);
         go(SCR_TV, 0); pump(300); shot("46-tv");
+        o = fopen(sp, "w");                             /* o PC decodificando (docs/tv/08-relay-pc.md) */
+        if(o) { fputs("state=tocando\nfreq=527.143\nlocked=1\nsnr=19\nrssi=-62\nfps=30.0\nrelay=1\n", o); fclose(o); }
+        pump(1200); shot("46i-tv-pc");
+        o = fopen(sp, "w");
+        if(o) { fputs("state=tocando\nfreq=479.143\nlocked=1\nsnr=19\nrssi=-62\nfps=13.9\n", o); fclose(o); }
+        pump(1200);
         scr_tv_demo(5); pump(300); shot("46f-tv-volume");
         scr_tv_demo(1); pump(300); shot("46b-tv-canais");
         scr_tv_demo(2); pump(300); shot("46c-tv-gravacoes");

@@ -88,7 +88,7 @@ static bool have_player(void)
 
 /* ------------------------------------------------------------ estado do bftvd */
 
-typedef struct { char state[24]; int locked, snr, rssi, scan_ch, scan_found, rec_kb; double fps, pos, dur; bool rec; } tv_state_t;
+typedef struct { char state[24]; int locked, snr, rssi, scan_ch, scan_found, rec_kb, relay; double fps, pos, dur; bool rec; } tv_state_t;
 
 static void read_state(tv_state_t *s)
 {
@@ -112,6 +112,7 @@ static void read_state(tv_state_t *s)
         else if(!strcmp(l, "rec_kb")) { s->rec_kb = atoi(v); s->rec = true; }
         else if(!strcmp(l, "pos")) s->pos = atof(v);
         else if(!strcmp(l, "dur")) s->dur = atof(v);
+        else if(!strcmp(l, "relay")) s->relay = atoi(v);      /* o PC decodifica (docs/tv/08-relay-pc.md) */
     }
     fclose(f);
 }
@@ -887,6 +888,7 @@ static void update_ui(void)
     snprintf(sub, sizeof sub, "%s", tr(S_TV_REGION));
     if(b2[0]) { size_t k = strlen(sub); snprintf(sub + k, sizeof sub - k, "  \xC2\xB7  %s", b2); }
     if(t[0]) { size_t k = strlen(sub); snprintf(sub + k, sizeof sub - k, "  \xC2\xB7  %s", t); }
+    if(s.relay && t[0]) { size_t k = strlen(sub); snprintf(sub + k, sizeof sub - k, "  \xC2\xB7  %s", tr(S_TV_ON_PC)); }
     set_text(ft_name, name);
     set_text(ft_sub, sub);
     int lv = -1;                                              /* força do sinal (SNR) */

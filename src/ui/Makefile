@@ -14,7 +14,7 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.6.0
+VERSION   := 0.6.1
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
@@ -207,6 +207,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ibuild/test \
 		tests/test_btvoice.c core/btaudio.c -lpthread -o build/test/test_btvoice
 	./build/test/test_btvoice build/test
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -DYUVZ_ENCODER \
+		tests/test_yuvz.c ../tv/yuvz.c core/lz4dec.c -llz4 -o build/test/test_yuvz
+	./build/test/test_yuvz
 
 run: sim
 	./build/sim/bigfoston-shell
