@@ -105,11 +105,12 @@ No cartão:
 - **Desempenho com o GPS procurando satélites e música tocando:** pior que o medido antes
   ([30](30-benchmarks.md)). Falta medir com o GPS fixado.
 
+- **Limite de velocidade das vias**, do `maxspeed` do OSM ([36](36-limites-de-velocidade.md)), BigFoston OS 0.6.2.
+
 ## 26. Próximos passos
 
 - Testar no FOSTON o que só foi visto no simulador: alternativas, faixas, painéis e busca.
 - Testar dirigindo, e com música do celular tocando.
 - Gerar a voz com nomes para outras regiões.
-- Limite de velocidade das vias (precisa de dado novo).
 - Reordenar e arrastar paradas.
 - Ajustar o visual quando as imagens de referência chegarem.

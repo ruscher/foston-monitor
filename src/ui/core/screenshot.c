@@ -1042,6 +1042,7 @@ int screenshot_run(const char *dir)
                 scr_map_demo(13); pump(200); shot("42n-biggps-radar-placa");
                 scr_map_demo(14); pump(200); shot("42o-biggps-radar-acima");
                 scr_map_demo(15);
+                scr_map_demo(16); pump(200); shot("42p-biggps-limite-da-via");
                 go(SCR_HOME, 0); pump(100);
             }
             unsetenv("BIGFOSTON_GPS_STATUS");

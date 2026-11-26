@@ -3,7 +3,7 @@
 # extrato do OpenStreetMap (Geofabrik). BBOX = MINLON,MINLAT,MAXLON,MAXLAT (recorte; para o
 # Brasil: -74.1,-34.0,-28.5,5.4). Gera em SAIDA/big-gps:
 #   mapas/NOME.bgm (+ NOME-2.bgm… se passar de 3,9 GB)   rotas/NOME-carro.bgr, -moto, -bicicleta,
-#   -ape, -carro-sem-pedagio, NOME.bgl (faixas)   busca/NOME.bgs (formato 3)   alertas/NOME.bga   voz/faber.bgv (Piper Faber,
+#   -ape, -carro-sem-pedagio, NOME.bgl (faixas), NOME.bgk (limites)   busca/NOME.bgs (formato 3)   alertas/NOME.bga   voz/faber.bgv (Piper Faber,
 #   frases fixas; com VOZ_NOMES=1 também os nomes das vias do recorte)   SHA256SUMS
 # O oceano vem de firmware/build/osm/agua/water-polygons-split-4326.zip se existir
 # (osmdata.openstreetmap.de, ODbL). Semáforos e cabines de pedágio vêm dos nós do extrato.
@@ -35,6 +35,8 @@ rm -f "$D/mapas/$NAME"*.bgm
 rm -rf "$OUT/tmp/spill"
 echo "== faixas (turn:lanes)"
 "$B/bglanes-build" "$IN" "$D/rotas/$NAME.bgl" $BB
+echo "== limites de velocidade (maxspeed)"
+"$B/bgspeed-build" "$IN" "$D/rotas/$NAME.bgk" $BB
 echo "== alertas (semáforos, radares, lombadas, passagens de nível)"
 "$B/bgalert-build" "$IN" "$D/alertas/$NAME.bga" $BB
 echo "== busca"

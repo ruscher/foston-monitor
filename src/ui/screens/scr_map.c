@@ -26,6 +26,7 @@
 #include "../biggps/bgvehicle.h"
 #include "../biggps/bgpersp.h"
 #include "../biggps/bglanes.h"
+#include "../biggps/bgspeed.h"
 #include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
@@ -435,6 +436,7 @@ static struct {
     int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
+    bgk_pack_t *speeds;        /* limites de velocidade das vias (maxspeed do OSM; mapeado) */
     uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
     uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
     int alt_n[BGRT_MAXALT];
@@ -586,6 +588,7 @@ static struct {
     char dest_name[64];
     bga_hit_t *al;             /* alertas na rota (radar, lombada, passagem de nível) */
     int nal, al_next, al_said;
+    uint8_t *lim;              /* limite (km/h, 0 = o mapa não diz) de cada trecho da rota */
     int nstops, pick_stop;     /* paradas no caminho (em ordem); esperando o toque longo da próxima */
     int toll_arcs, toll_avoided;            /* da rota mostrada */
     int nalt;                               /* rotas alternativas de verdade (bgrt_poll_alts) */
@@ -668,6 +671,10 @@ static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da 
 #define SIGN_SHRINK_MS 4000            /* tempo grande antes de diminuir */
 #define SIGN_ANIM_MS 400
 static lv_obj_t *sign, *sign_num, *sign_unit, *sign_dist, *scale_chip;
+/* limite da via (maxspeed do OSM): placa pequena na coluna da navegação, ou acima da barra de baixo
+ * seguindo sem rota; a velocidade fica vermelha acima dele (ou acima do limite de um radar) */
+static lv_obj_t *lim_sign, *lim_lbl;
+static int road_lim, road_over;
 static struct {
     int idx;                          /* alerta mostrado (N.al), -1 nenhum */
     int limit, t, last_d, over;       /* t: 0 grande .. 1024 pequena */
@@ -1366,6 +1373,110 @@ static int upt_near(uint32_t x, uint32_t y)
     return k;
 }
 
+/* limites da rota em segundo plano: na primeira rota o arquivo vem do cartão (medido no FOSTON:
+ * 972 ms), e a interface não pode parar. A placa aparece quando o resultado chega. */
+static struct {
+    pthread_mutex_t mu;
+    int gen, done_gen;                             /* rota pedida / rota do resultado */
+    uint32_t *xy;
+    int npts;
+    uint8_t *out;
+    bool busy;
+    /* seguindo sem rota: o limite no ponto (a busca também lê do cartão) */
+    bool pt_want;
+    uint32_t px, py;
+    int pb, pt_lim;
+} LJ = { .mu = PTHREAD_MUTEX_INITIALIZER };
+
+static void *lim_worker(void *a)
+{
+    (void)a;
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+    for(;;) {
+        pthread_mutex_lock(&LJ.mu);
+        int gen = LJ.gen, npts = LJ.npts;
+        uint32_t *xy = LJ.xy;
+        LJ.xy = NULL;
+        if(!xy && LJ.pt_want) {
+            uint32_t x = LJ.px, y = LJ.py;
+            int b = LJ.pb;
+            LJ.pt_want = false;
+            pthread_mutex_unlock(&LJ.mu);
+            int v = bgk_at(R.speeds, x, y, b);
+            pthread_mutex_lock(&LJ.mu);
+            LJ.pt_lim = v;
+            pthread_mutex_unlock(&LJ.mu);
+            continue;
+        }
+        if(!xy) { LJ.busy = false; pthread_mutex_unlock(&LJ.mu); return NULL; }
+        pthread_mutex_unlock(&LJ.mu);
+        uint8_t *out = calloc((size_t)npts, 1);
+        uint64_t t0 = perf_now_us();
+        int got = out ? bgk_route(R.speeds, xy, npts, out) : 0;
+        fprintf(stderr, "biggps: limite de velocidade em %d de %d trechos da rota (%u ms, em segundo plano)\n", got, npts - 1,
+                (unsigned)((perf_now_us() - t0) / 1000));
+        free(xy);
+        pthread_mutex_lock(&LJ.mu);
+        if(gen == LJ.gen) { free(LJ.out); LJ.out = out; LJ.done_gen = gen; out = NULL; }   /* senão já há outra rota */
+        pthread_mutex_unlock(&LJ.mu);
+        free(out);
+    }
+}
+
+static void lim_kick(void);
+static void lim_start(void)
+{
+    if(!R.speeds || N.route.npts < 2) return;
+    uint32_t *xy = malloc((size_t)N.route.npts * 2 * sizeof *xy);
+    if(!xy) return;
+    memcpy(xy, N.route.xy, (size_t)N.route.npts * 2 * sizeof *xy);
+    pthread_mutex_lock(&LJ.mu);
+    LJ.gen++;
+    free(LJ.xy);
+    LJ.xy = xy;
+    LJ.npts = N.route.npts;
+    pthread_mutex_unlock(&LJ.mu);
+    lim_kick();
+}
+
+/* seguindo sem rota: pede o limite no ponto; devolve o último que chegou */
+static int lim_point(uint32_t x, uint32_t y, int bearing)
+{
+    if(!R.speeds) return 0;
+    pthread_mutex_lock(&LJ.mu);
+    LJ.px = x; LJ.py = y; LJ.pb = bearing;
+    LJ.pt_want = true;
+    int v = LJ.pt_lim;
+    pthread_mutex_unlock(&LJ.mu);
+    lim_kick();
+    return v;
+}
+
+/* a thread dos limites, se não está rodando */
+static void lim_kick(void)
+{
+    pthread_mutex_lock(&LJ.mu);
+    bool start = !LJ.busy;
+    LJ.busy = true;
+    pthread_mutex_unlock(&LJ.mu);
+    if(start) {
+        pthread_t t;
+        pthread_attr_t at;
+        pthread_attr_init(&at);
+        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+        if(pthread_create(&t, &at, lim_worker, NULL)) { pthread_mutex_lock(&LJ.mu); LJ.busy = false; pthread_mutex_unlock(&LJ.mu); }
+        pthread_attr_destroy(&at);
+    }
+}
+
+/* o resultado da rota atual, se chegou (na thread da interface) */
+static void lim_poll(void)
+{
+    pthread_mutex_lock(&LJ.mu);
+    if(LJ.out && LJ.done_gen == LJ.gen) { free(N.lim); N.lim = LJ.out; LJ.out = NULL; }
+    pthread_mutex_unlock(&LJ.mu);
+}
+
 static void route_alerts(void)
 {
     free(N.al);
@@ -1383,9 +1494,43 @@ static void route_alerts(void)
     N.nal = w;
     fprintf(stderr, "biggps: %d alertas na rota (de %d pontos com semáforos) em %u ms\n", w, n,
             (unsigned)((perf_now_us() - t0) / 1000));
+    free(N.lim);                                   /* limite de cada trecho: em segundo plano */
+    N.lim = NULL;
+    lim_start();
 }
 
 static uint32_t now_ms(void) { return (uint32_t)(perf_now_us() / 1000); }
+
+static void speed_color(void)
+{
+    lv_color_t c = RS.over > 0 || road_over ? lv_color_hex(0xff6b5e) : pal()->text;
+    if(col_speed) lv_obj_set_style_text_color(col_speed, c, 0);
+    if(info_lbl) lv_obj_set_style_text_color(info_lbl, road_over && !N.navigating ? c : pal()->text, 0);   /* seguindo sem rota */
+}
+
+/* a cada posição: o limite do trecho da rota, ou da via em que se anda (seguindo, com GPS) */
+static void road_limit_update(uint32_t x, uint32_t y)
+{
+    if(!lim_sign) return;
+    int lim = 0;
+    lim_poll();
+    if(N.navigating) { if(N.st.valid && N.lim && N.route.seg >= 0 && N.route.seg < N.route.npts - 1) lim = N.lim[N.route.seg]; }
+    else if(R.speeds && pos_live && pos_speed >= 5 && follow) lim = lim_point(x, y, (int)lround(pos_course));
+    if(!settings()->map_alerts) lim = 0;
+    if(lim != road_lim) {
+        road_lim = lim;
+        if(lim) {
+            lv_label_set_text_fmt(lim_lbl, "%d", lim);
+            lv_obj_remove_flag(lim_sign, LV_OBJ_FLAG_HIDDEN);
+        } else lv_obj_add_flag(lim_sign, LV_OBJ_FLAG_HIDDEN);
+    }
+    if(lim) {
+        if(N.navigating) lv_obj_align(lim_sign, LV_ALIGN_TOP_LEFT, 12 + (NAV_COL_W - 56) / 2, 262);
+        else lv_obj_align(lim_sign, LV_ALIGN_BOTTOM_LEFT, 12, -62);
+    }
+    int over = lim && (N.simulate || pos_live) && (int)lround(pos_speed) > lim;
+    if(over != road_over) { road_over = over; speed_color(); }
+}
 
 static void sign_layout(int t)
 {
@@ -1411,8 +1556,8 @@ static void radar_hide(void)
     RS.next_beep = 0;
     if(sign) lv_obj_add_flag(sign, LV_OBJ_FLAG_HIDDEN);
     if(scale_chip) lv_obj_align(scale_chip, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
-    if(col_speed && RS.over > 0) lv_obj_set_style_text_color(col_speed, pal()->text, 0);
     RS.over = -1;
+    speed_color();
 }
 
 /* um radar com limite à frente (chamado a cada posição) */
@@ -1454,7 +1599,7 @@ static void radar_tick(void)
     if(over != RS.over) {
         RS.over = over;
         lv_obj_set_style_bg_color(sign_dist, lv_color_hex(over ? 0xd93025 : 0x202124), 0);
-        if(col_speed) lv_obj_set_style_text_color(col_speed, over ? lv_color_hex(0xff6b5e) : pal()->text, 0);
+        speed_color();
         if(!over) RS.next_beep = 0;
     }
     if(!over || !settings()->nav_voice || !settings()->map_alerts) return;
@@ -1574,6 +1719,8 @@ static void end_navigation(void)
     N.navigating = N.simulate = N.rerouting = N.active = N.has_dest = N.waiting = 0;
     free(N.al);
     N.al = NULL;
+    free(N.lim);
+    N.lim = NULL;
     N.nal = 0;
     N.nstops = N.pick_stop = 0;
     clear_alts();
@@ -2042,6 +2189,7 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
         last_z = z;
     }
     (void)cx; (void)cy;
+    road_limit_update(x, y);
     /* a câmera e o marcador seguem a posição animada (anim_cb); parado, o ruído do GPS
      * não mexe no mapa (bgmotion ignora menos de 6 m) */
     bgmo_fix(&MO, perf_now_us(), x, y, speed, speed >= 3 ? pos_course : -1,
@@ -3085,6 +3233,31 @@ static bga_pack_t *open_alerts(void)
     return best;
 }
 
+/* rotas/NOME.bgk: o mais novo (limites de velocidade; sem o arquivo, sem placa) */
+static bgk_pack_t *open_speeds(void)
+{
+    const char *base = getenv("BIGFOSTON_BIGGPS");
+    if(!base || !*base) base = BIGGPS_DIR_DEFAULT;
+    char dir[512], path[1024], err[256];
+    snprintf(dir, sizeof dir, "%s/rotas", base);
+    DIR *dp = opendir(dir);
+    if(!dp) return NULL;
+    bgk_pack_t *best = NULL;
+    struct dirent *de;
+    while((de = readdir(dp))) {
+        size_t l = strlen(de->d_name);
+        if(l < 5 || strcasecmp(de->d_name + l - 4, ".bgk") || de->d_name[0] == '.') continue;
+        snprintf(path, sizeof path, "%s/%s", dir, de->d_name);
+        bgk_pack_t *p = bgk_open(path, err, sizeof err);
+        if(!p) { fprintf(stderr, "biggps: %s\n", err); continue; }
+        if(!best || bgk_built(p) > bgk_built(best)) { bgk_close(best); best = p; }
+        else bgk_close(p);
+    }
+    closedir(dp);
+    if(best) fprintf(stderr, "biggps: %u trechos com limite de velocidade\n", bgk_count(best));
+    return best;
+}
+
 static void show_message(const char *title, const char *sub)
 {
     msg = bf_card(ov);
@@ -3317,6 +3490,21 @@ static void create(lv_obj_t *parent, int arg)
     RS.idx = -1;
     RS.over = -1;
 
+    lim_sign = lv_obj_create(ov);                    /* limite da via: placa pequena */
+    lv_obj_remove_style_all(lim_sign);
+    lv_obj_set_size(lim_sign, 56, 56);
+    lv_obj_set_style_radius(lim_sign, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(lim_sign, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(lim_sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(lim_sign, lv_color_hex(0xd93025), 0);
+    lv_obj_set_style_border_opa(lim_sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(lim_sign, 6, 0);
+    lv_obj_remove_flag(lim_sign, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lim_lbl = bf_label(lim_sign, "", BF_FONT_M, lv_color_hex(0x111111));
+    lv_obj_center(lim_lbl);
+    lv_obj_add_flag(lim_sign, LV_OBJ_FLAG_HIDDEN);
+    road_lim = road_over = 0;
+
     set_follow(follow);
     rot_label();
 
@@ -3330,6 +3518,7 @@ static void create(lv_obj_t *parent, int arg)
         return;
     }
     R.alerts = open_alerts();
+    R.speeds = open_speeds();
     upts_load();
     lanes_pack = open_lanes();
     R.pack = bgm_open(paths[0], err, sizeof err);
@@ -3458,6 +3647,8 @@ static void destroy(void)
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
     free(N.al);
+    free(N.lim);
+    N.lim = NULL;
     for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
     for(int a = 0; a < BGRT_MAXALT; a++) { free(R.alt[a]); R.alt[a] = NULL; R.alt_n[a] = 0; }
     memset(&N, 0, sizeof N);
@@ -3473,12 +3664,30 @@ static void destroy(void)
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
     bga_close(R.alerts);
     R.alerts = NULL;
+    for(int i = 0; i < 300; i++) {                /* o cálculo dos limites ainda lê o arquivo: espera */
+        pthread_mutex_lock(&LJ.mu);
+        free(LJ.xy);
+        LJ.xy = NULL;
+        LJ.pt_want = false;
+        LJ.gen++;
+        bool busy = LJ.busy;
+        pthread_mutex_unlock(&LJ.mu);
+        if(!busy) break;
+        usleep(10000);
+    }
+    pthread_mutex_lock(&LJ.mu);
+    free(LJ.out);
+    LJ.out = NULL;
+    pthread_mutex_unlock(&LJ.mu);
+    bgk_close(R.speeds);
+    R.speeds = NULL;
     bgl_close(lanes_pack);
     lanes_pack = NULL;
     lane_img = NULL;
     lane_e = NULL;
     al_chip = al_lbl = pick_chip = NULL;
     sign = sign_num = sign_unit = sign_dist = scale_chip = NULL;
+    lim_sign = lim_lbl = NULL;
     RS.idx = -1;
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
     pj_ok = shown_persp = false;
@@ -3550,6 +3759,11 @@ void scr_map_demo(int step)
         radar_tick();
     } else if(step == 15) {
         radar_hide();
+    } else if(step == 16) {                          /* limite da via num trecho com maxspeed, acima dele */
+        for(int i = 0; N.lim && i < N.route.npts - 1; i++) if(N.lim[i] >= 70) { N.route.seg = i; break; }
+        pos_speed = 95;
+        update_botbar();
+        road_limit_update(0, 0);
     } else if(step == 10) {                          /* guia de faixas de exemplo (captura) */
         static bgl_entry_t ex = { .n = 4, .lane = { BGL_LEFT, BGL_THROUGH, BGL_THROUGH, BGL_THROUGH | BGL_RIGHT } };
         lane_e = &ex;
