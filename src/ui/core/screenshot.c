@@ -1026,6 +1026,9 @@ int screenshot_run(const char *dir)
                     fclose(gf);
                 }
                 go(SCR_MAP, 0); pump(3000); shot("42-biggps-mapa");
+                scr_map_demo(6); pump(300); shot("42g-biggps-marcador");
+                scr_map_demo(7); pump(300); shot("42h-biggps-marcador-sedan");
+                scr_map_demo(8); pump(1200); shot("42i-biggps-sedan-no-mapa");
                 scr_map_demo(3); pump(300); shot("42e-biggps-busca");
                 scr_map_demo(4); pump(300); shot("42f-biggps-busca-hospital");
                 scr_map_demo(5); pump(100);

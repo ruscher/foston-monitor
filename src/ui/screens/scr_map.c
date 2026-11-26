@@ -23,6 +23,7 @@
 #include "../biggps/bgsearch.h"
 #include "../biggps/bgmotion.h"
 #include "../biggps/bgalert.h"
+#include "../biggps/bgvehicle.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -842,6 +843,36 @@ static void mk_build(void)
     }
 }
 
+/* ------------------------------------------------- marcador da posição (perfil)
+ * mk_dsc[0] = o marcador ativo (seta ou veículo), [1] = parado (ponto, só no modelo seta),
+ * [2] = posição incerta (cinza). Refeitos só quando o perfil ou a escolha mudam. */
+static int veh_built_prof = -1, veh_gen, veh_built_gen = -1, veh_model = BGVEH_ARROW, veh_size = 1;
+
+static int veh_model_of(int prof)
+{
+    const int *m;
+    int n = bgveh_models(prof, &m), sel = settings()->map_veh_model[prof];
+    for(int i = 0; i < n; i++) if(m[i] == sel) return sel;
+    return m[0];
+}
+
+static void veh_sync(void)
+{
+    int prof = N.profile >= 0 && N.profile < BGR_PROFILES ? N.profile : BGR_CAR;
+    if(prof == veh_built_prof && veh_gen == veh_built_gen) return;
+    veh_built_prof = prof;
+    veh_built_gen = veh_gen;
+    veh_model = veh_model_of(prof);
+    veh_size = settings()->map_veh_size[prof];
+    uint32_t c = bgveh_color[settings()->map_veh_color[prof] & 7];
+    int still = veh_model == BGVEH_ARROW ? BGVEH_DOT : veh_model;
+    bgveh_draw(mk_arrow, veh_model, c, 0);
+    bgveh_draw(mk_dot, still, c, 0);
+    bgveh_draw(mk_stale, still, 0, 1);
+    for(int i = 0; i < 3; i++) lv_image_cache_drop(&mk_dsc[i]);
+    if(mark) lv_obj_invalidate(mark);
+}
+
 static void update_dest_marker(void)
 {
     if(!dmark) return;
@@ -870,18 +901,18 @@ static void update_marker(void)
     sx += off_x;
     sy += off_y;
     if(sx < -MK || sy < -MK || sx > MAP_W + MK || sy > MAP_H + MK) { lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN); return; }
-    bool moving = pos_live && !MO.stale && pos_speed >= 3.0;
+    veh_sync();
+    bool moving = pos_live && !MO.stale && pos_speed >= 3.0, ok = pos_live && !MO.stale;
     double head = MO.has_disp && MO.head >= 0 ? MO.head : pos_course;
-    const lv_image_dsc_t *d = moving ? &mk_dsc[0] : pos_live ? &mk_dsc[1] : &mk_dsc[2];
+    /* seta: anda = seta no rumo, parado = ponto; veículo: sempre ele, no último rumo; incerto = cinza */
+    bool turn = veh_model == BGVEH_ARROW ? moving : veh_model != BGVEH_DOT && head >= 0;
+    const lv_image_dsc_t *d = !ok ? &mk_dsc[2] : veh_model == BGVEH_ARROW && !moving ? &mk_dsc[1] : &mk_dsc[0];
     if(lv_image_get_src(mark) != d) lv_image_set_src(mark, d);
-    if(moving) {
-        lv_image_set_pivot(mark, 24, 30);
-        lv_image_set_rotation(mark, (int32_t)lround(fmod(head + shown.rot + 720.0, 360.0) * 10));
-        lv_obj_set_pos(mark, sx - 24, sy - 30);
-    } else {
-        lv_image_set_rotation(mark, 0);
-        lv_obj_set_pos(mark, sx - 24, sy - 24);
-    }
+    int py = turn && veh_model == BGVEH_ARROW ? 30 : 24;
+    lv_image_set_pivot(mark, 24, py);
+    lv_image_set_scale(mark, veh_size == 0 ? 205 : veh_size == 2 ? 320 : LV_SCALE_NONE);
+    lv_image_set_rotation(mark, turn ? (int32_t)lround(fmod(head + shown.rot + 720.0, 360.0) * 10) : 0);
+    lv_obj_set_pos(mark, sx - 24, sy - py);
     lv_obj_remove_flag(mark, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -2134,6 +2165,122 @@ static void voice_cb(lv_event_t *e)
 static void close_cb(lv_event_t *e) { (void)e; nav_back(); }
 static void sats_cb(lv_event_t *e) { (void)e; nav_go(SCR_GPS, 0); }
 
+/* ------------------------------------------------------ painel "Seu marcador"
+ * Tocar no marcador da posição: perfil, modelo (com prévia na cor escolhida), cor, tamanho,
+ * restaurar o padrão. Salvo por perfil (settings: map_veh_*). */
+static int vs_prof;
+static uint32_t vs_px[5][BGVEH_SIZE * BGVEH_SIZE];
+static lv_image_dsc_t vs_dsc[5];
+static void veh_sheet(int prof);
+
+/* refaz o painel depois do toque: o botão tocado é filho do painel que será apagado */
+static void vs_rebuild(void *ud) { (void)ud; if(ov) veh_sheet(vs_prof); }
+
+static void vs_changed(void)
+{
+    settings_save();
+    veh_gen++;
+    update_marker();
+    lv_async_call(vs_rebuild, NULL);                  /* refaz as prévias e as seleções */
+}
+
+static void vs_prof_cb(lv_event_t *e) { vs_prof = (int)(intptr_t)lv_event_get_user_data(e); lv_async_call(vs_rebuild, NULL); }
+static void vs_model_cb(lv_event_t *e) { settings()->map_veh_model[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_color_cb(lv_event_t *e) { settings()->map_veh_color[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_size_cb(lv_event_t *e) { settings()->map_veh_size[vs_prof] = (signed char)(intptr_t)lv_event_get_user_data(e); vs_changed(); }
+static void vs_reset_cb(lv_event_t *e)
+{
+    (void)e;
+    settings()->map_veh_model[vs_prof] = -1;
+    settings()->map_veh_color[vs_prof] = 0;
+    settings()->map_veh_size[vs_prof] = 1;
+    vs_changed();
+}
+static void vs_close_cb(lv_event_t *e) { (void)e; close_sheet(); }
+
+static void veh_sheet(int prof)
+{
+    if(N.navigating) return;
+    vs_prof = prof;
+    const bf_palette_t *p = pal();
+    lv_obj_t *sh = sheet_new();
+    lv_obj_t *head = sheet_row(sh);
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = bf_label(head, tr(S_MAP_VEH_TITLE), BF_FONT_M, p->text);
+    lv_obj_set_flex_grow(t, 1);
+    lv_obj_t *x = bf_button(head, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_height(x, 44);
+    lv_obj_add_event_cb(x, vs_close_cb, LV_EVENT_CLICKED, NULL);
+    /* perfil */
+    static const bf_str_t names[BGR_PROFILES] = { S_MAP_CAR, S_MAP_MOTO, S_MAP_BIKE, S_MAP_FOOT };
+    lv_obj_t *row = sheet_row(sh);
+    for(int i = 0; i < BGR_PROFILES; i++) {
+        lv_obj_t *b = bf_button(row, NULL, tr(names[i]), i == prof ? 1 : 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_add_event_cb(b, vs_prof_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    /* modelos, na cor escolhida */
+    const int *models;
+    int nm = bgveh_models(prof, &models), cur_m = veh_model_of(prof);
+    uint32_t col = bgveh_color[settings()->map_veh_color[prof] & 7];
+    row = sheet_row(sh);
+    uint64_t t0 = perf_now_us();
+    for(int i = 0; i < nm && i < 5; i++) {
+        bgveh_draw(vs_px[i], models[i], col, 0);
+        memset(&vs_dsc[i], 0, sizeof vs_dsc[i]);
+        vs_dsc[i].header.magic = LV_IMAGE_HEADER_MAGIC;
+        vs_dsc[i].header.cf = LV_COLOR_FORMAT_ARGB8888;
+        vs_dsc[i].header.w = vs_dsc[i].header.h = BGVEH_SIZE;
+        vs_dsc[i].header.stride = BGVEH_SIZE * 4;
+        vs_dsc[i].data = (const uint8_t *)vs_px[i];
+        vs_dsc[i].data_size = sizeof vs_px[i];
+        lv_image_cache_drop(&vs_dsc[i]);
+        lv_obj_t *b = lv_button_create(row);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 64, 64);
+        lv_obj_set_style_radius(b, 12, 0);
+        lv_obj_set_style_bg_color(b, p->surface2, 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(b, models[i] == cur_m ? 3 : 0, 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(C_POS), 0);
+        lv_obj_t *im = lv_image_create(b);
+        lv_image_set_src(im, &vs_dsc[i]);
+        lv_obj_center(im);
+        lv_obj_remove_flag(im, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(b, vs_model_cb, LV_EVENT_CLICKED, (void *)(intptr_t)models[i]);
+    }
+    fprintf(stderr, "biggps: prévias do marcador em %u ms\n", (unsigned)((perf_now_us() - t0) / 1000));
+    /* cores */
+    row = sheet_row(sh);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for(int i = 0; i < BGVEH_COLORS; i++) {
+        lv_obj_t *b = lv_button_create(row);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 44, 44);
+        lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(bgveh_color[i]), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        bool sel = (settings()->map_veh_color[prof] & 7) == i;
+        lv_obj_set_style_border_width(b, sel ? 4 : 2, 0);
+        lv_obj_set_style_border_color(b, sel ? lv_color_hex(C_POS) : p->surface2, 0);
+        lv_obj_add_event_cb(b, vs_color_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    /* tamanho e padrão */
+    row = sheet_row(sh);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    static const char *sz[3] = { "P", "M", "G" };
+    for(int i = 0; i < 3; i++) {
+        lv_obj_t *b = bf_button(row, NULL, sz[i], settings()->map_veh_size[prof] == i ? 1 : 0);
+        lv_obj_set_size(b, 64, 44);
+        lv_obj_add_event_cb(b, vs_size_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+    lv_obj_t *rb = bf_button(row, LV_SYMBOL_REFRESH, tr(S_MAP_VEH_RESET), 0);
+    lv_obj_set_height(rb, 44);
+    lv_obj_add_event_cb(rb, vs_reset_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void mark_cb(lv_event_t *e) { (void)e; veh_sheet(N.profile >= 0 && N.profile < BGR_PROFILES ? N.profile : BGR_CAR); }
+
 /* --------------------------------------------------------------- criação */
 static lv_obj_t *round_btn(lv_obj_t *parent, const char *sym, lv_event_cb_t cb, intptr_t ud)
 {
@@ -2427,8 +2574,11 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_remove_flag(dmark, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(dmark, LV_OBJ_FLAG_HIDDEN);
     mark = lv_image_create(ov);
-    lv_obj_remove_flag(mark, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(mark, LV_OBJ_FLAG_CLICKABLE);    /* tocar abre "Seu marcador" */
+    lv_obj_set_ext_click_area(mark, 10);
+    lv_obj_add_event_cb(mark, mark_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(mark, LV_OBJ_FLAG_HIDDEN);
+    veh_built_prof = -1;                             /* refaz o marcador com a escolha salva */
 
     /* controles */
     lv_obj_t *b = round_btn(ov, LV_SYMBOL_LEFT, close_cb, 0);
@@ -2688,7 +2838,8 @@ static void destroy(void)
 }
 
 /* --screenshot: 0 destino em Taguatinga (carro), 1 começa a simulação, 2 avança 60 s,
- * 3 abre a busca, 4 busca "hospital", 5 fecha a busca */
+ * 3 abre a busca, 4 busca "hospital", 5 fecha a busca, 6 abre "Seu marcador",
+ * 7 escolhe o sedã vermelho grande, 8 fecha o painel */
 void scr_map_demo(int step)
 {
     if(step == 0) {
@@ -2706,6 +2857,15 @@ void scr_map_demo(int step)
         if(sv_ta) { lv_textarea_set_text(sv_ta, "hospital"); sv_query(NULL); }
     } else if(step == 5) {
         search_close();
+    } else if(step == 6) {
+        veh_sheet(BGR_CAR);                          /* "Seu marcador" */
+    } else if(step == 7) {
+        settings()->map_veh_model[BGR_CAR] = BGVEH_SEDAN;   /* escolhe o sedã vermelho, G */
+        settings()->map_veh_color[BGR_CAR] = 1;
+        settings()->map_veh_size[BGR_CAR] = 2;
+        vs_changed();
+    } else if(step == 8) {
+        close_sheet();
     }
 }
 
