@@ -41,6 +41,8 @@
 
 #define MAP_W   800
 #define MAP_H   480
+#define ROUTE_PANEL_W 300      /* painel das rotas à esquerda; o mapa enquadra à direita dele */
+#define NAV_COL_W 150          /* coluna da navegação à esquerda: tempo, distância, chegada, velocidade */
 /* superfície onde os rótulos são postos: a tela (2D) ou a fonte da vista inclinada */
 static int lab_w = MAP_W, lab_h = MAP_H;
 #define MAXLBL  96
@@ -633,6 +635,7 @@ static void lanes_update(void)
 }
 static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
 static uint32_t last_say_ms;
+static lv_obj_t *col_time, *col_dist, *col_eta, *col_speed;   /* coluna da navegação */
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
 static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
@@ -1177,13 +1180,17 @@ static void fit_route(void)
         if(y > y1) y1 = y;
     }
     double w = (double)(x1 - x0) + 1, h = (double)(y1 - y0) + 1;
-    /* px = world * 2^(z - 24): z para caber em 560 x 280 px (folha e botões ocupam o resto) */
-    double z = fmin(log2(560.0 / w), log2(280.0 / h)) + 24;
+    /* px = world * 2^(z - 24): a rota cabe na área livre — à direita do painel das rotas
+     * (planejando) ou da coluna da navegação — e entre o topo e a base, com margem */
+    double left = N.navigating ? 180 : 12 + ROUTE_PANEL_W + 12, right = MAP_W - 96;
+    double aw = right - left - 24, ah = MAP_H - 48;
+    double z = fmin(log2(aw / w), log2(ah / h)) + 24;
     if(z > 17) z = 17;
     if(z < 5) z = 5;
     cur.zoom256 = (int)(z * 256);
-    cur.cx = x0 + (x1 - x0) / 2;
-    cur.cy = y0 + (y1 - y0) / 2 + (uint32_t)(h * 0.18);   /* sobe a rota acima da folha */
+    double k = pow(2.0, z - 24), shift = ((left + right) / 2 - MAP_W / 2) / k;   /* mundo por px */
+    cur.cx = x0 + (x1 - x0) / 2 - (uint32_t)(int32_t)lround(shift);
+    cur.cy = y0 + (y1 - y0) / 2;
     cur.rot = 0;
     follow = false;
     update_scale();
@@ -1358,28 +1365,26 @@ static void update_banner(void)
 
 static void update_botbar(void)
 {
-    if(!bot_lbl) return;
-    char d[32], line[128];
+    if(!col_time) return;
+    char d[32], tm[24];
     uint32_t rem_dm = N.navigating ? N.st.remain_dm : N.route.total_dm;
     uint32_t rem_ds = N.navigating ? N.st.remain_ds : N.route.total_ds;
     int min = (int)((rem_ds + 300) / 600);
-    char tm[24];
-    if(min >= 60) snprintf(tm, sizeof tm, "%d h %02d min", min / 60, min % 60);
+    if(min >= 60) snprintf(tm, sizeof tm, "%d h %02d", min / 60, min % 60);
     else snprintf(tm, sizeof tm, "%d min", min);
-    int n = snprintf(line, sizeof line, "%s · %s", bgn_dist_text(rem_dm, d, sizeof d), tm);
+    lv_label_set_text(col_time, tm);
+    lv_label_set_text(col_dist, bgn_dist_text(rem_dm, d, sizeof d));
     time_t now = time(NULL);
     struct tm lt;
-    if(now > 1700000000 && localtime_r(&now, &lt)) {          /* só com relógio acertado */
+    char a[32] = "";
+    if(now > 1700000000) {                                  /* só com relógio acertado */
         time_t eta = now + rem_ds / 10;
-        localtime_r(&eta, &lt);
-        if(n > 0 && n < (int)sizeof line) {
-            line[n] = 0;
-            char a[32];
-            snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
-            snprintf(line + n, sizeof line - (size_t)n, " · %s", a);
-        }
+        if(localtime_r(&eta, &lt)) snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
     }
-    lv_label_set_text(bot_lbl, line);
+    lv_label_set_text(col_eta, a);
+    char v[24] = "";                                        /* a velocidade só com GPS de verdade */
+    if(pos_live && !N.simulate ? pos_speed >= 1 : N.simulate) snprintf(v, sizeof v, "%d km/h", (int)lround(pos_speed));
+    lv_label_set_text(col_speed, v);
 }
 
 static void close_sheet(void)
@@ -1718,58 +1723,95 @@ static void route_result(bgrt_res_t *r)
 }
 
 /* resumo da rota: tempo, distância, pedágio, iniciar/simular, paradas e alternativas */
+/* um cartão de rota no painel lateral: tempo grande, distância e chegada; o da rota escolhida
+ * com borda azul; tocar num outro o escolhe */
+static void route_card(lv_obj_t *parent, const bgn_route_t *r, int toll_arcs, int alt, bool chosen)
+{
+    const bf_palette_t *p = pal();
+    lv_obj_t *c = lv_button_create(parent);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(c, 12, 0);
+    lv_obj_set_style_bg_color(c, p->surface2, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(c, 10, 0);
+    lv_obj_set_style_border_width(c, chosen ? 3 : 0, 0);
+    lv_obj_set_style_border_color(c, lv_color_hex(0x1a73e8), 0);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, 2, 0);
+    char t[48], d[24], line[96];
+    int min = (int)((r->total_ds + 300) / 600);
+    if(min >= 60) snprintf(t, sizeof t, "%d h %02d min", min / 60, min % 60);
+    else snprintf(t, sizeof t, "%d min", min);
+    bf_label(c, t, BF_FONT_L, chosen ? p->text : lv_color_hex(0x8ab4f8));
+    int n = snprintf(line, sizeof line, "%s", bgn_dist_text(r->total_dm, d, sizeof d));
+    time_t now = time(NULL);
+    struct tm lt;
+    if(now > 1700000000) {                             /* só com relógio acertado */
+        time_t eta = now + r->total_ds / 10;
+        if(localtime_r(&eta, &lt) && n > 0 && n < (int)sizeof line) {
+            char a[32];
+            snprintf(a, sizeof a, tr(S_MAP_ARRIVAL), lt.tm_hour, lt.tm_min);
+            snprintf(line + n, sizeof line - (size_t)n, " · %s", a);
+        }
+    }
+    bf_label(c, line, BF_FONT_S, p->text_dim);
+    if(toll_arcs > 0) bf_label(c, tr(S_MAP_TOLL), BF_FONT_S, p->warning);
+    if(alt >= 0) lv_obj_add_event_cb(c, alt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)alt);
+    else lv_obj_remove_flag(c, LV_OBJ_FLAG_CLICKABLE);
+}
+
+/* planejamento da rota (referência: o painel de rotas na lateral do modo automotivo): a lista
+ * das rotas à esquerda, o mapa enquadrado à direita, Iniciar em verde */
 static void route_sheet(void)
 {
+    const bf_palette_t *p = pal();
     lv_obj_t *sh = sheet_new();
-    char d[32], line[160];
-    int min = (int)((N.route.total_ds + 300) / 600);
-    if(min >= 60) snprintf(line, sizeof line, "%s · %d h %02d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min / 60, min % 60);
-    else snprintf(line, sizeof line, "%s · %d min", bgn_dist_text(N.route.total_dm, d, sizeof d), min);
-    bf_label(sh, line, BF_FONT_L, pal()->text);
-    if(N.dest_name[0]) bf_label(sh, N.dest_name, BF_FONT_S, pal()->text_dim);
+    lv_obj_set_size(sh, ROUTE_PANEL_W, MAP_H - 88);
+    lv_obj_align(sh, LV_ALIGN_TOP_LEFT, 12, 76);
+    lv_obj_add_flag(sh, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(sh, LV_DIR_VER);
+    lv_obj_t *head = sheet_row(sh);                  /* destino e fechar */
+    lv_obj_set_flex_align(head, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *t = bf_label(head, dest_title[0] ? dest_title : N.dest_name[0] ? N.dest_name : tr(S_MAP_DEST), BF_FONT_M, p->text);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(t, 1);
+    lv_obj_t *x = bf_button(head, LV_SYMBOL_CLOSE, NULL, 0);
+    lv_obj_set_size(x, 44, 40);
+    lv_obj_add_event_cb(x, cancel_cb, LV_EVENT_CLICKED, NULL);
+    route_card(sh, &N.route, N.toll_arcs, -1, true);
+    for(int a = 0; a < N.nalt; a++) route_card(sh, &N.alt[a], N.alt_toll[a], a, false);
     /* pedágio: o que se sabe pelos dados (toll=yes e cabines do OSM) */
     bool want_free = (N.profile == BGR_CAR || N.profile == BGR_MOTO) && settings()->map_avoid_toll;
     const char *tollmsg = NULL;
     if(want_free && !N.toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
-    else if(N.toll_arcs > 0) tollmsg = tr(N.toll_avoided ? S_MAP_TOLL_NOALT : S_MAP_TOLL);
+    else if(N.toll_arcs > 0 && N.toll_avoided) tollmsg = tr(S_MAP_TOLL_NOALT);
     if(tollmsg) {
-        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, N.toll_avoided ? pal()->warning : pal()->text_dim);
+        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, N.toll_avoided ? p->warning : p->text_dim);
         lv_label_set_long_mode(tl, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(tl, LV_PCT(100));
     }
-    lv_obj_t *row = sheet_row(sh);
-    lv_obj_t *b = bf_button(row, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
-    lv_obj_set_height(b, 48);
+    lv_obj_t *b = bf_button(sh, LV_SYMBOL_PLAY, tr(S_MAP_START), 1);
+    lv_obj_set_size(b, LV_PCT(100), 52);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x1e8e3e), 0);            /* iniciar: verde */
+    lv_obj_set_style_text_color(b, lv_color_white(), 0);
     lv_obj_add_event_cb(b, start_cb, LV_EVENT_CLICKED, NULL);
     if(!pos_live) lv_obj_add_state(b, LV_STATE_DISABLED);       /* sem GPS: só simulação */
+    lv_obj_t *row = sheet_row(sh);                   /* simular e paradas numa linha */
     b = bf_button(row, LV_SYMBOL_SHUFFLE, tr(S_MAP_SIM), 0);
-    lv_obj_set_height(b, 48);
+    lv_obj_set_height(b, 44);
+    lv_obj_set_flex_grow(b, 1);
     lv_obj_add_event_cb(b, sim_cb, LV_EVENT_CLICKED, NULL);
-    b = bf_button(row, LV_SYMBOL_CLOSE, tr(S_CANCEL), 0);
-    lv_obj_set_height(b, 48);
-    lv_obj_add_event_cb(b, cancel_cb, LV_EVENT_CLICKED, NULL);
-    /* paradas no caminho */
-    row = sheet_row(sh);
     if(N.nstops < BGRT_MAXSTOPS) {
         b = bf_button(row, LV_SYMBOL_PLUS, tr(S_MAP_ADD_STOP), 0);
         lv_obj_set_height(b, 44);
+        lv_obj_set_flex_grow(b, 1);
         lv_obj_add_event_cb(b, add_stop_cb, LV_EVENT_CLICKED, NULL);
     }
     if(N.nstops) {
-        b = bf_button(row, LV_SYMBOL_TRASH, tr(S_MAP_CLEAR_STOPS), 0);
-        lv_obj_set_height(b, 44);
+        b = bf_button(row, LV_SYMBOL_TRASH, NULL, 0);
+        lv_obj_set_size(b, 52, 44);
         lv_obj_add_event_cb(b, clear_stops_cb, LV_EVENT_CLICKED, NULL);
-    }
-    /* alternativas: quanto a mais (ou a menos) de tempo e a distância */
-    for(int a = 0; a < N.nalt; a++) {
-        char t[64], dd[24];
-        int dmin = (int)(((int64_t)N.alt[a].total_ds - (int64_t)N.route.total_ds) / 600);
-        snprintf(t, sizeof t, "%s%d min · %s", dmin >= 0 ? "+" : "", dmin, bgn_dist_text(N.alt[a].total_dm, dd, sizeof dd));
-        b = bf_button(row, LV_SYMBOL_SHUFFLE, t, 0);
-        lv_obj_set_height(b, 44);
-        lv_obj_set_style_bg_color(b, lv_color_hex(0x8ab4f8), 0);
-        lv_obj_set_style_text_color(b, lv_color_hex(0x10213f), 0);
-        lv_obj_add_event_cb(b, alt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)a);
     }
 }
 
@@ -2985,18 +3027,31 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_width(ban_then, 516);
     lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
 
+    /* coluna da navegação (à esquerda, abaixo da faixa da manobra): o que falta e a velocidade;
+     * visão geral e encerrar embaixo */
     botbar = chip(ov);
     lv_obj_add_flag(botbar, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_flex_flow(botbar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(botbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_column(botbar, BF_SP_M, 0);
-    lv_obj_align(botbar, LV_ALIGN_BOTTOM_LEFT, 12, -12);
-    bot_lbl = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_set_size(botbar, NAV_COL_W, MAP_H - 124 - 12);
+    lv_obj_set_style_pad_all(botbar, 10, 0);
+    lv_obj_set_style_radius(botbar, 14, 0);
+    lv_obj_set_flex_flow(botbar, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(botbar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(botbar, 4, 0);
+    lv_obj_align(botbar, LV_ALIGN_TOP_LEFT, 12, 124);
+    col_time = bf_label(botbar, "", BF_FONT_L, p->text);
+    col_dist = bf_label(botbar, "", BF_FONT_M, p->text);
+    col_eta = bf_label(botbar, "", BF_FONT_S, p->text_dim);
+    col_speed = bf_label(botbar, "", BF_FONT_M, p->text);
+    lv_obj_set_style_pad_top(col_speed, 8, 0);
+    bot_lbl = col_time;
+    lv_obj_t *grow = bf_plain(botbar);                               /* empurra os botões para baixo */
+    lv_obj_set_width(grow, 1);
+    lv_obj_set_flex_grow(grow, 1);
     lv_obj_t *vb = bf_button(botbar, LV_SYMBOL_EYE_OPEN, NULL, 0);     /* visão geral da rota */
-    lv_obj_set_size(vb, 52, 44);
+    lv_obj_set_size(vb, LV_PCT(100), 44);
     lv_obj_add_event_cb(vb, overview_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *eb = bf_button(botbar, LV_SYMBOL_CLOSE, tr(S_MAP_END), 2);
-    lv_obj_set_height(eb, 44);
+    lv_obj_set_size(eb, LV_PCT(100), 48);
     lv_obj_add_event_cb(eb, end_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(botbar, LV_OBJ_FLAG_HIDDEN);
 
@@ -3016,7 +3071,7 @@ static void create(lv_obj_t *parent, int arg)
     al_chip = chip(ov);                           /* radar / lombada à frente */
     lv_obj_set_style_bg_color(al_chip, lv_color_hex(0xf5b83d), 0);
     al_lbl = bf_label(al_chip, "", BF_FONT_M, lv_color_hex(0x202124));
-    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 92, 180);   /* abaixo das faixas */
+    lv_obj_align(al_chip, LV_ALIGN_TOP_LEFT, 12 + NAV_COL_W + 12, 180);   /* abaixo das faixas, ao lado da coluna */
 
     lane_img = lv_image_create(ov);                  /* faixas da próxima manobra */
     lv_obj_align(lane_img, LV_ALIGN_TOP_MID, -20, 124);
@@ -3195,6 +3250,7 @@ static void destroy(void)
     img = layer = mark = dmark = info_chip = info_lbl = scale_lbl = scale_bar = follow_btn = rot_lbl = msg = NULL;
     voice_lbl = search_btn = NULL;
     sheet = banner = ban_icon = ban_dist = ban_text = ban_then = botbar = bot_lbl = sim_chip = NULL;
+    col_time = col_dist = col_eta = col_speed = NULL;
     have_shown = 0;
     nplaced = 0;
 }
