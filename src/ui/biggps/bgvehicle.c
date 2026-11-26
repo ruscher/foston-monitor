@@ -34,7 +34,7 @@ typedef struct {
     int role;                  /* colour role, see paint() */
 } layer_t;
 
-enum { R_OUTLINE, R_BODY, R_GLASS, R_LIGHT, R_WHITE, R_DARK, R_ROOF, R_TIRE, R_ROLES };
+enum { R_OUTLINE, R_BODY, R_GLASS, R_LIGHT, R_WHITE, R_DARK, R_ROOF, R_TIRE, R_RED, R_PURE, R_CLEAR, R_ROLES };
 
 #define RR(x0, y0, x1, y1, r, role) { L_RRECT, x0, y0, x1, y1, r, 0, 0, role }
 #define EL(cx, cy, rx, ry, role) { L_ELLIPSE, cx, cy, rx, ry, 0, 0, 0, role }
@@ -45,6 +45,8 @@ static const float arrow_o[] = { 24, 1, 42, 45, 24, 35, 6, 45 }, arrow_i[] = { 2
 static const float sport_o[] = { 24, 1.5f, 34, 10, 35, 44, 13, 44, 14, 10 }, sport_b[] = { 24, 3, 32.5f, 10.5f, 33.5f, 42.5f, 14.5f, 42.5f, 15.5f, 10.5f };
 static const float sport_g[] = { 17.5f, 15, 30.5f, 15, 29, 22, 19, 22 };
 static const float walk_nose[] = { 24, 8, 28, 15, 20, 15 };
+static const float pin_tail[] = { 11, 18, 37, 18, 24, 46 };
+static const float mag_handle[] = { 20.7f, 17.3f, 30.2f, 26.8f, 26.8f, 30.2f, 17.3f, 20.7f };
 
 static const layer_t L_ARROW[] = { PO(arrow_o, R_WHITE), PO(arrow_i, R_BODY) };
 static const layer_t L_DOT[] = { EL(24, 24, 12, 12, R_WHITE), EL(24, 24, 8.5f, 8.5f, R_BODY) };
@@ -91,6 +93,9 @@ static const layer_t L_WALKER[] = {
     EL(24, 24.5f, 6.6f, 6.6f, R_OUTLINE), EL(24, 24.5f, 5, 5, R_DARK),                            /* cabeça */
 };
 
+static const layer_t L_PIN[] = { EL(24, 18, 13, 13, R_RED), PO(pin_tail, R_RED), EL(24, 18, 5, 5, R_PURE) };
+static const layer_t L_MAG[] = { EL(13, 13, 9.5f, 9.5f, R_PURE), EL(13, 13, 6.5f, 6.5f, R_CLEAR), PO(mag_handle, R_PURE) };
+
 static uint32_t mix(uint32_t a, uint32_t b, float t)   /* a -> b */
 {
     int ra = a >> 16 & 255, ga = a >> 8 & 255, ba = a & 255, rb = b >> 16 & 255, gb = b >> 8 & 255, bb = b & 255;
@@ -106,6 +111,8 @@ static uint32_t role_color(int role, uint32_t body)
     case R_LIGHT: return 0xfff4c2;
     case R_WHITE: return lum > 200 ? 0x3c4043 : 0xffffff;     /* seta branca: borda escura */
     case R_TIRE: return 0x80868b;                             /* rodas visíveis no mapa claro e no escuro */
+    case R_RED: return 0xd93025;
+    case R_PURE: return 0xffffff;
     case R_DARK: return lum < 70 ? 0x5f6368 : 0x202124;
     case R_ROOF: return mix(body, lum > 200 ? 0x000000 : 0xffffff, lum > 200 ? 0.08f : 0.18f);
     default: return body;
@@ -170,7 +177,9 @@ static int inside(const ilayer_t *l, int x, int y)
     return in;
 }
 
-void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey)
+void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey) { bgveh_draw_n(px, BGVEH_SIZE, model, color, grey); }
+
+void bgveh_draw_n(uint32_t *px, int side, int model, uint32_t color, int grey)
 {
     const layer_t *ls;
     int n;
@@ -183,6 +192,8 @@ void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey)
     case BGVEH_MOTO: ls = L_MOTO; n = sizeof L_MOTO / sizeof L_MOTO[0]; break;
     case BGVEH_BIKE: ls = L_BIKE; n = sizeof L_BIKE / sizeof L_BIKE[0]; break;
     case BGVEH_WALKER: ls = L_WALKER; n = sizeof L_WALKER / sizeof L_WALKER[0]; break;
+    case BGVEH_PIN: ls = L_PIN; n = sizeof L_PIN / sizeof L_PIN[0]; break;
+    case BGVEH_MAGNIFIER: ls = L_MAG; n = sizeof L_MAG / sizeof L_MAG[0]; break;
     default: ls = L_ARROW; n = sizeof L_ARROW / sizeof L_ARROW[0]; break;
     }
     if (grey) color = 0x8a8f98;
@@ -191,8 +202,8 @@ void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey)
     ilayer_t il[16];
     if (n > 16) n = 16;
     for (int i = 0; i < n; i++) to_int(&ls[i], &il[i]);
-    for (int y = 0; y < BGVEH_SIZE; y++)
-        for (int x = 0; x < BGVEH_SIZE; x++) {
+    for (int y = 0; y < side; y++)
+        for (int x = 0; x < side; x++) {
             int cnt = 0, sr = 0, sg = 0, sb = 0;
             for (int sy = 0; sy < 4; sy++)
                 for (int sx = 0; sx < 4; sx++) {
@@ -200,14 +211,14 @@ void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey)
                     int top = -1;
                     for (int i = 0; i < n; i++)
                         if (inside(&il[i], qx, qy)) top = i;
-                    if (top < 0) continue;
+                    if (top < 0 || il[top].role == R_CLEAR) continue;
                     uint32_t c = cols[il[top].role];
                     cnt++;
                     sr += c >> 16 & 255; sg += c >> 8 & 255; sb += c & 255;
                 }
-            if (!cnt) { px[y * BGVEH_SIZE + x] = 0; continue; }
+            if (!cnt) { px[y * side + x] = 0; continue; }
             uint32_t a = (uint32_t)(cnt * 255 / 16);
             if (grey) a = a * 3 / 4;
-            px[y * BGVEH_SIZE + x] = a << 24 | (uint32_t)(sr / cnt) << 16 | (uint32_t)(sg / cnt) << 8 | (uint32_t)(sb / cnt);
+            px[y * side + x] = a << 24 | (uint32_t)(sr / cnt) << 16 | (uint32_t)(sg / cnt) << 8 | (uint32_t)(sb / cnt);
         }
 }

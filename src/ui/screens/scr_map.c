@@ -755,73 +755,12 @@ static uint32_t mg_px[MG * MG];                /* lupa branca (tingida pela cor 
 static lv_image_dsc_t mg_dsc;
 static lv_obj_t *mark;
 
-static bool in_poly(const float *p, int n, float x, float y)
-{
-    bool in = false;
-    for(int i = 0, j = n - 1; i < n; j = i++)
-        if(((p[2 * i + 1] > y) != (p[2 * j + 1] > y))
-           && x < (p[2 * j] - p[2 * i]) * (y - p[2 * i + 1]) / (p[2 * j + 1] - p[2 * i + 1]) + p[2 * i])
-            in = !in;
-    return in;
-}
-
 static void mk_build(void)
 {
-    static const float outer[] = { 24, 3, 40, 43, 24, 34, 8, 43 };
-    float inner[8];
-    for(int i = 0; i < 4; i++) {                       /* encolhe em volta do centro (24, 30) */
-        inner[2 * i] = 24 + (outer[2 * i] - 24) * 0.68f;
-        inner[2 * i + 1] = 30 + (outer[2 * i + 1] - 30) * 0.68f;
-    }
-    for(int y = 0; y < MK; y++)
-        for(int x = 0; x < MK; x++) {
-            int wa = 0, ba = 0, wd = 0, bd = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4;
-                    if(in_poly(inner, 4, fx, fy)) ba++;
-                    else if(in_poly(outer, 4, fx, fy)) wa++;
-                    float dx = fx - 24, dy = fy - 24, d2 = dx * dx + dy * dy;
-                    if(d2 < 8.5f * 8.5f) bd++;
-                    else if(d2 < 12.0f * 12.0f) wd++;
-                }
-            /* cor = mistura branco/azul pela cobertura; alfa = cobertura total */
-            uint32_t blue = C_POS, grey = 0x8a8f98;
-            #define MIX(w, b, col) ((w) + (b) ? (uint32_t)(((w) + (b)) * 255 / 16) << 24 | \
-                (((((col) >> 16 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 16) | \
-                (((((col) >> 8 & 255) * (b) + 255 * (w)) / ((w) + (b))) << 8) | \
-                ((((col) & 255) * (b) + 255 * (w)) / ((w) + (b))) : 0)
-            /* alfinete do destino: gota vermelha com miolo branco, ponta em (24, 46) */
-            int pr = 0, pw = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 24, dy = fy - 18;
-                    bool head = dx * dx + dy * dy < 13.0f * 13.0f;
-                    bool tail = fy >= 18 && fy <= 46 && fabsf(dx) < 13.0f * (46 - fy) / 28;
-                    if(dx * dx + dy * dy < 5.0f * 5.0f) pw++;
-                    else if(head || tail) pr++;
-                }
-            mk_pin[y * MK + x] = MIX(pw, pr, 0xd93025u);
-            mk_arrow[y * MK + x] = MIX(wa, ba, blue);
-            mk_dot[y * MK + x] = MIX(wd, bd, blue);
-            mk_stale[y * MK + x] = MIX(wd, bd, grey);
-            #undef MIX
-        }
-    for(int y = 0; y < MG; y++)
-        for(int x = 0; x < MG; x++) {
-            int cov = 0;
-            for(int sy = 0; sy < 4; sy++)
-                for(int sx = 0; sx < 4; sx++) {
-                    float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4, dx = fx - 13, dy = fy - 13;
-                    float r2 = dx * dx + dy * dy;
-                    bool ring = r2 < 9.5f * 9.5f && r2 > 6.5f * 6.5f;
-                    /* cabo: faixa de 3,2 px na diagonal de (20, 20) a (28, 28) */
-                    float t = ((fx - 20) + (fy - 20)) / 2, px = fx - 20 - t, py = fy - 20 - t;
-                    bool handle = t > -1 && t < 8.5f && px * px + py * py < 2.4f * 2.4f;
-                    if(ring || handle) cov++;
-                }
-            mg_px[y * MG + x] = cov ? (uint32_t)(cov * 255 / 16) << 24 | 0xFFFFFF : 0;
-        }
+    /* pino e lupa em inteiros (bgvehicle): o aparelho não tem FPU — a versão em float custava
+     * 433 ms a cada abertura do mapa. Os marcadores da posição saem de veh_sync. */
+    bgveh_draw(mk_pin, BGVEH_PIN, 0, 0);
+    bgveh_draw_n(mg_px, MG, BGVEH_MAGNIFIER, 0, 0);
     memset(&mg_dsc, 0, sizeof mg_dsc);
     mg_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
     mg_dsc.header.cf = LV_COLOR_FORMAT_ARGB8888;
@@ -2544,7 +2483,11 @@ static void create(lv_obj_t *parent, int arg)
     const bf_palette_t *p = pal();
     bool night = theme_dark_now();
 
-    if(!mk_dsc[0].data) mk_build();
+    if(!mk_dsc[0].data) {
+        uint64_t t0 = perf_now_us();
+        mk_build();
+        fprintf(stderr, "biggps: marcadores em %u ms\n", (unsigned)((perf_now_us() - t0) / 1000));
+    }
     ov = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(ov);
     lv_obj_set_size(ov, MAP_W, MAP_H);

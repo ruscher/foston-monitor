@@ -11,7 +11,10 @@
 
 enum {
     BGVEH_ARROW, BGVEH_DOT, BGVEH_SEDAN, BGVEH_COMPACT, BGVEH_SUV, BGVEH_SPORT,
-    BGVEH_MOTO, BGVEH_BIKE, BGVEH_WALKER, BGVEH_MODELS
+    BGVEH_MOTO, BGVEH_BIKE, BGVEH_WALKER, BGVEH_MODELS,
+    /* not offered as markers: the destination pin (48x48, tip at (24, 46), always red) and the
+     * search magnifier (draw at 32x32, white, tinted by the theme) */
+    BGVEH_PIN = 100, BGVEH_MAGNIFIER
 };
 
 #define BGVEH_COLORS 8
@@ -24,5 +27,7 @@ int bgveh_models(int profile, const int **models);
 /* Draw model in color into px (BGVEH_SIZE * BGVEH_SIZE, ARGB8888, premultiplied: no).
  * grey: the "position uncertain" look (desaturated, translucent). */
 void bgveh_draw(uint32_t *px, int model, uint32_t color, int grey);
+/* The same on a side x side bitmap (the model's coordinates are not scaled). */
+void bgveh_draw_n(uint32_t *px, int side, int model, uint32_t color, int grey);
 
 #endif

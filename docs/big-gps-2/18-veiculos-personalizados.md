@@ -54,3 +54,10 @@ da bicicleta são cinza-médias para aparecerem à noite.
   - abrir o painel, escolher sedã, vermelho e G, e fechar;
   - o `settings.conf` gravou `map_veh_0 = 2 1 2`;
   - o sedã vermelho grande aparece no rumo (62°).
+
+## Também corrigido: abrir o mapa custava 433 ms
+
+O pino do destino, a lupa da busca e os marcadores antigos eram desenhados com `float` em
+`mk_build` a cada abertura do mapa: **433 ms** no FOSTON. Agora o pino e a lupa saem do mesmo
+rasterizador em inteiros (`BGVEH_PIN`, `BGVEH_MAGNIFIER`), e os marcadores da posição de
+`veh_sync`: **39 ms**, com a mesma aparência.
