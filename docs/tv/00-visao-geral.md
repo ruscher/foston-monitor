@@ -10,6 +10,7 @@ Recuperar a **TV digital (ISDB-T 1seg)** e a **entrada AV-IN** reais do FS-707DC
 | Sintonia ISDB-T 1seg | **FUNCIONANDO** | canal 15 UHF (479,143 MHz): demodulador travado, TS chegando (mensagens 607 com múltiplos de 188 bytes) |
 | Fluxo de transporte (TS) | **FUNCIONANDO** | 15 s = 682 KB (~364 kbit/s); `ffprobe`: TV Brasil 1seg, H.264 Constrained Baseline 320×180 15 qps, HE-AAC LATM 48 kHz estéreo (2 faixas); um quadro decodificado no PC |
 | Decodificação e exibição no FOSTON | **FUNCIONANDO** | `bftvd`: 13,7 qps no app TV, com o shell rodando |
+| Decodificação no PC (relay, 26/11/2026) | **FUNCIONANDO** | com o PC no USB: 30 qps e 0 cortes de som na Globo, janela e tela cheia; som recomposto com interferência. [08-relay-pc.md](08-relay-pc.md) |
 | App TV (shell) | **FUNCIONANDO** | vídeo 640×360 + controles; testado no aparelho: TV Brasil, Globo, Band, canais 39/40 |
 | Busca de canais | **FUNCIONANDO** | UHF 14-69 em ~2 min: 11 canais com nome (lido do SDT, ISO 8859-15) |
 | Gravação (PVR) | **FUNCIONANDO** | o TS vai para o cartão sem parar a imagem (~340 kbit/s, ~160 MB/h); reprodução pelo app |
@@ -96,6 +97,7 @@ busca_fim, fim, parado, erro_*), `freq`, `locked`, `snr`, `rssi`, `ts_kbps`, `fp
 
 - [02-hardware-sintonizador.md](02-hardware-sintonizador.md): SPI, pinos, energia e protocolo.
 - [07-av-in.md](07-av-in.md): entrada AV (decodificador TVP5150, captura, escalador).
+- [08-relay-pc.md](08-relay-pc.md): a TV decodificada no PC pela rede USB (como o Big Remote Play).
 
 ## Player (bftvd) — primeira medição no aparelho (22/11/2026)
 

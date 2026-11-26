@@ -207,6 +207,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -Ibuild/test \
 		tests/test_btvoice.c core/btaudio.c -lpthread -o build/test/test_btvoice
 	./build/test/test_btvoice build/test
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -DYUVZ_ENCODER \
+		tests/test_yuvz.c ../tv/yuvz.c core/lz4dec.c -llz4 -o build/test/test_yuvz
+	./build/test/test_yuvz
 
 run: sim
 	./build/sim/bigfoston-shell

@@ -48,10 +48,11 @@ if [ ! -f "$I/lib/libavcodec.a" ]; then
 fi
 
 cd "$R/src/tv"
-for f in bftvd siano bftv; do
+for f in bftvd siano bftv yuvz; do
     "${C}gcc" -O2 -Wall -Wextra -Wno-unused-function -I"$I/include" -c $f.c -o "$W/$f.o"
 done
-"${X}g++" -o "$W/bftvd" "$W/bftvd.o" "$W/siano.o" -L"$I/lib" -lavformat -lavcodec -lavutil -lfdk-aac -lm -lpthread -static
+"${C}gcc" -O2 -Wall -Wextra -c ../ui/core/lz4dec.c -o "$W/lz4dec.o"
+"${X}g++" -o "$W/bftvd" "$W/bftvd.o" "$W/siano.o" "$W/yuvz.o" "$W/lz4dec.o" -L"$I/lib" -lavformat -lavcodec -lavutil -lfdk-aac -lm -lpthread -static
 "${C}gcc" -o "$W/bftv" "$W/bftv.o" "$W/siano.o" -static
 "${C}strip" "$W/bftvd" "$W/bftv"
 ls -la "$W/bftvd" "$W/bftv"

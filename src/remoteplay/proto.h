@@ -56,7 +56,7 @@ static inline int proto_send(int fd, char type, const void *data, uint32_t len)
 /* leitura incremental: acumula até ter uma mensagem inteira */
 typedef struct { uint8_t *buf; size_t n, cap; } proto_rx_t;
 
-/* 1: mensagem pronta em *type/*data/*len (vale até a próxima chamada); 0: falta; -1: erro */
+/* 1: mensagem pronta em type, data e len (vale até a próxima chamada); 0: falta; -1: erro */
 static inline int proto_take(proto_rx_t *r, char *type, uint8_t **data, uint32_t *len, size_t *consumed)
 {
     if(r->n < 5) return 0;
