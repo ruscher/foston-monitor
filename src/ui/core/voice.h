@@ -14,6 +14,9 @@ bool voice_available(void);
  * trechos separados por '|' ("Em 300 metros|vire à direita|na Rua X"), cada um procurado no
  * pacote; trecho que o pacote não tem (um nome de rua, em geral) é pulado. */
 void voice_say(const char *text);
+/* Um bipe curto (aviso de velocidade acima do limite de um radar); pulado se a voz estiver
+ * falando ou com uma frase na fila. Não bloqueia. */
+void voice_beep(void);
 /* Para a fala atual e esquece a fila (ao sair do mapa). */
 void voice_stop(void);
 

@@ -8,6 +8,7 @@
 #include "webaudio.h"
 #include "../biggps/bgvoice.h"
 #include <dirent.h>
+#include <math.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -24,7 +25,7 @@
 
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
-static bool started, has_text, stop_now;
+static bool started, has_text, stop_now, want_beep, busy;
 static char pending[512];
 #define MAXPACKS 4
 static bgv_pack_t *packs[MAXPACKS];             /* o maior primeiro; um trecho vem do primeiro que o tiver */
@@ -169,36 +170,74 @@ static void speak(const char *text)
     free(pcm);
 }
 
+/* 1 kHz por 100 ms, com 8 ms de rampa nas pontas (sem estalo); feito uma vez só */
+#define BEEP_RATE 22050
+#define BEEP_N (BEEP_RATE / 10)
+static void beep(void)
+{
+    static int16_t pcm[BEEP_N];
+    static bool made;
+    if(!made) {
+        int ramp = BEEP_RATE * 8 / 1000;
+        for(int i = 0; i < BEEP_N; i++) {
+            double g = i < ramp ? (double)i / ramp : BEEP_N - 1 - i < ramp ? (double)(BEEP_N - 1 - i) / ramp : 1.0;
+            pcm[i] = (int16_t)lround(14000.0 * g * sin(2 * M_PI * 1000.0 * i / BEEP_RATE));
+        }
+        made = true;
+    }
+    uint32_t done = btaudio_live() ? btaudio_say(pcm, BEEP_N, BEEP_RATE, stop_requested) : 0;
+    if(done < BEEP_N) play_dsp(pcm + done, BEEP_N - done, BEEP_RATE);
+}
+
 static void *worker(void *arg)
 {
     (void)arg;
     pthread_mutex_lock(&mu);
     for(;;) {
-        while(!has_text) pthread_cond_wait(&cv, &mu);
+        while(!has_text && !want_beep) pthread_cond_wait(&cv, &mu);
+        bool talk = has_text;
         char text[sizeof pending];
-        memcpy(text, pending, sizeof text);
-        has_text = false;
+        if(talk) memcpy(text, pending, sizeof text);
+        has_text = want_beep = false;
         stop_now = false;
+        busy = true;
         pthread_mutex_unlock(&mu);
-        speak(text);
+        if(talk) speak(text); else beep();
         pthread_mutex_lock(&mu);
+        busy = false;
     }
     return NULL;
+}
+
+/* com mu travado */
+static void start_worker(void)
+{
+    if(started) return;
+    pthread_t t;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&at, 128 * 1024);
+    started = pthread_create(&t, &at, worker, NULL) == 0;
+    pthread_attr_destroy(&at);
+}
+
+void voice_beep(void)
+{
+    pthread_mutex_lock(&mu);
+    start_worker();
+    if(started && !busy && !has_text) {
+        want_beep = true;
+        pthread_cond_signal(&cv);
+    }
+    pthread_mutex_unlock(&mu);
 }
 
 void voice_say(const char *text)
 {
     if(!text || !*text) return;
     pthread_mutex_lock(&mu);
-    if(!started) {
-        pthread_t t;
-        pthread_attr_t at;
-        pthread_attr_init(&at);
-        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
-        pthread_attr_setstacksize(&at, 128 * 1024);
-        started = pthread_create(&t, &at, worker, NULL) == 0;
-        pthread_attr_destroy(&at);
-    }
+    start_worker();
     snprintf(pending, sizeof pending, "%s", text);
     has_text = started;
     pthread_cond_signal(&cv);
@@ -208,7 +247,7 @@ void voice_say(const char *text)
 void voice_stop(void)
 {
     pthread_mutex_lock(&mu);
-    has_text = false;
+    has_text = want_beep = false;
     stop_now = true;
     pthread_mutex_unlock(&mu);
 }

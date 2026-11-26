@@ -46,3 +46,30 @@ Mesmo roteiro, mesmo aparelho, pacote de alertas do Brasil (169 mil pontos) e vo
 
 Sem regressão de fluidez. O zoom pela velocidade agora muda ~0,1 nível por quadro do motor,
 em vez de saltar de uma vez.
+
+## 26/11/2026: GPS procurando satélites e música pelo Bluetooth
+
+Primeira medição nesse cenário. O FOSTON estava dentro de casa ("Procurando satélites") e
+tocava música do celular por A2DP:
+- `bfgps` com 29–39 % de CPU: o `gps.dll` original trabalhando na busca, sem laço ocioso; a
+  thread passa a maior parte do tempo esperando num futex;
+- `bluealsa` com 14–20 % (decodificação SBC).
+
+O motor do mapa roda com nice 10. Com esses dois processos de nice 0 ocupando a CPU, ele recebe
+pouco tempo.
+
+| Fase | motor nice 10 (padrão) | nice 5 | nice 0 | nice 10, bfgps com nice 10 |
+|---|---|---|---|---|
+| seguir | 1,2–2,5 q/s | 12,3 | 10,1 | 12,3 |
+| navegacao | 9,5–11,1 q/s | 6,2 | 5,8 | 8,8 |
+| radar (placa e bipes) | 6,4–8,7 q/s | 8,0 | 7,0 | 8,6 |
+
+- Mesmo cenário com o shell instalado, sem a placa do radar: `seguir` 2,5 e `navegacao` 10,6.
+  A placa não mudou o desempenho.
+- No simulador do PC, o mesmo roteiro dá `seguir` 22,9 e `radar` 23,0 q/s: o código anima.
+- Baixar o nice do motor ajuda o `seguir`, mas piora a navegação (o motor passa a disputar
+  com a animação). Por isso o padrão continua nice 10.
+- Baixar a prioridade do `bfgps` também ajuda, mas ele lê a serial do GPS, que já perdeu dados
+  quando atrasou. Fica como está.
+- **Falta medir com o GPS fixado (no carro):** quanto o `bfgps` gasta quando já tem posição.
+  Se continuar alto, o próximo passo é ajustar as prioridades com esse dado.

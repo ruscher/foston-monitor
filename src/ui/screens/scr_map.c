@@ -661,6 +661,18 @@ static void lanes_update(void)
     else lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
 }
 static lv_obj_t *al_chip, *al_lbl;     /* aviso de radar/lombada sob a faixa da manobra */
+/* placa do radar com o limite que o mapa traz, no canto inferior direito: grande quando aparece,
+ * menor depois de alguns segundos; acima do limite, bipes cada vez mais seguidos até o radar */
+#define SIGN_BIG 136
+#define SIGN_SMALL 72
+#define SIGN_SHRINK_MS 4000            /* tempo grande antes de diminuir */
+#define SIGN_ANIM_MS 400
+static lv_obj_t *sign, *sign_num, *sign_unit, *sign_dist, *scale_chip;
+static struct {
+    int idx;                          /* alerta mostrado (N.al), -1 nenhum */
+    int limit, t, last_d, over;       /* t: 0 grande .. 1024 pequena */
+    uint32_t shown_ms, fix_ms, fix_dist, next_beep;
+} RS = { .idx = -1, .last_d = -1, .over = -1 };
 static uint32_t last_say_ms;
 static lv_obj_t *col_time, *col_dist, *col_eta, *col_speed;   /* coluna da navegação */
 static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *botbar, *bot_lbl, *sim_chip, *dmark, *search_btn;
@@ -670,6 +682,7 @@ static uint16_t icon_px[80 * 80];
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
 static void anim_step(bool fix);
+static void radar_tick(void);
 static bool persp_wanted(void)
 {
     static int env = -1;                               /* BIGGPS_PERSP=0 desliga (comparação A/B) */
@@ -795,6 +808,7 @@ static void anim_cb(lv_timer_t *t)
 {
     (void)t;
     if(!dragging) anim_step(false);
+    radar_tick();
 }
 
 /* a superfície do quadro na tela (2D) ou da fonte (inclinada) */
@@ -1371,25 +1385,110 @@ static void route_alerts(void)
             (unsigned)((perf_now_us() - t0) / 1000));
 }
 
+static uint32_t now_ms(void) { return (uint32_t)(perf_now_us() / 1000); }
+
+static void sign_layout(int t)
+{
+    if(!sign) return;
+    int size = SIGN_BIG + (SIGN_SMALL - SIGN_BIG) * t / 1024;
+    int x = -(12 + BTN + 12) + (BTN + 12) * t / 1024;     /* à esquerda dos botões, depois no canto */
+    lv_obj_set_size(sign, size, size);
+    lv_obj_set_style_border_width(sign, size / 10, 0);
+    lv_obj_align(sign, LV_ALIGN_BOTTOM_RIGHT, x, -12);
+    bool big = size >= 104;
+    lv_obj_set_style_text_font(sign_num, big ? BF_FONT_CLOCK : BF_FONT_L, 0);
+    lv_obj_align(sign_num, LV_ALIGN_CENTER, 0, big ? -22 : -7);
+    lv_obj_align(sign_unit, LV_ALIGN_CENTER, 0, 17);
+    if(big) lv_obj_remove_flag(sign_unit, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(sign_unit, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(sign_dist, LV_ALIGN_BOTTOM_MID, 0, big ? -9 : 0);
+    if(scale_chip) lv_obj_align(scale_chip, LV_ALIGN_BOTTOM_RIGHT, x - size - 8, -12);   /* a escala (e o © OSM) ao lado */
+}
+
+static void radar_hide(void)
+{
+    if(RS.idx < 0) return;
+    RS.idx = -1;
+    RS.next_beep = 0;
+    if(sign) lv_obj_add_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    if(scale_chip) lv_obj_align(scale_chip, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
+    if(col_speed && RS.over > 0) lv_obj_set_style_text_color(col_speed, pal()->text, 0);
+    RS.over = -1;
+}
+
+/* um radar com limite à frente (chamado a cada posição) */
+static void radar_show(int idx, int limit, uint32_t dist)
+{
+    if(!sign) return;
+    uint32_t now = now_ms();
+    if(RS.idx != idx) {
+        RS.idx = idx;
+        RS.limit = limit;
+        RS.shown_ms = now;
+        RS.t = 0;
+        RS.last_d = -1;
+        RS.next_beep = 0;
+        lv_label_set_text_fmt(sign_num, "%d", limit);
+        sign_layout(0);
+        lv_obj_remove_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    }
+    RS.fix_ms = now;
+    RS.fix_dist = dist;
+}
+
+/* 20 vezes por segundo: distância estimada entre as posições, encolher a placa, bipes */
+static void radar_tick(void)
+{
+    if(RS.idx < 0 || !sign) return;
+    uint32_t now = now_ms();
+    uint32_t el = now - RS.shown_ms;
+    int t = el < SIGN_SHRINK_MS ? 0 : el >= SIGN_SHRINK_MS + SIGN_ANIM_MS ? 1024
+            : (int)((el - SIGN_SHRINK_MS) * 1024 / SIGN_ANIM_MS);
+    if(t > 0 && t < 1024) t = 1024 - (1024 - t) * (1024 - t) / 1024;   /* desacelera no fim */
+    if(t != RS.t) { RS.t = t; sign_layout(t); }
+    double gone = pos_speed / 3.6 * (double)(now - RS.fix_ms) / 1000.0;
+    int d = (int)RS.fix_dist - (int)lround(gone);
+    if(d < 0) d = 0;
+    int dshow = d >= 100 ? d / 10 * 10 : d;
+    if(dshow != RS.last_d) { RS.last_d = dshow; lv_label_set_text_fmt(lv_obj_get_child(sign_dist, 0), "%d m", dshow); }
+    int over = (int)lround(pos_speed) > RS.limit;
+    if(over != RS.over) {
+        RS.over = over;
+        lv_obj_set_style_bg_color(sign_dist, lv_color_hex(over ? 0xd93025 : 0x202124), 0);
+        if(col_speed) lv_obj_set_style_text_color(col_speed, over ? lv_color_hex(0xff6b5e) : pal()->text, 0);
+        if(!over) RS.next_beep = 0;
+    }
+    if(!over || !settings()->nav_voice || !settings()->map_alerts) return;
+    if(RS.next_beep && (int32_t)(now - RS.next_beep) < 0) return;
+    voice_beep();
+    uint32_t gap = 200 + (uint32_t)(d < 300 ? d : 300) * 1300 / 300;   /* 1,5 s a 300 m, 0,2 s no radar */
+    RS.next_beep = now + gap;
+}
+
 static void alert_check(void)
 {
-    if(!N.nal || !N.st.valid) { if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    if(!N.nal || !N.st.valid) { if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
     uint32_t at = N.st.progress_dm;
     while(N.al_next < N.nal && N.al[N.al_next].at_dm + 50 < at) N.al_next++;   /* passou (5 m de folga) */
-    if(N.al_next >= N.nal) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    if(N.al_next >= N.nal) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
     const bga_hit_t *a = &N.al[N.al_next];
     double v = pos_speed / 3.6;
     if(v < 8) v = 8;
     uint32_t dist = a->at_dm > at ? (a->at_dm - at) / 10 : 0;
     uint32_t warn = a->kind == BGA_CAMERA ? (uint32_t)fmax(300, v * 15) : (uint32_t)fmax(120, v * 8);
-    if(!settings()->map_alerts || dist > warn) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); return; }
+    if(!settings()->map_alerts || dist > warn) { lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN); radar_hide(); return; }
     char t[96];
+    if(a->kind == BGA_CAMERA && a->maxspeed) {            /* placa com o limite do mapa, em vez do aviso */
+        lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+        radar_show(N.al_next, a->maxspeed, dist);
+    } else radar_hide();
     const char *name = tr(a->kind == BGA_CAMERA ? S_MAP_AL_CAMERA : a->kind == BGA_BUMP ? S_MAP_AL_BUMP : S_MAP_AL_RAIL);
-    if(a->kind == BGA_CAMERA && a->maxspeed) snprintf(t, sizeof t, "%s · %u m · %u km/h", name, dist, a->maxspeed);
+    if(a->kind == BGA_CAMERA && a->maxspeed) t[0] = 0;
     else if(a->user) snprintf(t, sizeof t, "%s (%s) · %u m", name, tr(S_MAP_AL_YOURS), dist);   /* não é dado do mapa */
     else snprintf(t, sizeof t, "%s · %u m", name, dist);
-    lv_label_set_text(al_lbl, t);
-    lv_obj_remove_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    if(t[0]) {
+        lv_label_set_text(al_lbl, t);
+        lv_obj_remove_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    }
     if(N.al_said == N.al_next) return;
     /* não fala por cima de uma manobra que acabou de ser dita */
     uint32_t now = (uint32_t)(perf_now_us() / 1000);
@@ -1481,6 +1580,7 @@ static void end_navigation(void)
     lane_for = -1;
     if(lane_img) lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
     if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+    radar_hide();
     if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
     memset(&N.st, 0, sizeof N.st);
@@ -2765,7 +2865,7 @@ static int bench_zoom = 15;
 static uint64_t bench_cpu0, bench_t0;
 static const struct { const char *name; int ticks; } bench_ph[] = {
     { "parado", 100 }, { "arrasto", 80 }, { "assentar", 60 }, { "arrasto-so-lvgl", 60 }, { "assentar2", 40 }, { "zoom", 160 },
-    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 },
+    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 }, { "radar", 240 },
 };
 #define BENCH_TICK_MS 50
 
@@ -2851,6 +2951,10 @@ static void bench_cb(lv_timer_t *t)
     } else if(!strcmp(ph, "navegacao")) {           /* rota de demonstração e simulação */
         if(k == 0) scr_map_demo(0);
         if(k == 100) scr_map_demo(1);
+    } else if(!strcmp(ph, "radar")) {               /* placa de 60 km/h a 300 m, chegando a 80 km/h: bipes */
+        if(k == 0) { end_navigation(); radar_show(1000, 60, 300); }
+        if(k % 20 == 0) bench_fix(bench_lat, bench_lon + (k / 20) * 0.0002, 90, 80);
+        if(k == 239) radar_hide();
     }
     if(bench_tick >= bench_ph[bench_phase].ticks) {
         bench_end_phase();
@@ -3088,7 +3192,7 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_align(info_chip, LV_ALIGN_BOTTOM_LEFT, 12, -12);
     info_lbl = bf_label(info_chip, "", BF_FONT_S, p->text);
 
-    lv_obj_t *sc = chip(ov);
+    lv_obj_t *sc = scale_chip = chip(ov);
     lv_obj_set_flex_flow(sc, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_align(sc, LV_ALIGN_BOTTOM_RIGHT, -12, -12);
@@ -3190,6 +3294,28 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_add_flag(lane_img, LV_OBJ_FLAG_HIDDEN);
     lane_for = -1;
     lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
+
+    sign = lv_obj_create(ov);                        /* placa do radar: branca, borda vermelha */
+    lv_obj_remove_style_all(sign);
+    lv_obj_set_style_radius(sign, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(sign, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(sign, lv_color_hex(0xd93025), 0);
+    lv_obj_set_style_border_opa(sign, LV_OPA_COVER, 0);
+    lv_obj_set_style_shadow_width(sign, 12, 0);
+    lv_obj_set_style_shadow_opa(sign, LV_OPA_40, 0);
+    lv_obj_remove_flag(sign, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    sign_num = bf_label(sign, "", BF_FONT_CLOCK, lv_color_hex(0x111111));
+    sign_unit = bf_label(sign, "km/h", BF_FONT_S, lv_color_hex(0x111111));
+    sign_dist = chip(sign);
+    lv_obj_set_style_radius(sign_dist, 8, 0);
+    lv_obj_set_style_pad_ver(sign_dist, 1, 0);
+    lv_obj_set_style_pad_hor(sign_dist, 6, 0);
+    lv_obj_set_style_bg_color(sign_dist, lv_color_hex(0x202124), 0);
+    bf_label(sign_dist, "", BF_FONT_S, lv_color_white());
+    lv_obj_add_flag(sign, LV_OBJ_FLAG_HIDDEN);
+    RS.idx = -1;
+    RS.over = -1;
 
     set_follow(follow);
     rot_label();
@@ -3352,6 +3478,8 @@ static void destroy(void)
     lane_img = NULL;
     lane_e = NULL;
     al_chip = al_lbl = pick_chip = NULL;
+    sign = sign_num = sign_unit = sign_dist = scale_chip = NULL;
+    RS.idx = -1;
     for(int i = 0; i < 2; i++) { free(R.buf[i]); R.buf[i] = NULL; free(R.src[i]); R.src[i] = NULL; }
     pj_ok = shown_persp = false;
     lab_w = MAP_W;
@@ -3416,6 +3544,12 @@ void scr_map_demo(int step)
         cur.zoom256 = 17 * 256;
         update_scale();
         request();
+    } else if(step == 13 || step == 14) {           /* placa do radar: grande; pequena e acima do limite */
+        radar_show(1000, 60, 240);
+        if(step == 14) { RS.shown_ms = now_ms() - SIGN_SHRINK_MS - SIGN_ANIM_MS; pos_speed = 72; }
+        radar_tick();
+    } else if(step == 15) {
+        radar_hide();
     } else if(step == 10) {                          /* guia de faixas de exemplo (captura) */
         static bgl_entry_t ex = { .n = 4, .lane = { BGL_LEFT, BGL_THROUGH, BGL_THROUGH, BGL_THROUGH | BGL_RIGHT } };
         lane_e = &ex;
