@@ -190,6 +190,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
 		tests/test_bgnavzoom.c biggps/bgnav.c biggps/bgroute.c -lm -o build/test/test_bgnavzoom
 	./build/test/test_bgnavzoom
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgvehicle.c biggps/bgvehicle.c -lm -o build/test/test_bgvehicle
+	./build/test/test_bgvehicle
 
 run: sim
 	./build/sim/bigfoston-shell
