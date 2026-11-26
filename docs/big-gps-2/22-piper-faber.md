@@ -68,7 +68,16 @@ mesma Faber, gerada pelo mesmo modelo no PC.
 | Pacote | Frases | Fala | Arquivo | Tempo no PC |
 |---|---|---|---|---|
 | Só frases fixas | 128 | 174 s | 1,9 MB | 9 s |
-| DF com nomes (14.148 vias × 2 formas) | ver [30-benchmarks](30-benchmarks.md) | | | |
+| DF com nomes (14.148 vias × 2 formas) | 28.342 | 53.978 s (15 h) | 596 MB | 41 min (PC de 16 threads) |
+
+Para o DF:
+- a lista de nomes sai de `bgvoice-names centro-oeste-latest.osm.pbf nomes.txt --bbox=-48.29,-16.06,-47.30,-15.49`,
+  que leva 2,6 s;
+- no cartão: `BigFoston/big-gps/voz/faber-df.bgv` (SHA-256 conferido no PC e no aparelho);
+- no FOSTON: `voz: Faber, 28342 frases`, e a navegação simulada falou "Em 200 metros, na
+  rotatória, pegue a 1ª saída **para a DF-440**" inteira, sem trecho faltando.
+
+O Brasil inteiro não cabe: seriam ~40 GB. A geração é por região.
 
 ## O que saiu
 
