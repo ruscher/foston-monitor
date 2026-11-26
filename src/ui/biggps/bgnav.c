@@ -302,6 +302,55 @@ int bgn_append(bgn_route_t *a, bgn_route_t *b)
     return 0;
 }
 
+/* squared distance (world units) from p to segment ab, all relative to a */
+static int64_t seg_d2(int64_t px, int64_t py, int64_t bx, int64_t by)
+{
+    int64_t l2 = bx * bx + by * by, t = px * bx + py * by;
+    if (l2 <= 0 || t <= 0) return px * px + py * py;
+    if (t >= l2) return (px - bx) * (px - bx) + (py - by) * (py - by);
+    /* distance of p from the line, squared: (p x b)^2 / |b|^2 — in 128-bit-safe steps */
+    int64_t cr = px * by - py * bx;
+    double d = (double)cr / (double)l2 * (double)cr;   /* one division per test, not per pixel */
+    return (int64_t)d;
+}
+
+int bgn_shared_permille(const bgn_route_t *a, const bgn_route_t *b, int tol_m)
+{
+    if (a->npts < 2 || b->npts < 2 || !b->total_dm) return 0;
+    double lat = atan(sinh(M_PI * (1.0 - 2.0 * b->xy[1] / 4294967296.0)));
+    double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+    int64_t tol = (int64_t)(tol_m / mpu), tol2 = tol * tol;
+    uint64_t shared = 0;
+    int j = 0;                                   /* where on a we were last */
+    for (int i = 0; i + 1 < b->npts; i++) {
+        /* the middle of b's segment */
+        int64_t mx = ((int64_t)b->xy[2 * i] + b->xy[2 * i + 2]) / 2, my = ((int64_t)b->xy[2 * i + 1] + b->xy[2 * i + 3]) / 2;
+        int lo = j - 40 < 0 ? 0 : j - 40, hi = j + 600 > a->npts - 2 ? a->npts - 2 : j + 600, hit = -1;
+        for (int k = lo; k <= hi && hit < 0; k++) {
+            int64_t ax = a->xy[2 * k], ay = a->xy[2 * k + 1], bx = a->xy[2 * k + 2], by = a->xy[2 * k + 3];
+            /* caixa do segmento com a folga: só inteiros; quase todos param aqui */
+            if (mx < (ax < bx ? ax : bx) - tol || mx > (ax > bx ? ax : bx) + tol
+                || my < (ay < by ? ay : by) - tol || my > (ay > by ? ay : by) + tol) continue;
+            if (seg_d2(mx - ax, my - ay, bx - ax, by - ay) <= tol2) hit = k;
+        }
+        if (hit >= 0) { j = hit; shared += b->cum_dm[i + 1] - b->cum_dm[i]; }
+    }
+    return (int)(shared * 1000 / b->total_dm);
+}
+
+void bgn_point_at(const bgn_route_t *r, uint32_t dm, uint32_t *x, uint32_t *y, double *bearing)
+{
+    int k = 0;
+    while (k + 2 < r->npts && r->cum_dm[k + 1] < dm) k++;
+    uint32_t span = r->cum_dm[k + 1] - r->cum_dm[k];
+    double f = span ? (double)(dm > r->cum_dm[k] ? dm - r->cum_dm[k] : 0) / span : 0;
+    if (f > 1) f = 1;
+    double dx = (double)(int32_t)(r->xy[2 * k + 2] - r->xy[2 * k]), dy = (double)(int32_t)(r->xy[2 * k + 3] - r->xy[2 * k + 1]);
+    *x = r->xy[2 * k] + (uint32_t)(int32_t)lround(f * dx);
+    *y = r->xy[2 * k + 1] + (uint32_t)(int32_t)lround(f * dy);
+    *bearing = fmod(atan2(dx, -dy) * 180 / M_PI + 360, 360);
+}
+
 void bgn_free(bgn_route_t *r)
 {
     free(r->xy);

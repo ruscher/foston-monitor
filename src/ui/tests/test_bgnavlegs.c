@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "../biggps/bgnav.h"
 
 static int fails;
@@ -66,6 +67,26 @@ int main(void)
     for (int i = 0; i < a.nman; i++) nw += a.man[i].type == BGN_WAYPOINT;
     CHECK(nw == 2 && a.man[a.nman - 1].type == BGN_ARRIVE, "duas paradas e a chegada no fim");
     bgn_free(&a);
+
+    /* repetição entre rotas: a mesma rota = 1000; paralela a 30 m = 0 com tolerância de 15 m;
+     * metade em comum = ~500 */
+    bgn_route_t m, p, q;
+    leg(&m, 1000000, 21);                        /* 2 km para leste */
+    leg(&p, 1000000, 21);
+    CHECK(bgn_shared_permille(&m, &p, 15) == 1000, "rota igual: %d", bgn_shared_permille(&m, &p, 15));
+    for (int i = 0; i < p.npts; i++) p.xy[2 * i + 1] += 3215;           /* 30 m ao norte */
+    CHECK(bgn_shared_permille(&m, &p, 15) == 0, "paralela a 30 m: %d", bgn_shared_permille(&m, &p, 15));
+    leg(&q, 1000000, 21);
+    for (int i = 11; i < q.npts; i++) q.xy[2 * i + 1] += 3215 * 10;     /* a 2ª metade sai 300 m */
+    int sh = bgn_shared_permille(&m, &q, 15);
+    CHECK(sh > 400 && sh < 600, "metade em comum: %d", sh);
+    uint32_t px, py;
+    double br;
+    bgn_point_at(&m, 10000, &px, &py, &br);
+    CHECK(px == 1000000 + 10 * 10718 && (int)lround(br) == 90, "ponto a 1 km: %u, rumo %.0f", px, br);
+    bgn_free(&m);
+    bgn_free(&p);
+    bgn_free(&q);
     if (fails) { printf("%d falha(s)\n", fails); return 1; }
     printf("ok\n");
     return 0;

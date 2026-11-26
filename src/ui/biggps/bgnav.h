@@ -54,6 +54,11 @@ void bgn_free(bgn_route_t *r);
  * departure is dropped, distances and times of b continue a's.  b is consumed (freed) in
  * every case.  0 on success; -1 out of memory (a unchanged). */
 int bgn_append(bgn_route_t *a, bgn_route_t *b);
+/* How much of route b runs along route a (within tol_m metres), in thousandths of b's length.
+ * Integers only; the routes are walked forward together, so it is linear-ish in their size. */
+int bgn_shared_permille(const bgn_route_t *a, const bgn_route_t *b, int tol_m);
+/* A point at distance dm along the route, and the route's bearing there (degrees). */
+void bgn_point_at(const bgn_route_t *r, uint32_t dm, uint32_t *x, uint32_t *y, double *bearing);
 
 /* Track one GPS fix (world coordinates; heading in degrees or -1). */
 void bgn_update(bgn_route_t *r, uint32_t x, uint32_t y, double speed_kmh, double heading, bgn_state_t *st);

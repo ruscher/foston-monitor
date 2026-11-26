@@ -409,6 +409,8 @@ static struct {
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
     uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
+    uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
+    int alt_n[BGRT_MAXALT];
     int req_persp, done_persp;
 } R = { .mu = PTHREAD_MUTEX_INITIALIZER, .cv = PTHREAD_COND_INITIALIZER };
 
@@ -443,6 +445,17 @@ static void *worker(void *arg)
         }
         if(rn) memcpy(rcopy, R.route, (size_t)rn * 2 * sizeof *rcopy);
         int rk = R.route_k < rn - 1 ? R.route_k : -1;
+        static uint32_t *acopy[BGRT_MAXALT];
+        static int acap[BGRT_MAXALT];
+        int an[BGRT_MAXALT];
+        for(int a = 0; a < BGRT_MAXALT; a++) {
+            an[a] = R.alt_n[a];
+            if(an[a] > acap[a]) {
+                uint32_t *nb = realloc(acopy[a], (size_t)an[a] * 2 * sizeof *nb);
+                if(nb) { acopy[a] = nb; acap[a] = an[a]; } else an[a] = 0;
+            }
+            if(an[a]) memcpy(acopy[a], R.alt[a], (size_t)an[a] * 2 * sizeof *acopy[a]);
+        }
         uint32_t rpx = R.route_px, rpy = R.route_py;
         pthread_mutex_unlock(&R.mu);
 
@@ -451,6 +464,12 @@ static void *worker(void *arg)
                                  : (rast_surface_t){ R.buf[back], MAP_W, MAP_H, MAP_W };
         bgr_stats_t st;
         int n = bgr_render(R.pack, &v, &s, tmp, MAXLBL, &st);
+        for(int a = 0; a < BGRT_MAXALT; a++)        /* alternativas: azul-claro, mais finas, por baixo */
+            if(an[a] >= 2) {
+                int z = v.zoom256 >> 8, w = z >= 16 ? 6 : z >= 14 ? 5 : 3;
+                bgr_draw_polyline(&v, &s, acopy[a], an[a], w * RAST_SUB, rgb565(v.night ? 0x6f8fc4 : 0x8ab4f8),
+                                  (w + 2) * RAST_SUB, rgb565(v.night ? 0x2a3a57 : 0x5b85c9));
+            }
         if(rn >= 2) {
             int z = v.zoom256 >> 8, w = z >= 16 ? 8 : z >= 14 ? 6 : 4;
             uint16_t blue = rgb565(v.night ? 0x4c8bf5 : 0x1a73e8), edge = rgb565(v.night ? 0x0d2b5e : 0x0b3d91);
@@ -537,6 +556,10 @@ static struct {
     bga_hit_t *al;             /* alertas na rota (radar, lombada, passagem de nível) */
     int nal, al_next, al_said;
     int nstops, pick_stop;     /* paradas no caminho (em ordem); esperando o toque longo da próxima */
+    int toll_arcs, toll_avoided;            /* da rota mostrada */
+    int nalt;                               /* rotas alternativas de verdade (bgrt_poll_alts) */
+    bgn_route_t alt[BGRT_MAXALT];
+    int alt_toll[BGRT_MAXALT];
     uint32_t stx[BGRT_MAXSTOPS], sty[BGRT_MAXSTOPS];
 } N;
 static lv_obj_t *stop_mk[BGRT_MAXSTOPS];   /* círculos numerados das paradas */
@@ -1048,6 +1071,32 @@ static void set_route_overlay(const uint32_t *xy, int n)
     pthread_mutex_unlock(&R.mu);
 }
 
+/* as alternativas que o motor desenha (cópias, como a rota) */
+static void set_alt_overlays(void)
+{
+    pthread_mutex_lock(&R.mu);
+    for(int a = 0; a < BGRT_MAXALT; a++) {
+        free(R.alt[a]);
+        R.alt[a] = NULL;
+        R.alt_n[a] = 0;
+        if(a < N.nalt && N.alt[a].npts >= 2) {
+            R.alt[a] = malloc((size_t)N.alt[a].npts * 2 * sizeof *R.alt[a]);
+            if(R.alt[a]) {
+                memcpy(R.alt[a], N.alt[a].xy, (size_t)N.alt[a].npts * 2 * sizeof *R.alt[a]);
+                R.alt_n[a] = N.alt[a].npts;
+            }
+        }
+    }
+    pthread_mutex_unlock(&R.mu);
+}
+
+static void clear_alts(void)
+{
+    for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
+    N.nalt = 0;
+    set_alt_overlays();
+}
+
 /* enquadra a rota inteira (visão geral) */
 static void fit_route(void)
 {
@@ -1279,6 +1328,7 @@ static void end_navigation(void)
     N.al = NULL;
     N.nal = 0;
     N.nstops = N.pick_stop = 0;
+    clear_alts();
     if(al_chip) lv_obj_add_flag(al_chip, LV_OBJ_FLAG_HIDDEN);
     if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
     bgn_free(&N.route);
@@ -1307,6 +1357,7 @@ static char dest_title[96];        /* nome do destino escolhido na busca (vazio:
 static void start_navigation(bool simulate)
 {
     close_sheet();
+    clear_alts();                                    /* navega pela rota escolhida */
     recent_add(dest_title[0] ? dest_title : N.dest_name[0] ? N.dest_name : tr(S_MAP_POINT), N.dx, N.dy);
     N.navigating = 1;
     N.simulate = simulate;
@@ -1396,11 +1447,12 @@ static void route_request(int profile, bool reroute)
         N.nstops -= passed;
     }
     bgrt_req_t q = { .id = ++N.req_id, .profile = profile, .sx = sx, .sy = sy, .heading = heading,
-                     .dx = N.dx, .dy = N.dy, .nstops = N.nstops,
+                     .dx = N.dx, .dy = N.dy, .nstops = N.nstops, .alternatives = !reroute && !N.navigating,
                      .avoid_toll = (profile == BGR_CAR || profile == BGR_MOTO) && settings()->map_avoid_toll };
     for(int i = 0; i < N.nstops; i++) { q.stx[i] = N.stx[i]; q.sty[i] = N.sty[i]; }
     N.profile = profile;
     N.waiting = 1;
+    if(!reroute) clear_alts();
     N.rerouting = reroute;
     bgrt_request(&q);
 }
@@ -1465,6 +1517,7 @@ static void open_dest_sheet_named(uint32_t x, uint32_t y, const char *name)
     if(!N.has_dest || pin_drag_done == 0) N.nstops = 0;   /* destino novo: sem paradas (mover o pino as mantém) */
     pin_drag_done = 0;
     N.pick_stop = 0;
+    clear_alts();
     N.has_dest = 1;
     N.dx = x;
     N.dy = y;
@@ -1542,6 +1595,28 @@ static void clear_stops_cb(lv_event_t *e)
     route_request(N.profile, false);
 }
 
+static void route_sheet(void);
+static void route_sheet_async(void *ud) { (void)ud; if(ov && N.active && !N.navigating) route_sheet(); }
+
+/* escolher uma alternativa: ela vira a rota, a de antes vira alternativa */
+static void select_alt(int a)
+{
+    if(a < 0 || a >= N.nalt || N.navigating) return;
+    bgn_route_t t = N.route;
+    N.route = N.alt[a];
+    N.alt[a] = t;
+    int tt = N.toll_arcs;
+    N.toll_arcs = N.alt_toll[a];
+    N.alt_toll[a] = tt;
+    set_route_overlay(N.route.xy, N.route.npts);
+    set_alt_overlays();
+    route_alerts();
+    lv_async_call(route_sheet_async, NULL);          /* fora do evento do botão */
+    request();
+}
+
+static void alt_cb(lv_event_t *e) { select_alt((int)(intptr_t)lv_event_get_user_data(e)); }
+
 static void route_result(bgrt_res_t *r)
 {
     N.waiting = 0;
@@ -1566,8 +1641,16 @@ static void route_result(bgrt_res_t *r)
         say(tr(S_MAP_REROUTE), "Recalculando a rota");
         return;
     }
+    N.toll_arcs = r->toll_arcs;
+    N.toll_avoided = r->toll_avoided;
     /* visão geral com resumo */
     fit_route();
+    route_sheet();
+}
+
+/* resumo da rota: tempo, distância, pedágio, iniciar/simular, paradas e alternativas */
+static void route_sheet(void)
+{
     lv_obj_t *sh = sheet_new();
     char d[32], line[160];
     int min = (int)((N.route.total_ds + 300) / 600);
@@ -1578,10 +1661,10 @@ static void route_result(bgrt_res_t *r)
     /* pedágio: o que se sabe pelos dados (toll=yes e cabines do OSM) */
     bool want_free = (N.profile == BGR_CAR || N.profile == BGR_MOTO) && settings()->map_avoid_toll;
     const char *tollmsg = NULL;
-    if(want_free && !r->toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
-    else if(r->toll_arcs > 0) tollmsg = tr(r->toll_avoided ? S_MAP_TOLL_NOALT : S_MAP_TOLL);
+    if(want_free && !N.toll_avoided) tollmsg = tr(S_MAP_TOLL_NOFILE);
+    else if(N.toll_arcs > 0) tollmsg = tr(N.toll_avoided ? S_MAP_TOLL_NOALT : S_MAP_TOLL);
     if(tollmsg) {
-        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, r->toll_avoided ? pal()->warning : pal()->text_dim);
+        lv_obj_t *tl = bf_label(sh, tollmsg, BF_FONT_S, N.toll_avoided ? pal()->warning : pal()->text_dim);
         lv_label_set_long_mode(tl, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(tl, LV_PCT(100));
     }
@@ -1607,6 +1690,17 @@ static void route_result(bgrt_res_t *r)
         b = bf_button(row, LV_SYMBOL_TRASH, tr(S_MAP_CLEAR_STOPS), 0);
         lv_obj_set_height(b, 44);
         lv_obj_add_event_cb(b, clear_stops_cb, LV_EVENT_CLICKED, NULL);
+    }
+    /* alternativas: quanto a mais (ou a menos) de tempo e a distância */
+    for(int a = 0; a < N.nalt; a++) {
+        char t[64], dd[24];
+        int dmin = (int)(((int64_t)N.alt[a].total_ds - (int64_t)N.route.total_ds) / 600);
+        snprintf(t, sizeof t, "%s%d min · %s", dmin >= 0 ? "+" : "", dmin, bgn_dist_text(N.alt[a].total_dm, dd, sizeof dd));
+        b = bf_button(row, LV_SYMBOL_SHUFFLE, t, 0);
+        lv_obj_set_height(b, 44);
+        lv_obj_set_style_bg_color(b, lv_color_hex(0x8ab4f8), 0);
+        lv_obj_set_style_text_color(b, lv_color_hex(0x10213f), 0);
+        lv_obj_add_event_cb(b, alt_cb, LV_EVENT_CLICKED, (void *)(intptr_t)a);
     }
 }
 
@@ -2083,6 +2177,17 @@ static void tick_cb(lv_timer_t *t)
     }
     bgrt_res_t rr;
     if(bgrt_poll(&rr)) route_result(&rr);
+    bgrt_alts_t ra;
+    if(bgrt_poll_alts(&ra)) {
+        if(ra.id == N.req_id && N.active && !N.navigating && !N.nstops && ra.n) {
+            clear_alts();
+            N.nalt = ra.n;
+            for(int a = 0; a < ra.n; a++) { N.alt[a] = ra.r[a]; N.alt_toll[a] = ra.toll_arcs[a]; }
+            set_alt_overlays();
+            if(sheet) route_sheet();                 /* o painel ganha os botões */
+            request();
+        } else for(int a = 0; a < ra.n; a++) bgn_free(&ra.r[a]);
+    }
     if(N.arrived_ms) {                                /* chegou: encerra depois de 5 s */
         if((N.arrived_ms += 100) > 5000) { N.arrived_ms = 0; end_navigation(); }
     }
@@ -2960,6 +3065,8 @@ static void destroy(void)
     if(N.navigating) heading_up = N.prev_heading_up;
     bgn_free(&N.route);
     free(N.al);
+    for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
+    for(int a = 0; a < BGRT_MAXALT; a++) { free(R.alt[a]); R.alt[a] = NULL; R.alt_n[a] = 0; }
     memset(&N, 0, sizeof N);
     bgmo_reset(&MO);
     free(R.route);
@@ -3015,6 +3122,19 @@ void scr_map_demo(int step)
         vs_changed();
     } else if(step == 8) {
         close_sheet();
+    } else if(step == 9) {                           /* escolhe a 1ª alternativa, se houver */
+        bgrt_alts_t ra;
+        for(int i = 0; i < 100 && !N.nalt; i++) {     /* espera as alternativas (segundo plano) */
+            if(bgrt_poll_alts(&ra)) {
+                if(ra.id == N.req_id && ra.n) {
+                    N.nalt = ra.n;
+                    for(int k = 0; k < ra.n; k++) { N.alt[k] = ra.r[k]; N.alt_toll[k] = ra.toll_arcs[k]; }
+                    set_alt_overlays();
+                } else for(int k = 0; k < ra.n; k++) bgn_free(&ra.r[k]);
+            }
+            if(!N.nalt) usleep(20000);
+        }
+        if(N.nalt) select_alt(0);
     }
 }
 

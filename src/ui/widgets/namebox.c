@@ -20,6 +20,15 @@ static void *cur_ud;
 
 bool namebox_is_open(void) { return bd != NULL; }
 
+/* a janela pode ser apagada por outro caminho (troca de tela limpando a camada de cima):
+ * esquece os ponteiros, senão a próxima abertura apagaria um objeto já liberado */
+static void bd_deleted(lv_event_t *e)
+{
+    if(lv_event_get_target(e) != bd) return;
+    bd = ta = err = NULL;
+    cur_cb = NULL;
+}
+
 static void drop(void)
 {
     if(bd) lv_obj_delete_async(bd);
@@ -84,6 +93,7 @@ void namebox_open(const char *symbol, const char *title, const char *label, cons
     cur_ud = ud;
 
     bd = lv_obj_create(lv_layer_top());
+    lv_obj_add_event_cb(bd, bd_deleted, LV_EVENT_DELETE, NULL);
     lv_obj_remove_style_all(bd);
     lv_obj_set_size(bd, LV_PCT(100), LV_PCT(100));
     lv_obj_set_style_bg_color(bd, lv_color_black(), 0);
