@@ -71,3 +71,19 @@ removido, outro cartão inserido, falta de espaço, conferência que acha dano.
 
 - `tools/bigfoston/sd-install.sh` copiava `initrd.gz`, que o build não gera mais: agora
   `initrd.img` (o nome do agente, do `linux-update.py` e do `SHA256SUMS` do build).
+
+## Pacote da versão (`installer/tools/make_release.py`)
+
+- **O DTB vai com `/chosen/bigfoston,boot-epoch`** (o mesmo `dtb_with_epoch` do
+  `linux-update.py`). Sem esse campo, o agente recusa a atualização na partida ("RECUSADA:
+  fs707dc.dtb sem /chosen/bigfoston,boot-epoch"). Isso aconteceu em 26/11/2026 com uma cópia
+  feita à mão.
+- **Recusa um initrd com as chaves SSH do construtor** (`root/.ssh/authorized_keys` ou a chave
+  de host fixa do dropbear): no pacote público, elas dariam acesso root a todo FOSTON instalado.
+  O pacote público sai de um build feito assim:
+
+  ```
+  BIGFOSTON_SSH_PUBKEY=/dev/null/x BIGFOSTON_SSH_HOSTKEY=/dev/null/x make
+  ```
+
+  Sem chave, o SSH fica fechado e o dropbear cria a própria chave de host no primeiro uso.

@@ -14,6 +14,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 import argparse
 import hashlib
 import json
+import lzma
 import os
 import re
 import shutil
@@ -25,6 +26,31 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TOP = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(TOP, "installer"))
 from bigfoston_installer.core.package import open_package, parse_sha256sums  # noqa: E402
+sys.path.insert(0, os.path.join(TOP, "tools", "bigfoston"))
+from bfagent import dtb_with_epoch  # noqa: E402  (o mesmo DTB que o linux-update.py e o bfagent.py gravam)
+
+# nunca num pacote público: a chave do construtor daria acesso root a todo FOSTON instalado, e a
+# chave de host fixa deixaria qualquer um se passar pelo aparelho
+PRIVATE_FILES = ("root/.ssh/authorized_keys", "etc/dropbear/dropbear_ed25519_host_key",
+                 "etc/dropbear/dropbear_rsa_host_key", "etc/dropbear/dropbear_ecdsa_host_key")
+
+
+def initrd_names(path):
+    """Nomes dos arquivos do initrd (cpio newc comprimido com xz)."""
+    with open(path, "rb") as f:
+        data = lzma.decompress(f.read())
+    names, o = [], 0
+    while o + 110 <= len(data):
+        if data[o:o + 6] not in (b"070701", b"070702"):
+            raise SystemExit(f"{path}: cpio inesperado em {o}")
+        size, namesize = int(data[o + 54:o + 62], 16), int(data[o + 94:o + 102], 16)
+        name = data[o + 110:o + 110 + namesize - 1].decode("utf-8", "replace")
+        if name == "TRAILER!!!":
+            break
+        names.append(name.lstrip("./"))
+        o = (o + 110 + namesize + 3) & ~3
+        o = (o + size + 3) & ~3
+    return names
 
 
 def sha256(path):
@@ -74,6 +100,10 @@ def main():
                                  "refaça o firmware (bigfoston-shell-dirclean + make)")
     else:
         print(f"aviso: {shell} não encontrado; versão do build não conferida", file=sys.stderr)
+    leaked = [n for n in initrd_names(os.path.join(a.images, "initrd.img")) if n in PRIVATE_FILES]
+    if leaked:
+        raise SystemExit("o initrd tem chaves SSH do construtor (" + ", ".join(leaked) + "): refaça com "
+                         "BIGFOSTON_SSH_PUBKEY=/dev/null/x BIGFOSTON_SSH_HOSTKEY=/dev/null/x make")
 
     name = f"BigFoston-OS-FS707DC-{version}"
     dest = os.path.join(a.out, name)
@@ -81,8 +111,11 @@ def main():
         raise SystemExit(f"{dest} já existe")
     os.makedirs(os.path.join(dest, "linux"))
     shutil.copyfile(a.agent, os.path.join(dest, "bfagent.exe"))
-    for n in ("zImage", "initrd.img", "fs707dc.dtb"):
+    for n in ("zImage", "initrd.img"):
         shutil.copyfile(os.path.join(a.images, n), os.path.join(dest, "linux", n))
+    # o agente recusa um DTB sem /chosen/bigfoston,boot-epoch (ele acerta o relógio na partida)
+    with open(os.path.join(dest, "linux", "fs707dc.dtb"), "wb") as f:
+        f.write(dtb_with_epoch(os.path.join(a.images, "fs707dc.dtb"), 0))
     files = ["bfagent.exe", "linux/zImage", "linux/initrd.img", "linux/fs707dc.dtb"]
     entries = {n: {"file": n, "sha256": sha256(os.path.join(dest, n)), "size": os.path.getsize(os.path.join(dest, n))}
                for n in files}

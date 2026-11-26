@@ -95,11 +95,20 @@ No cartão:
 - `alertas/*.bga`;
 - `rotas/*.bgl`.
 
+## Depois do relatório (26/11/2026, BigFoston OS 0.6.0)
+
+- **Música do Bluetooth abaixa durante a fala** (-12 dB), em vez de sumir
+  ([24](24-audio-bluetooth.md)). Ouvido e aprovado pelo usuário.
+- **Placa do radar** com o limite e **bipe acima da velocidade**
+  ([15](15-alertas-radares.md)).
+- O usuário testou no aparelho: alternativas, faixas, painéis, busca e lombadas marcadas.
+- **Desempenho com o GPS procurando satélites e música tocando:** pior que o medido antes
+  ([30](30-benchmarks.md)). Falta medir com o GPS fixado.
+
 ## 26. Próximos passos
 
 - Testar no FOSTON o que só foi visto no simulador: alternativas, faixas, painéis e busca.
 - Testar dirigindo, e com música do celular tocando.
-- Abaixar a música em vez de pausar (`dmix`).
 - Gerar a voz com nomes para outras regiões.
 - Limite de velocidade das vias (precisa de dado novo).
 - Reordenar e arrastar paradas.
