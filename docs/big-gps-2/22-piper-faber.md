@@ -48,8 +48,13 @@ mesma Faber, gerada pelo mesmo modelo no PC.
 3. **No aparelho** (`core/voice.c`):
    - A navegação pede a fala em trechos: `"Em 300 metros|Vire à direita|na Rua X"`. A tela
      continua mostrando a frase inteira.
-   - Cada trecho é procurado no pacote, que é mapeado (`mmap`), com busca binária pela frase
-     normalizada (`bgv_normalize`: a mesma regra do script).
+   - Cada trecho é procurado no pacote por busca binária na frase normalizada
+     (`bgv_normalize`: a mesma regra do script).
+   - Desde a 0.6.4, só o **índice e as chaves** do pacote são mapeados (alguns MB), e o áudio de
+     cada trecho é lido do arquivo (`pread`) na hora de falar (~20 KB por trecho).
+   - Antes, o arquivo inteiro era mapeado. Um processo de 32 bits tem ~3 GB de endereços, e a
+     soma dos três pacotes (Centro-Oeste, DF e o fixo: 2,7 GB) ao lado do resto do mapa não
+     caberia.
    - Os trechos encontrados são decodificados e emendados com 70 ms de pausa. O trecho que
      falta (um nome de rua fora do pacote) é pulado, e a fala fica "Em 300 metros, vire à
      direita".
@@ -69,6 +74,7 @@ mesma Faber, gerada pelo mesmo modelo no PC.
 |---|---|---|---|---|
 | Só frases fixas | 128 | 174 s | 1,9 MB | 9 s |
 | DF com nomes (14.148 vias × 2 formas) | 28.342 | 53.978 s (15 h) | 596 MB | 41 min (PC de 16 threads) |
+| Centro-Oeste sem o DF (66.692 vias × 2 formas) | 132.669 | 191.504 s (53 h) | 2,1 GB | ~3 h |
 
 Para o DF:
 - a lista de nomes sai de `bgvoice-names centro-oeste-latest.osm.pbf nomes.txt --bbox=-48.29,-16.06,-47.30,-15.49`,
@@ -76,6 +82,23 @@ Para o DF:
 - no cartão: `BigFoston/big-gps/voz/faber-df.bgv` (SHA-256 conferido no PC e no aparelho);
 - no FOSTON: `voz: Faber, 28342 frases`, e a navegação simulada falou "Em 200 metros, na
   rotatória, pegue a 1ª saída **para a DF-440**" inteira, sem trecho faltando.
+
+Para o Centro-Oeste (26/11/2026):
+- os nomes de GO, MT e MS (`--bbox=-61.7,-24.1,-45.9,-7.3`, 80.840 nomes) **sem os que já estão
+  no pacote do DF** dão 66.692 nomes;
+- no cartão vai como `voz/faber-co.bgv`, com o SHA-256 conferido lendo do cartão (47 min pelo
+  USB);
+- o shell abre até 4 pacotes, o maior primeiro, e cada trecho vem do primeiro que o tiver;
+- no FOSTON, com os três pacotes abertos juntos: `voz: Faber, 132669 frases` / `28342` / `129`.
+  A fala da navegação saiu normal, com o shell em 31 MB de memória;
+- os WAVs intermediários (~9 GB) precisam de `TMPDIR` no disco: no PC deste projeto, o `/tmp`
+  fica na RAM.
+
+```
+bgvoice-names centro-oeste-latest.osm.pbf nomes-co.txt --bbox=-61.7,-24.1,-45.9,-7.3
+# tira os que já estão no pacote do DF, depois:
+TMPDIR=/disco/tmp make-faber-voice.py faber-co.bgv --nomes nomes-co-sem-df.txt
+```
 
 O Brasil inteiro não cabe: seriam ~40 GB. A geração é por região.
 

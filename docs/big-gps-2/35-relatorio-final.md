@@ -53,8 +53,13 @@ não foi medida a latência do toque em si.
 
 ## 15–16. Voz Piper Faber
 
-A única voz é a Faber, gerada no PC. O pacote fixo tem 129 frases (1,9 MB), e o do DF, 14.148
-nomes de vias (596 MB, 41 min no PC). Ela foi ouvida no aparelho pelo usuário. Rodar o modelo
+A única voz é a Faber, gerada no PC. São três pacotes:
+- o fixo, com 129 frases (1,9 MB);
+- o do DF, com 14.148 nomes de vias (596 MB, 41 min no PC);
+- o do restante do Centro-Oeste (GO, MT e MS), com 66.692 nomes (2,1 GB, ~3 h no PC).
+
+Desde a 0.6.4 só o índice dos pacotes fica mapeado e o áudio é lido do cartão ao falar
+([22](22-piper-faber.md)). Ela foi ouvida no aparelho pelo usuário. Rodar o modelo
 no FOSTON é inviável: cerca de 39 minutos por frase. O eSpeak NG saiu.
 
 ## 17. Bluetooth
