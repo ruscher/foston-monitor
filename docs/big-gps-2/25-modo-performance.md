@@ -25,3 +25,23 @@ desconectado naquele instante podia ficar sem Bluetooth e sem chamadas. O Blueto
 nunca pausa com qualquer aparelho conectado (já era assim).
 
 Nenhum caminho do Big GPS desliga Bluetooth, GPS, telefone ou rede para ganhar quadros.
+
+### Testado no FOSTON (26/11/2026)
+
+- Mapa aberto e modo Performance ligado (pelo canal de controle do shell, `perf on`): só o
+  `crond` parou. `bluetoothd`, `bluealsa`, `bfbt-agent`, `bfgps` e `bfphone` continuaram com os
+  mesmos PIDs, com o celular conectado.
+- Desligado (`perf off`): o `crond` voltou e a nota `/run/bigfoston-perfmode` foi apagada.
+
+## A etiqueta "Performance" no mapa
+
+A etiqueta do modo fica por cima de todas as telas. No mapa, que ocupa a tela inteira, ela
+cobria a borda do botão Voltar. Agora o mapa diz onde ela vai (`perfui_tag_at`):
+
+- **seguindo:** abaixo do Voltar;
+- **navegando:** embaixo, ao lado da coluna. Logo abaixo da faixa da manobra ficam as setas
+  das faixas e o aviso de alerta;
+- **painel da rota ou busca abertos:** escondida, porque eles ocupam a esquerda.
+
+Conferido no FOSTON com capturas da tela nas duas posições.
+

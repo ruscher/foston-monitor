@@ -29,6 +29,7 @@ static lv_timer_t *delay_t, *tick_t;
 static lv_obj_t *tag, *tag_lbl;
 static bool tag_hidden;
 static int tag_y;
+static int tag_ax = -1, tag_ay;          /* lugar fixo pedido pela tela (perfui_tag_at) */
 
 /* ---------------------------------------------------------------- janela de progresso */
 static lv_obj_t *pm_box, *pm_bar, *pm_title, *pm_sub;
@@ -325,6 +326,7 @@ static void tag_make(void)
 
 void perfui_tag_hide(bool hide) { tag_hidden = hide; }
 void perfui_tag_offset(int y) { tag_y = y; }
+void perfui_tag_at(int x, int y) { tag_ax = x; tag_ay = y; }
 
 /* ---------------------------------------------------------------- apps e controle */
 
@@ -455,7 +457,8 @@ static void tick(lv_timer_t *t)
                 nav_current().scr != SCR_SCC && nav_current().scr != SCR_BRP && nav_current().scr != SCR_TV &&
                 (st == PM_ON || st == PM_ENTERING) && !brief;
     if(show) {
-        lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);
+        if(tag_ax >= 0) lv_obj_set_pos(tag, tag_ax, tag_ay);
+        else lv_obj_set_pos(tag, 8, BF_TOPBAR_H + 6 + tag_y);
         if(lv_obj_has_flag(tag, LV_OBJ_FLAG_HIDDEN)) {
             lv_obj_remove_flag(tag, LV_OBJ_FLAG_HIDDEN);
             lv_obj_move_foreground(tag);

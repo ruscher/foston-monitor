@@ -10,9 +10,11 @@
 #include <unistd.h>
 
 struct bgv_pack {
-    void *map;
-    size_t len;
-    const uint8_t *idx, *keys, *data;
+    void *map;                 /* header, index and keys (the audio stays in the file) */
+    size_t maplen;
+    int fd;
+    uint32_t data_off;
+    const uint8_t *idx, *keys;
     uint32_t n, rate;
 };
 
@@ -28,13 +30,19 @@ bgv_pack_t *bgv_open(const char *path, char *err, int errlen)
         if (fd >= 0) close(fd);
         return NULL;
     }
-    void *m = st.st_size >= 24 ? mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
-    close(fd);
-    if (m == MAP_FAILED) { snprintf(err, (size_t)errlen, "%s: não mapeia", path); return NULL; }
-    const uint8_t *h = m;
+    uint8_t hd[24];
     size_t len = (size_t)st.st_size;
-    uint32_t n = rd32(h + 8), ko = rd32(h + 16), dof = rd32(h + 20);
-    int ok = !memcmp(h, BGV_MAGIC, 4) && rd32(h + 4) == BGV_VERSION && 24 + (uint64_t)n * 16 <= ko && ko <= dof && dof <= len;
+    if (len < 24 || pread(fd, hd, 24, 0) != 24) { close(fd); snprintf(err, (size_t)errlen, "%s: formato desconhecido", path); return NULL; }
+    uint32_t n = rd32(hd + 8), ko = rd32(hd + 16), dof = rd32(hd + 20);
+    if (memcmp(hd, BGV_MAGIC, 4) || rd32(hd + 4) != BGV_VERSION || dof > len || dof < 24) {
+        close(fd);
+        snprintf(err, (size_t)errlen, "%s: formato desconhecido", path);
+        return NULL;
+    }
+    void *m = mmap(NULL, dof, PROT_READ, MAP_PRIVATE, fd, 0);     /* só o índice e as chaves */
+    if (m == MAP_FAILED) { close(fd); snprintf(err, (size_t)errlen, "%s: não mapeia", path); return NULL; }
+    const uint8_t *h = m;
+    int ok = 24 + (uint64_t)n * 16 <= ko && ko <= dof;
     for (uint32_t i = 0; ok && i < n; i++) {              /* every entry inside the file */
         const uint8_t *e = h + 24 + (size_t)i * 16;
         uint64_t kend = (uint64_t)ko + rd32(e) + rd16(e + 4);
@@ -43,26 +51,37 @@ bgv_pack_t *bgv_open(const char *path, char *err, int errlen)
     }
     if (!ok) {
         snprintf(err, (size_t)errlen, "%s: formato desconhecido ou arquivo cortado", path);
-        munmap(m, len);
+        munmap(m, dof);
+        close(fd);
         return NULL;
     }
     bgv_pack_t *p = calloc(1, sizeof *p);
-    if (!p) { munmap(m, len); snprintf(err, (size_t)errlen, "sem memória"); return NULL; }
+    if (!p) { munmap(m, dof); close(fd); snprintf(err, (size_t)errlen, "sem memória"); return NULL; }
     p->map = m;
-    p->len = len;
+    p->maplen = dof;
+    p->fd = fd;
+    p->data_off = dof;
     p->n = n;
-    p->rate = rd32(h + 12);
+    p->rate = rd32(hd + 12);
     p->idx = h + 24;
     p->keys = h + ko;
-    p->data = h + dof;
     return p;
 }
 
 void bgv_close(bgv_pack_t *p)
 {
     if (!p) return;
-    munmap(p->map, p->len);
+    munmap(p->map, p->maplen);
+    close(p->fd);
     free(p);
+}
+
+void bgv_clip_release(bgv_clip_t *c)
+{
+    if (!c) return;
+    free(c->buf);
+    c->buf = NULL;
+    c->data = NULL;
 }
 
 uint32_t bgv_count(const bgv_pack_t *p) { return p ? p->n : 0; }
@@ -111,8 +130,14 @@ int bgv_find(const bgv_pack_t *p, const char *text, bgv_clip_t *out)
         int c = memcmp(p->keys + rd32(e), key, el < kl ? el : kl);
         if (!c) c = el < kl ? -1 : el > kl;
         if (!c) {
-            out->data = p->data + rd32(e + 8);
-            out->nsamples = rd32(e + 12);
+            uint32_t ns = rd32(e + 12);
+            size_t sz = 4 + ((size_t)ns + 1) / 2;
+            uint8_t *b = malloc(sz);
+            if (!b) return 0;
+            if (pread(p->fd, b, sz, (off_t)p->data_off + rd32(e + 8)) != (ssize_t)sz) { free(b); return 0; }   /* cortado */
+            out->buf = b;
+            out->data = b;
+            out->nsamples = ns;
             return 1;
         }
         if (c < 0) lo = mid + 1; else hi = mid;

@@ -15,6 +15,7 @@
 #include "../core/settings.h"
 #include "../core/voice.h"
 #include "../core/perf.h"
+#include "../core/perfui.h"
 #include "../third_party/lvgl/src/core/lv_obj_event_private.h"   /* lv_cover_check_info_t */
 #include "../biggps/bgmap.h"
 #include "../biggps/bgrender.h"
@@ -27,7 +28,6 @@
 #include "../biggps/bgpersp.h"
 #include "../biggps/bglanes.h"
 #include "../biggps/bgspeed.h"
-#include "../biggps/bgicons.h"
 #include <dirent.h>
 #include <math.h>
 #include <pthread.h>
@@ -382,6 +382,31 @@ static void draw_user_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_e
     }
 }
 
+/* navegando: os alertas da rota (bga_route, semáforos inclusive), não todos os da área. No
+ * centro de Brasília os semáforos de todas as ruas enchiam a tela (visto no FOSTON) */
+static void draw_alert_list(const bgr_view_t *v, rast_surface_t *s, const bga_entry_t *e, int n)
+{
+    int z = v->zoom256 >> 8, drawn = 0;
+    if(z < 13) return;
+    static const int order[] = { BGA_CAMERA, BGA_RAIL, BGA_BUMP, BGA_SIGNAL };
+    static const int minz[BGA_KINDS] = { 99, 14, 13, 14, 14 };
+    for(int o = 0; o < 4 && drawn < MAXAL; o++) {
+        int k = order[o];
+        if(z < minz[k]) continue;
+        for(int i = 0; i < n && drawn < MAXAL; i++) {
+            if(e[i].kind != k) continue;
+            int sx, sy;
+            bgr_world_to_screen(v, s, e[i].x, e[i].y, &sx, &sy);
+            if(sx < -14 || sy < -14 || sx > s->w + 14 || sy > s->h + 14) continue;
+            if(k == BGA_SIGNAL) icon_signal(s, sx, sy);
+            else if(k == BGA_CAMERA) icon_camera(s, sx, sy);
+            else if(k == BGA_BUMP) icon_bump(s, sx, sy);
+            else icon_rail(s, sx, sy);
+            drawn++;
+        }
+    }
+}
+
 static void draw_alerts(const bgr_view_t *v, rast_surface_t *s, const bga_pack_t *p)
 {
     int z = v->zoom256 >> 8;
@@ -436,6 +461,8 @@ static struct {
     int route_k;               /* já percorrido até route[route_k] + (route_px, route_py); -1: nada */
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
+    bga_entry_t *ral;          /* navegando: só os alertas na rota (semáforos inclusive) vão para o mapa */
+    int nral, ral_on;                              /* nral -1: a lista não coube (desenha os da área) */
     bgk_pack_t *speeds;        /* limites de velocidade das vias (maxspeed do OSM; mapeado) */
     uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
     uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
@@ -477,6 +504,12 @@ static void *worker(void *arg)
         static bga_entry_t ucopy[MAXUPT];
         int nu = nupt;                                /* os avisos do usuário (mudam na interface) */
         memcpy(ucopy, upts, (size_t)nu * sizeof ucopy[0]);
+        static bga_entry_t *alcopy;                   /* navegando: os alertas da rota */
+        static int alcap;
+        /* navegando: os da rota (0 = nenhum); -1 = os da área (seguindo, ou a lista não coube) */
+        int nal = R.ral_on && R.nral >= 0 ? R.nral : -1;
+        if(nal > alcap) { bga_entry_t *nb = realloc(alcopy, (size_t)nal * sizeof *nb); if(nb) { alcopy = nb; alcap = nal; } else nal = -1; }
+        if(nal > 0 && R.ral) memcpy(alcopy, R.ral, (size_t)nal * sizeof *alcopy);
         static uint32_t *acopy[BGRT_MAXALT];
         static int acap[BGRT_MAXALT];
         int an[BGRT_MAXALT];
@@ -520,7 +553,8 @@ static void *worker(void *arg)
                 bgr_draw_polyline(&v, &s, rcopy, rn, w * RAST_SUB, blue, (w + 3) * RAST_SUB, edge);
             }
         }
-        draw_alerts(&v, &s, R.alerts);              /* por cima da rota: o radar na via aparece */
+        if(nal >= 0) draw_alert_list(&v, &s, alcopy, nal);   /* navegando: só o que está na rota */
+        else draw_alerts(&v, &s, R.alerts);         /* por cima da rota: o radar na via aparece */
         draw_user_alerts(&v, &s, ucopy, nu);
         for(int i = 0; i < n; i++) {
             lbl_t *l = &R.lbl[back][i];
@@ -686,6 +720,7 @@ static lv_obj_t *sheet, *banner, *ban_icon, *ban_dist, *ban_text, *ban_then, *bo
 static void set_follow(bool on);
 static lv_image_dsc_t icon_dsc;
 static uint16_t icon_px[80 * 80];
+#define BANNER_BG 0x1F232B                           /* faixa da manobra e fundo do ícone dela */
 static int icon_type = -1, icon_exit = -1;
 static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool live);
 static void anim_step(bool fix);
@@ -734,6 +769,7 @@ static void request(void)
     pthread_mutex_lock(&R.mu);
     R.req = cur;
     R.req_persp = persp_wanted();
+    R.ral_on = N.navigating;
     R.has_req = 1;
     pthread_cond_signal(&R.cv);
     pthread_mutex_unlock(&R.mu);
@@ -1245,7 +1281,7 @@ static void fit_route(void)
     request();
 }
 
-/* voz: eSpeak NG (core/voice), se ligada nos ajustes e instalada no cartão */
+/* voz: a Faber pré-gerada (core/voice, pacotes .bgv no cartão), se ligada nos ajustes */
 /* text: o que se lê no registro; parts: os trechos da voz Faber separados por '|' */
 static void say(const char *text, const char *parts)
 {
@@ -1377,16 +1413,20 @@ static int upt_near(uint32_t x, uint32_t y)
  * 972 ms), e a interface não pode parar. A placa aparece quando o resultado chega. */
 static struct {
     pthread_mutex_t mu;
+    bgk_pack_t *pack;                              /* o que a thread lê (R.speeds) */
+    struct lim_dispose { bgk_pack_t *p; struct lim_dispose *next; } *dispose;   /* o mapa fechou com a thread lendo: ela fecha */
     int gen, done_gen;                             /* rota pedida / rota do resultado */
     uint32_t *xy;
     int npts;
     uint8_t *out;
+    int out_n;                                     /* trechos em out */
     bool busy;
     /* seguindo sem rota: o limite no ponto (a busca também lê do cartão) */
-    bool pt_want;
-    uint32_t px, py;
-    int pb, pt_lim;
+    bool pt_want, pt_have;
+    uint32_t px, py, rx, ry;                       /* pedido / ponto do resultado */
+    int pb, rb, pt_lim;
 } LJ = { .mu = PTHREAD_MUTEX_INITIALIZER };
+static int nav_lim_n;                              /* trechos em N.lim (vem com o resultado) */
 
 static void *lim_worker(void *a)
 {
@@ -1394,6 +1434,7 @@ static void *lim_worker(void *a)
     setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
     for(;;) {
         pthread_mutex_lock(&LJ.mu);
+        bgk_pack_t *pk = LJ.pack;
         int gen = LJ.gen, npts = LJ.npts;
         uint32_t *xy = LJ.xy;
         LJ.xy = NULL;
@@ -1402,22 +1443,33 @@ static void *lim_worker(void *a)
             int b = LJ.pb;
             LJ.pt_want = false;
             pthread_mutex_unlock(&LJ.mu);
-            int v = bgk_at(R.speeds, x, y, b);
+            int v = bgk_at(pk, x, y, b);
             pthread_mutex_lock(&LJ.mu);
-            LJ.pt_lim = v;
+            if(gen == LJ.gen) {                    /* o mapa fechou no meio: o de outro arquivo não vale */
+                LJ.pt_lim = v;
+                LJ.rx = x; LJ.ry = y; LJ.rb = b;
+                LJ.pt_have = true;
+            }
             pthread_mutex_unlock(&LJ.mu);
             continue;
         }
-        if(!xy) { LJ.busy = false; pthread_mutex_unlock(&LJ.mu); return NULL; }
+        if(!xy) {                                  /* acabou: fecha o que o mapa largou com ela lendo */
+            struct lim_dispose *d = LJ.dispose;
+            LJ.dispose = NULL;
+            LJ.busy = false;
+            pthread_mutex_unlock(&LJ.mu);
+            while(d) { struct lim_dispose *nx = d->next; bgk_close(d->p); free(d); d = nx; }
+            return NULL;
+        }
         pthread_mutex_unlock(&LJ.mu);
         uint8_t *out = calloc((size_t)npts, 1);
         uint64_t t0 = perf_now_us();
-        int got = out ? bgk_route(R.speeds, xy, npts, out) : 0;
+        int got = out ? bgk_route(pk, xy, npts, out) : 0;
         fprintf(stderr, "biggps: limite de velocidade em %d de %d trechos da rota (%u ms, em segundo plano)\n", got, npts - 1,
                 (unsigned)((perf_now_us() - t0) / 1000));
         free(xy);
         pthread_mutex_lock(&LJ.mu);
-        if(gen == LJ.gen) { free(LJ.out); LJ.out = out; LJ.done_gen = gen; out = NULL; }   /* senão já há outra rota */
+        if(gen == LJ.gen && out) { free(LJ.out); LJ.out = out; LJ.out_n = npts - 1; LJ.done_gen = gen; out = NULL; }   /* senão já há outra rota */
         pthread_mutex_unlock(&LJ.mu);
         free(out);
     }
@@ -1426,29 +1478,50 @@ static void *lim_worker(void *a)
 static void lim_kick(void);
 static void lim_start(void)
 {
+    /* a rota de antes deixa de valer já, mesmo se esta não puder ser pedida (sem memória): o
+     * resultado dela não pode virar o desta */
+    pthread_mutex_lock(&LJ.mu);
+    LJ.gen++;
+    free(LJ.xy);
+    LJ.xy = NULL;
+    free(LJ.out);
+    LJ.out = NULL;
+    pthread_mutex_unlock(&LJ.mu);
     if(!R.speeds || N.route.npts < 2) return;
     uint32_t *xy = malloc((size_t)N.route.npts * 2 * sizeof *xy);
     if(!xy) return;
     memcpy(xy, N.route.xy, (size_t)N.route.npts * 2 * sizeof *xy);
     pthread_mutex_lock(&LJ.mu);
-    LJ.gen++;
-    free(LJ.xy);
+    LJ.pack = R.speeds;
     LJ.xy = xy;
     LJ.npts = N.route.npts;
     pthread_mutex_unlock(&LJ.mu);
     lim_kick();
 }
 
-/* seguindo sem rota: pede o limite no ponto; devolve o último que chegou */
+/* seguindo sem rota: pede o limite no ponto; devolve o último que chegou, se ainda vale aqui
+ * (mesmo rumo, a até 3 s de caminho): depois de virar numa via de 30, o 80 da anterior não fica
+ * na tela enquanto a busca nova lê do cartão */
 static int lim_point(uint32_t x, uint32_t y, int bearing)
 {
     if(!R.speeds) return 0;
     pthread_mutex_lock(&LJ.mu);
+    LJ.pack = R.speeds;
     LJ.px = x; LJ.py = y; LJ.pb = bearing;
     LJ.pt_want = true;
-    int v = LJ.pt_lim;
+    int v = LJ.pt_have ? LJ.pt_lim : 0;
+    uint32_t rx = LJ.rx, ry = LJ.ry;
+    int rb = LJ.rb;
     pthread_mutex_unlock(&LJ.mu);
     lim_kick();
+    if(v) {
+        double lat = atan(sinh(M_PI * (1.0 - 2.0 * (double)y / 4294967296.0)));
+        double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+        double dx = (double)(int32_t)(x - rx), dy = (double)(int32_t)(y - ry), d = sqrt(dx * dx + dy * dy) * mpu;
+        int db = abs((bearing - rb + 540) % 360 - 180);
+        double reach = pos_speed / 3.6 * 3;
+        if(d > (reach > 40 ? reach : 40) || (bearing >= 0 && rb >= 0 && db > 35)) v = 0;
+    }
     return v;
 }
 
@@ -1473,7 +1546,7 @@ static void lim_kick(void)
 static void lim_poll(void)
 {
     pthread_mutex_lock(&LJ.mu);
-    if(LJ.out && LJ.done_gen == LJ.gen) { free(N.lim); N.lim = LJ.out; LJ.out = NULL; }
+    if(LJ.out && LJ.done_gen == LJ.gen) { free(N.lim); N.lim = LJ.out; nav_lim_n = LJ.out_n; LJ.out = NULL; }
     pthread_mutex_unlock(&LJ.mu);
 }
 
@@ -1487,6 +1560,13 @@ static void route_alerts(void)
     uint64_t t0 = perf_now_us();
     int n = 0;
     bga_hit_t *h = R.alerts ? bga_route(R.alerts, N.route.xy, N.route.cum_dm, N.route.npts, &n) : NULL;
+    bga_entry_t *pub = n ? malloc((size_t)n * sizeof *pub) : NULL;      /* para o mapa: todos os da rota */
+    for(int i = 0; pub && i < n; i++) pub[i] = (bga_entry_t){ h[i].x, h[i].y, h[i].kind, h[i].maxspeed, BGA_DIR_ANY };
+    pthread_mutex_lock(&R.mu);
+    free(R.ral);
+    R.ral = pub;
+    R.nral = pub ? n : n ? -1 : 0;                  /* rota sem alertas: 0, não os da área */
+    pthread_mutex_unlock(&R.mu);
     int w = 0;
     for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
     w = bga_route_points(upts, nupt, N.route.xy, N.route.cum_dm, N.route.npts, &h, w);   /* os seus */
@@ -1514,7 +1594,7 @@ static void road_limit_update(uint32_t x, uint32_t y)
     if(!lim_sign) return;
     int lim = 0;
     lim_poll();
-    if(N.navigating) { if(N.st.valid && N.lim && N.route.seg >= 0 && N.route.seg < N.route.npts - 1) lim = N.lim[N.route.seg]; }
+    if(N.navigating) { if(N.st.valid && N.lim && N.route.seg >= 0 && N.route.seg < nav_lim_n && N.route.seg < N.route.npts - 1) lim = N.lim[N.route.seg]; }
     else if(R.speeds && pos_live && pos_speed >= 5 && follow) lim = lim_point(x, y, (int)lround(pos_course));
     if(!settings()->map_alerts) lim = 0;
     if(lim != road_lim) {
@@ -1669,7 +1749,7 @@ static void update_banner(void)
     const bgn_man_t *m = &N.route.man[st->next];
     if(m->type != icon_type || m->exit != icon_exit) {
         rast_surface_t s = { icon_px, 80, 80, 80 };
-        bgn_icon(&s, m->type, m->exit, rgb565(0xffffff), rgb565(0x9fd4a8), rgb565(0x1e6e34));
+        bgn_icon(&s, m->type, m->exit, rgb565(0xffffff), rgb565(0x8AB4F8), rgb565(BANNER_BG));
         icon_type = m->type;
         icon_exit = m->exit;
         lv_image_cache_drop(&icon_dsc);
@@ -1721,6 +1801,11 @@ static void end_navigation(void)
     N.al = NULL;
     free(N.lim);
     N.lim = NULL;
+    nav_lim_n = 0;
+    /* a placa e a velocidade vermelha da rota saem junto (sem GPS, nada mais as atualiza) */
+    road_lim = road_over = 0;
+    if(lim_sign) lv_obj_add_flag(lim_sign, LV_OBJ_FLAG_HIDDEN);
+    speed_color();
     N.nal = 0;
     N.nstops = N.pick_stop = 0;
     clear_alts();
@@ -2237,8 +2322,10 @@ static void on_fix(uint32_t x, uint32_t y, double speed, double course, bool liv
 }
 
 /* simulação: avança 1 s pela rota na velocidade dos trechos */
+static bool demo_freeze;                          /* capturas: a simulação não mexe no estado montado */
 static void sim_step(void)
 {
+    if(demo_freeze) return;
     const bgn_route_t *r = &N.route;
     if(r->npts < 2) return;
     uint32_t total = r->cum_ds[r->npts - 1];
@@ -2638,9 +2725,20 @@ static void gps_update(void)
     on_fix(x, y, g.speed_kmh, g.speed_kmh >= 3.0 ? g.course : -1, true);
 }
 
+/* a etiqueta do modo Performance (layer_top) num lugar livre: seguindo, abaixo do Voltar;
+ * navegando, embaixo, ao lado da coluna (abaixo da faixa ficam as setas das faixas); com o
+ * painel da rota aberto, escondida (o painel ocupa a esquerda) */
+static void perf_tag_place(void)
+{
+    perfui_tag_hide(sheet != NULL || sv != NULL);           /* painel da rota ou busca aberta */
+    if(N.navigating) perfui_tag_at(12 + NAV_COL_W + 12, MAP_H - 12 - 30);
+    else perfui_tag_at(12, 12 + BTN + 8);
+}
+
 static void tick_cb(lv_timer_t *t)
 {
     (void)t;
+    perf_tag_place();
     int swapped = 0;
     pthread_mutex_lock(&R.mu);
     if(R.done) {
@@ -3449,10 +3547,31 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_style_image_recolor_opa(mg, LV_OPA_COVER, 0);
     lv_obj_center(mg);
     lv_obj_remove_flag(mg, LV_OBJ_FLAG_CLICKABLE);
-    b = round_btn(ov, LV_SYMBOL_PLUS, zoom_cb, 1);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12);
-    b = round_btn(ov, LV_SYMBOL_MINUS, zoom_cb, -1);
-    lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + BTN + 10);
+    {   /* + e −: uma cápsula só (os dois fazem a mesma coisa em sentidos opostos) */
+        lv_obj_t *cap = lv_obj_create(ov);
+        lv_obj_remove_style_all(cap);
+        lv_obj_set_size(cap, BTN, 2 * BTN + 1);
+        lv_obj_set_style_radius(cap, 14, 0);
+        lv_obj_set_style_bg_color(cap, pal()->surface, 0);
+        lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
+        lv_obj_set_style_shadow_width(cap, 10, 0);
+        lv_obj_set_style_shadow_opa(cap, LV_OPA_30, 0);
+        lv_obj_remove_flag(cap, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(cap, LV_ALIGN_TOP_RIGHT, -12, 12);
+        for(int k = 0; k < 2; k++) {
+            b = round_btn(cap, k ? LV_SYMBOL_MINUS : LV_SYMBOL_PLUS, zoom_cb, k ? -1 : 1);
+            lv_obj_set_style_bg_opa(b, LV_OPA_TRANSP, 0);   /* a cápsula é o fundo; realce só ao tocar */
+            lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_STATE_PRESSED);
+            lv_obj_set_style_shadow_width(b, 0, 0);
+            lv_obj_set_pos(b, 0, k ? BTN + 1 : 0);
+        }
+        lv_obj_t *div = lv_obj_create(cap);           /* linha entre os dois */
+        lv_obj_remove_style_all(div);
+        lv_obj_set_size(div, BTN - 20, 1);
+        lv_obj_set_pos(div, 10, BTN);
+        lv_obj_set_style_bg_color(div, pal()->text_dim, 0);
+        lv_obj_set_style_bg_opa(div, LV_OPA_40, 0);
+    }
     b = round_btn(ov, "N", rot_cb, 0);
     rot_lbl = lv_obj_get_child(b, 0);
     lv_obj_align(b, LV_ALIGN_TOP_RIGHT, -12, 12 + 2 * (BTN + 10));
@@ -3488,11 +3607,14 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_remove_style_all(banner);
     lv_obj_set_size(banner, 632, 104);
     lv_obj_set_pos(banner, 80, 12);
-    lv_obj_set_style_bg_color(banner, lv_color_hex(0x1e6e34), 0);
+    /* material escuro e sóbrio: a distância em destaque, o mapa calmo por baixo */
+    lv_obj_set_style_bg_color(banner, lv_color_hex(BANNER_BG), 0);
     lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(banner, 14, 0);
-    lv_obj_set_style_shadow_width(banner, 14, 0);
-    lv_obj_set_style_shadow_opa(banner, LV_OPA_40, 0);
+    lv_obj_set_style_radius(banner, 18, 0);
+    lv_obj_set_style_border_color(banner, lv_color_hex(0x343A46), 0);
+    lv_obj_set_style_border_width(banner, 1, 0);
+    lv_obj_set_style_shadow_width(banner, 18, 0);
+    lv_obj_set_style_shadow_opa(banner, LV_OPA_50, 0);
     lv_obj_remove_flag(banner, LV_OBJ_FLAG_SCROLLABLE);
     memset(&icon_dsc, 0, sizeof icon_dsc);
     icon_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
@@ -3507,11 +3629,11 @@ static void create(lv_obj_t *parent, int arg)
     lv_obj_set_pos(ban_icon, 12, 12);
     ban_dist = bf_label(banner, "", BF_FONT_L, lv_color_white());
     lv_obj_set_pos(ban_dist, 104, 8);
-    ban_text = bf_label(banner, "", BF_FONT_M, lv_color_white());
+    ban_text = bf_label(banner, "", BF_FONT_M, lv_color_hex(0xE3E6EB));
     lv_obj_set_pos(ban_text, 104, 44);
     lv_label_set_long_mode(ban_text, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ban_text, 516);
-    ban_then = bf_label(banner, "", BF_FONT_S, lv_color_hex(0xcfe8d4));
+    ban_then = bf_label(banner, "", BF_FONT_S, lv_color_hex(0x9AA3B2));
     lv_obj_set_pos(ban_then, 104, 74);
     lv_label_set_long_mode(ban_then, LV_LABEL_LONG_DOT);
     lv_obj_set_width(ban_then, 516);
@@ -3731,6 +3853,8 @@ static void create(lv_obj_t *parent, int arg)
 static void destroy(void)
 {
     demo_alive = false;
+    perfui_tag_hide(false);
+    perfui_tag_at(-1, 0);
     if(bench_tm) { lv_timer_delete(bench_tm); bench_tm = NULL; }
     if(tick) { lv_timer_delete(tick); tick = NULL; }
     if(anim) { lv_timer_delete(anim); anim = NULL; }
@@ -3753,6 +3877,7 @@ static void destroy(void)
     free(N.al);
     free(N.lim);
     N.lim = NULL;
+    nav_lim_n = 0;
     for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
     for(int a = 0; a < BGRT_MAXALT; a++) { free(R.alt[a]); R.alt[a] = NULL; R.alt_n[a] = 0; }
     memset(&N, 0, sizeof N);
@@ -3766,24 +3891,35 @@ static void destroy(void)
     if(glyph_buf) { lv_draw_buf_destroy(glyph_buf); glyph_buf = NULL; }
     if(ov) { lv_obj_delete(ov); ov = NULL; }
     if(R.pack) { bgm_close(R.pack); R.pack = NULL; }
+    free(R.ral);
+    R.ral = NULL;
+    R.nral = 0;
     bga_close(R.alerts);
     R.alerts = NULL;
-    for(int i = 0; i < 300; i++) {                /* o cálculo dos limites ainda lê o arquivo: espera */
-        pthread_mutex_lock(&LJ.mu);
-        free(LJ.xy);
-        LJ.xy = NULL;
-        LJ.pt_want = false;
-        LJ.gen++;
-        bool busy = LJ.busy;
-        pthread_mutex_unlock(&LJ.mu);
-        if(!busy) break;
-        usleep(10000);
-    }
+    /* o cálculo dos limites pode estar lendo o arquivo (do cartão, sem prazo): se está, ela o
+     * fecha ao terminar; a tela não espera o cartão nem o arquivo some debaixo dela */
     pthread_mutex_lock(&LJ.mu);
+    free(LJ.xy);
+    LJ.xy = NULL;
+    LJ.pt_want = LJ.pt_have = false;
+    LJ.gen++;
     free(LJ.out);
     LJ.out = NULL;
+    LJ.pack = NULL;
+    bgk_pack_t *close_now = R.speeds;
+    bool wait_close = false;
+    if(LJ.busy && R.speeds) {                      /* nunca debaixo da thread: ela fecha */
+        struct lim_dispose *d = malloc(sizeof *d);
+        if(d) { d->p = R.speeds; d->next = LJ.dispose; LJ.dispose = d; close_now = NULL; }
+        else wait_close = true;                    /* sem memória nem para isto: espera ela */
+    }
     pthread_mutex_unlock(&LJ.mu);
-    bgk_close(R.speeds);
+    for(bool busy = wait_close; busy; usleep(10000)) {
+        pthread_mutex_lock(&LJ.mu);
+        busy = LJ.busy;
+        pthread_mutex_unlock(&LJ.mu);
+    }
+    bgk_close(close_now);
     R.speeds = NULL;
     bgl_close(lanes_pack);
     lanes_pack = NULL;
@@ -3811,6 +3947,7 @@ static void destroy(void)
  * 7 escolhe o sedã vermelho grande, 8 fecha o painel */
 void scr_map_demo(int step)
 {
+    demo_freeze = step == 16;
     if(step == 0) {
         uint32_t x, y;
         bgr_lonlat_to_world(-48.0560, -15.8335, &x, &y);
@@ -3875,6 +4012,7 @@ void scr_map_demo(int step)
             route_request(N.profile, false);
         }
     } else if(step == 16) {                          /* limite da via num trecho com maxspeed, acima dele */
+        for(int t = 0; t < 100 && !N.lim; t++) { lim_poll(); if(!N.lim) usleep(10000); }   /* vem em segundo plano */
         for(int i = 0; N.lim && i < N.route.npts - 1; i++) if(N.lim[i] >= 70) { N.route.seg = i; break; }
         pos_speed = 95;
         update_botbar();

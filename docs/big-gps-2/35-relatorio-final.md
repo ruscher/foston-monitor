@@ -53,8 +53,13 @@ não foi medida a latência do toque em si.
 
 ## 15–16. Voz Piper Faber
 
-A única voz é a Faber, gerada no PC. O pacote fixo tem 129 frases (1,9 MB), e o do DF, 14.148
-nomes de vias (596 MB, 41 min no PC). Ela foi ouvida no aparelho pelo usuário. Rodar o modelo
+A única voz é a Faber, gerada no PC. São três pacotes:
+- o fixo, com 129 frases (1,9 MB);
+- o do DF, com 14.148 nomes de vias (596 MB, 41 min no PC);
+- o do restante do Centro-Oeste (GO, MT e MS), com 66.692 nomes (2,1 GB, ~3 h no PC).
+
+Desde a 0.6.4 só o índice dos pacotes fica mapeado e o áudio é lido do cartão ao falar
+([22](22-piper-faber.md)). Ela foi ouvida no aparelho pelo usuário. Rodar o modelo
 no FOSTON é inviável: cerca de 39 minutos por frase. O eSpeak NG saiu.
 
 ## 17. Bluetooth
@@ -107,10 +112,16 @@ No cartão:
 
 - **Limite de velocidade das vias**, do `maxspeed` do OSM ([36](36-limites-de-velocidade.md)), BigFoston OS 0.6.2.
 
+- **Paradas:** reordenar, tirar uma e arrastar no mapa ([20](20-paradas-intermediarias.md)), BigFoston OS 0.6.3.
+- **Revisão visual** com paleta própria ([03](03-design-system.md)) e **voz com nomes de vias de
+  todo o Centro-Oeste** ([22](22-piper-faber.md)), BigFoston OS 0.6.4.
+- **Modo Performance com o mapa aberto**, testado no FOSTON (26/11/2026): pausou só as
+  tarefas agendadas (`crond`); Bluetooth, GPS e telefone continuaram, com os mesmos processos.
+  A etiqueta "Performance" ficava sobre o botão Voltar; agora vai para um lugar livre
+  ([25](25-modo-performance.md)).
+
 ## 26. Próximos passos
 
-- Testar no FOSTON o que só foi visto no simulador: alternativas, faixas, painéis e busca.
-- Testar dirigindo, e com música do celular tocando.
-- Gerar a voz com nomes para outras regiões.
-- Reordenar e arrastar paradas.
-- Ajustar o visual quando as imagens de referência chegarem.
+- Testar dirigindo: navegação com o GPS de verdade, limite da via, placa e bipe do radar, voz
+  com nomes de vias fora do DF, e com música do celular tocando.
+- Medir o desempenho com o GPS fixado, no carro.

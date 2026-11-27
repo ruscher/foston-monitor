@@ -158,11 +158,12 @@ static void speak(const char *text)
     }
     if(!nc) return;
     int16_t *pcm = calloc(total, sizeof *pcm);
-    if(!pcm) return;
+    if(!pcm) { for(int i = 0; i < nc; i++) bgv_clip_release(&clips[i]); return; }
     uint32_t o = 0;
     for(int i = 0; i < nc; i++) {
         bgv_decode(&clips[i], pcm + o);
         o += clips[i].nsamples + gap;
+        bgv_clip_release(&clips[i]);
     }
     /* música do celular tocando: a voz entra nela, que abaixa enquanto a voz fala */
     uint32_t done = btaudio_live() ? btaudio_say(pcm, total, rate, stop_requested) : 0;

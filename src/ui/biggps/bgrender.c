@@ -21,33 +21,33 @@ typedef struct {
 
 #define W(...) {__VA_ARGS__}
 static const style_t ST[BGK_COUNT] = {
-    [BGK_A_RESIDENTIAL] = {0xE4E1DC, 0x262A31, 0, 0, W(0), 0},
-    [BGK_A_COMMERCIAL] = {0xF2DAD9, 0x30282C, 0, 0, W(0), 0},
-    [BGK_A_INDUSTRIAL] = {0xEBDBE8, 0x2C2833, 0, 0, W(0), 0},
-    [BGK_A_FARM] = {0xEEF0D5, 0x262B22, 0, 0, W(0), 0},
-    [BGK_A_FOREST] = {0xADD19E, 0x1E3322, 0, 0, W(0), 0},
-    [BGK_A_PARK] = {0xC8E6B0, 0x203526, 0, 0, W(0), 0},
-    [BGK_A_SAND] = {0xF5E9C6, 0x3A362A, 0, 0, W(0), 0},
-    [BGK_A_WETLAND] = {0xC6DED2, 0x20322E, 0, 0, W(0), 0},
-    [BGK_A_WATER] = {0xAAD3DF, 0x173A4D, 0, 0, W(0), 0},
-    [BGK_A_AEROWAY] = {0xE5E2EA, 0x2A2B33, 0, 0, W(0), 0},
-    [BGK_A_PEDESTRIAN] = {0xDDDDE8, 0x30323A, 0, 0, W(0), 0},
-    [BGK_A_PARKING] = {0xEEEEEE, 0x2C2E34, 0, 0, W(0), 0},
-    [BGK_A_BUILDING] = {0xD9D0C9, 0x3A3D45, 0, 0, W(0), 0},
+    [BGK_A_RESIDENTIAL] = {0xEDEBE6, 0x22262D, 0, 0, W(0), 0},
+    [BGK_A_COMMERCIAL] = {0xF1E8E5, 0x272429, 0, 0, W(0), 0},
+    [BGK_A_INDUSTRIAL] = {0xEAE6EC, 0x25242B, 0, 0, W(0), 0},
+    [BGK_A_FARM] = {0xEEF1E2, 0x20251F, 0, 0, W(0), 0},
+    [BGK_A_FOREST] = {0xCFE3C6, 0x1B2A21, 0, 0, W(0), 0},
+    [BGK_A_PARK] = {0xD3E8C4, 0x1D2C23, 0, 0, W(0), 0},
+    [BGK_A_SAND] = {0xF3ECD8, 0x2D2A23, 0, 0, W(0), 0},
+    [BGK_A_WETLAND] = {0xD4E6DC, 0x1C2A28, 0, 0, W(0), 0},
+    [BGK_A_WATER] = {0xA9CDE6, 0x15334B, 0, 0, W(0), 0},
+    [BGK_A_AEROWAY] = {0xE8E6EC, 0x26282F, 0, 0, W(0), 0},
+    [BGK_A_PEDESTRIAN] = {0xE6E5EC, 0x2A2C33, 0, 0, W(0), 0},
+    [BGK_A_PARKING] = {0xEFEFEF, 0x262830, 0, 0, W(0), 0},
+    [BGK_A_BUILDING] = {0xE0DAD3, 0x2D3139, 0, 0, W(0), 0},
     /*                         z: 5  6  7  8  9 10 11 12 13 14 15  16  17  18  19 */
-    [BGK_L_STREAM] = {0xAAD3DF, 0x1F4A60, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 8, 10, 14, 16), 0},
-    [BGK_L_RIVER] = {0xAAD3DF, 0x1F4A60, 0, 0, W(0, 0, 0, 0, 4, 4, 6, 6, 10, 12, 16, 24, 32, 40, 48), 0},
-    [BGK_L_BOUNDARY] = {0x9E8FB0, 0x6E6385, 0, 0, W(4, 4, 4, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6), 6},
-    [BGK_L_RAIL] = {0x8A8A8A, 0x6A6E78, 0, 0, W(0, 0, 0, 0, 0, 0, 4, 4, 6, 6, 8, 8, 10, 12, 16), 0},
-    [BGK_L_PATH] = {0xE07A6E, 0xA0605A, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 8, 10), 3},
-    [BGK_L_TRACK] = {0xA87A3C, 0x8A6A40, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 8, 10, 12, 16), 5},
-    [BGK_L_SERVICE] = {0xFFFFFF, 0x464B57, 0xC2C2C2, 0x15181E, W(0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 10, 16, 28, 40, 56), 0},
-    [BGK_L_RESIDENTIAL] = {0xFFFFFF, 0x515766, 0xBDBDBD, 0x15181E, W(0, 0, 0, 0, 0, 0, 0, 4, 6, 14, 24, 40, 56, 80, 112), 0},
-    [BGK_L_TERTIARY] = {0xFFFFFF, 0x5E6475, 0xA8A8A8, 0x15181E, W(0, 0, 0, 0, 0, 0, 4, 8, 14, 24, 34, 48, 64, 88, 120), 0},
-    [BGK_L_SECONDARY] = {0xF7FABF, 0x7A7A48, 0xA6AE4A, 0x15181E, W(0, 0, 0, 0, 4, 6, 10, 14, 20, 28, 38, 52, 72, 96, 128), 0},
-    [BGK_L_PRIMARY] = {0xFCD6A4, 0x9A7A40, 0xC08A3A, 0x15181E, W(0, 0, 0, 5, 6, 8, 12, 16, 22, 30, 40, 56, 76, 104, 136), 0},
-    [BGK_L_TRUNK] = {0xF9B29C, 0xA8684C, 0xD0603A, 0x15181E, W(4, 4, 6, 8, 10, 12, 14, 18, 24, 32, 44, 60, 80, 112, 144), 0},
-    [BGK_L_MOTORWAY] = {0xE892A2, 0xB05468, 0xDC2A67, 0x15181E, W(4, 4, 6, 8, 10, 12, 14, 18, 24, 32, 44, 60, 80, 112, 144), 0},
+    [BGK_L_STREAM] = {0xA9CDE6, 0x1A3D57, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 8, 10, 14, 16), 0},
+    [BGK_L_RIVER] = {0xA9CDE6, 0x1A3D57, 0, 0, W(0, 0, 0, 0, 4, 4, 6, 6, 10, 12, 16, 24, 32, 40, 48), 0},
+    [BGK_L_BOUNDARY] = {0xA79BC0, 0x57516C, 0, 0, W(4, 4, 4, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6), 6},
+    [BGK_L_RAIL] = {0x9A9A9A, 0x5A5F6A, 0, 0, W(0, 0, 0, 0, 0, 0, 4, 4, 6, 6, 8, 8, 10, 12, 16), 0},
+    [BGK_L_PATH] = {0xD28C7E, 0x6E5F66, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 5, 6, 8, 10), 3},
+    [BGK_L_TRACK] = {0xB08E5E, 0x5E5448, 0, 0, W(0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 8, 10, 12, 16), 5},
+    [BGK_L_SERVICE] = {0xFFFFFF, 0x3B404B, 0xD8D5CF, 0x14171C, W(0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 10, 16, 28, 40, 56), 0},
+    [BGK_L_RESIDENTIAL] = {0xFFFFFF, 0x474D5A, 0xCFCBC4, 0x14171C, W(0, 0, 0, 0, 0, 0, 0, 4, 6, 14, 24, 40, 56, 80, 112), 0},
+    [BGK_L_TERTIARY] = {0xFFFFFF, 0x545B6B, 0xC4BFB6, 0x14171C, W(0, 0, 0, 0, 0, 0, 4, 8, 14, 24, 34, 48, 64, 88, 120), 0},
+    [BGK_L_SECONDARY] = {0xFFFFFF, 0x666E80, 0xBDB6A8, 0x14171C, W(0, 0, 0, 0, 4, 6, 10, 14, 20, 28, 38, 52, 72, 96, 128), 0},
+    [BGK_L_PRIMARY] = {0xFFF6DC, 0x7D8597, 0xD6C08E, 0x14171C, W(0, 0, 0, 5, 6, 8, 12, 16, 22, 30, 40, 56, 76, 104, 136), 0},
+    [BGK_L_TRUNK] = {0xFFE6A8, 0x8C7D5C, 0xD9AF57, 0x14171C, W(4, 4, 6, 8, 10, 12, 14, 18, 24, 32, 44, 60, 80, 112, 144), 0},
+    [BGK_L_MOTORWAY] = {0xFFD685, 0xA08A5C, 0xD19A2E, 0x14171C, W(4, 4, 6, 8, 10, 12, 14, 18, 24, 32, 44, 60, 80, 112, 144), 0},
     [BGK_L_FERRY] = {0x6666FF, 0x5A5AC0, 0, 0, W(0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 6, 6, 6, 6, 6), 6},
 };
 
@@ -91,7 +91,7 @@ static int casing_on(int k, int detail, int z)
     return (k >= BGK_L_SECONDARY && z >= 15) || z >= 17;
 }
 
-uint16_t bgr_background(int night) { return rgb565(night ? 0x1A1D23 : 0xF2EFE9); }
+uint16_t bgr_background(int night) { return rgb565(night ? 0x1B1E24 : 0xF4F2EE); }
 
 static uint32_t now_us(void)
 {

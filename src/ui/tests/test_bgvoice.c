@@ -32,7 +32,7 @@ int main(int argc, char **argv)
     }
     size_t len = bgv_encode(in, N, enc);
     CHECK(len == 4 + N / 2, "tamanho codificado %zu", len);
-    bgv_clip_t c = { enc, N };
+    bgv_clip_t c = { enc, N, NULL };
     bgv_decode(&c, out);
     double sig = 0, err = 0;
     for (int i = 0; i < N; i++) { sig += (double)in[i] * in[i]; err += (double)(in[i] - out[i]) * (in[i] - out[i]); }
@@ -65,6 +65,7 @@ int main(int argc, char **argv)
                     double s = (double)k.nsamples / rate;
                     CHECK(s > 0.3 && s < 4, "\"%s\": %.2f s", need[i], s);
                     if (i < 3) printf("  \"%s\": %.2f s\n", need[i], s);
+                    bgv_clip_release(&k);
                 }
             }
             bgv_clip_t k;

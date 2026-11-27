@@ -33,7 +33,8 @@ bgk_pack_t *bgk_open(const char *path, char *err, int errlen)
     if(m == MAP_FAILED) { snprintf(err, (size_t)errlen, "%s: não mapeia", path); return NULL; }
     const unsigned char *h = m;
     uint32_t n = rd32(h + 8);
-    if(memcmp(h, BGK_MAGIC, 4) || rd32(h + 4) != BGK_VERSION || (size_t)st.st_size != 16 + (size_t)n * sizeof(bgk_entry_t)) {
+    /* em 64 bits: no FOSTON (size_t de 32) uma contagem enorme daria a volta e passaria */
+    if(memcmp(h, BGK_MAGIC, 4) || rd32(h + 4) != BGK_VERSION || (uint64_t)st.st_size != 16 + (uint64_t)n * sizeof(bgk_entry_t)) {
         snprintf(err, (size_t)errlen, "%s: formato desconhecido", path);
         munmap(m, (size_t)st.st_size);
         return NULL;
@@ -91,9 +92,8 @@ int bgk_at(const bgk_pack_t *p, uint32_t x, uint32_t y, int bearing)
             else if(diff >= 145) v = e->bwd;
             else continue;                                  /* a via que cruza */
         }
-        if(!v) continue;
-        best = d;
-        lim = v;
+        best = d;                                   /* o mais perto no rumo vale, mesmo sem limite: */
+        lim = v;                                    /* não pega o 60 da paralela a 6 m */
     }
     return lim;
 }
