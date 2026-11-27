@@ -462,7 +462,7 @@ static struct {
     uint32_t route_px, route_py;
     bga_pack_t *alerts;        /* semáforos, radares, lombadas (só leitura, mapeado) */
     bga_entry_t *ral;          /* navegando: só os alertas na rota (semáforos inclusive) vão para o mapa */
-    int nral, ral_on;
+    int nral, ral_on;                              /* nral -1: a lista não coube (desenha os da área) */
     bgk_pack_t *speeds;        /* limites de velocidade das vias (maxspeed do OSM; mapeado) */
     uint16_t *src[2];          /* vista inclinada: quadro de cima da área maior (fonte), dono: motor */
     uint32_t *alt[BGRT_MAXALT];   /* rotas alternativas a desenhar (azul-claro, por baixo), dono: interface */
@@ -506,9 +506,10 @@ static void *worker(void *arg)
         memcpy(ucopy, upts, (size_t)nu * sizeof ucopy[0]);
         static bga_entry_t *alcopy;                   /* navegando: os alertas da rota */
         static int alcap;
-        int nal = R.ral_on && R.ral ? R.nral : -1;
+        /* navegando: os da rota (0 = nenhum); -1 = os da área (seguindo, ou a lista não coube) */
+        int nal = R.ral_on && R.nral >= 0 ? R.nral : -1;
         if(nal > alcap) { bga_entry_t *nb = realloc(alcopy, (size_t)nal * sizeof *nb); if(nb) { alcopy = nb; alcap = nal; } else nal = -1; }
-        if(nal > 0) memcpy(alcopy, R.ral, (size_t)nal * sizeof *alcopy);
+        if(nal > 0 && R.ral) memcpy(alcopy, R.ral, (size_t)nal * sizeof *alcopy);
         static uint32_t *acopy[BGRT_MAXALT];
         static int acap[BGRT_MAXALT];
         int an[BGRT_MAXALT];
@@ -1413,7 +1414,7 @@ static int upt_near(uint32_t x, uint32_t y)
 static struct {
     pthread_mutex_t mu;
     bgk_pack_t *pack;                              /* o que a thread lê (R.speeds) */
-    bgk_pack_t *dispose[4];                        /* o mapa fechou com a thread lendo: ela fecha */
+    struct lim_dispose { bgk_pack_t *p; struct lim_dispose *next; } *dispose;   /* o mapa fechou com a thread lendo: ela fecha */
     int gen, done_gen;                             /* rota pedida / rota do resultado */
     uint32_t *xy;
     int npts;
@@ -1444,19 +1445,20 @@ static void *lim_worker(void *a)
             pthread_mutex_unlock(&LJ.mu);
             int v = bgk_at(pk, x, y, b);
             pthread_mutex_lock(&LJ.mu);
-            LJ.pt_lim = v;
-            LJ.rx = x; LJ.ry = y; LJ.rb = b;
-            LJ.pt_have = true;
+            if(gen == LJ.gen) {                    /* o mapa fechou no meio: o de outro arquivo não vale */
+                LJ.pt_lim = v;
+                LJ.rx = x; LJ.ry = y; LJ.rb = b;
+                LJ.pt_have = true;
+            }
             pthread_mutex_unlock(&LJ.mu);
             continue;
         }
         if(!xy) {                                  /* acabou: fecha o que o mapa largou com ela lendo */
-            bgk_pack_t *d[4];
-            memcpy(d, LJ.dispose, sizeof d);
-            memset(LJ.dispose, 0, sizeof LJ.dispose);
+            struct lim_dispose *d = LJ.dispose;
+            LJ.dispose = NULL;
             LJ.busy = false;
             pthread_mutex_unlock(&LJ.mu);
-            for(int i = 0; i < 4; i++) bgk_close(d[i]);
+            while(d) { struct lim_dispose *nx = d->next; bgk_close(d->p); free(d); d = nx; }
             return NULL;
         }
         pthread_mutex_unlock(&LJ.mu);
@@ -1563,7 +1565,7 @@ static void route_alerts(void)
     pthread_mutex_lock(&R.mu);
     free(R.ral);
     R.ral = pub;
-    R.nral = pub ? n : 0;
+    R.nral = pub ? n : n ? -1 : 0;                  /* rota sem alertas: 0, não os da área */
     pthread_mutex_unlock(&R.mu);
     int w = 0;
     for(int i = 0; h && i < n; i++) if(h[i].kind != BGA_SIGNAL) h[w++] = h[i];
@@ -3905,14 +3907,18 @@ static void destroy(void)
     LJ.out = NULL;
     LJ.pack = NULL;
     bgk_pack_t *close_now = R.speeds;
-    if(LJ.busy && R.speeds) {
-        int k = 0;
-        while(k < 4 && LJ.dispose[k]) k++;
-        if(k < 4) LJ.dispose[k] = R.speeds;
-        else fprintf(stderr, "biggps: limites: arquivo ainda em uso, fica aberto\n");   /* 4 fechamentos numa busca */
-        close_now = NULL;                          /* nunca debaixo da thread */
+    bool wait_close = false;
+    if(LJ.busy && R.speeds) {                      /* nunca debaixo da thread: ela fecha */
+        struct lim_dispose *d = malloc(sizeof *d);
+        if(d) { d->p = R.speeds; d->next = LJ.dispose; LJ.dispose = d; close_now = NULL; }
+        else wait_close = true;                    /* sem memória nem para isto: espera ela */
     }
     pthread_mutex_unlock(&LJ.mu);
+    for(bool busy = wait_close; busy; usleep(10000)) {
+        pthread_mutex_lock(&LJ.mu);
+        busy = LJ.busy;
+        pthread_mutex_unlock(&LJ.mu);
+    }
     bgk_close(close_now);
     R.speeds = NULL;
     bgl_close(lanes_pack);
