@@ -33,11 +33,13 @@
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/soundcard.h>
+#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <fdk-aac/aacdecoder_lib.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
@@ -71,6 +73,10 @@ static void ring_put(const uint8_t *d, int n)
     pthread_mutex_unlock(&r_mx);
 }
 
+static int relay_accept(int ms);
+static int listen_fd = -1, relay_fd = -1;
+static volatile int local_switch;                         /* o PC conectou: a decodificação daqui para */
+
 static int ring_read(void *op, uint8_t *buf, int size)
 {
     (void)op;
@@ -78,8 +84,16 @@ static int ring_read(void *op, uint8_t *buf, int size)
     while(r_head == r_tail && !quit) {
         struct timespec t;
         clock_gettime(CLOCK_REALTIME, &t);
-        t.tv_sec += 1;
+        t.tv_nsec += 500000000;
+        if(t.tv_nsec >= 1000000000) { t.tv_sec++; t.tv_nsec -= 1000000000; }
         pthread_cond_timedwait(&r_cv, &r_mx, &t);
+        /* a antena parou (sem sinal): o PC que chega agora também assume, sem esperar um pacote */
+        if(r_head == r_tail && listen_fd >= 0 && relay_fd < 0) {
+            pthread_mutex_unlock(&r_mx);
+            int c = relay_accept(0);
+            if(c >= 0) { relay_fd = c; local_switch = 1; return AVERROR_EOF; }
+            pthread_mutex_lock(&r_mx);
+        }
     }
     if(quit) { pthread_mutex_unlock(&r_mx); return AVERROR_EOF; }
     int n = (int)(r_head - r_tail);
@@ -266,6 +280,20 @@ static void blit_scaled(const AVFrame *f, int ox, int oy, int W, int H)
     }
 }
 
+/* a linha y do quadro (a última, com altura ímpar) em 2x: duas linhas de saída */
+static void blit_last(const AVFrame *f, int y, int w)
+{
+    const uint8_t *yy = f->data[0] + y * f->linesize[0];
+    const uint8_t *u = f->data[1] + (y / 2) * f->linesize[1], *v = f->data[2] + (y / 2) * f->linesize[2];
+    uint16_t *d0 = fb + (out_y + y * 2) * fb_stride + out_x, *d1 = d0 + fb_stride;
+    for(int x = 0; x < w; x += 2) {
+        int rv = t_rv[v[x / 2]], g = t_gu[u[x / 2]] + t_gv[v[x / 2]], bu = t_bu[u[x / 2]];
+        uint16_t a = px(yy[x], rv, g, bu), b = px(yy[x + 1], rv, g, bu);
+        d0[2 * x] = d0[2 * x + 1] = d1[2 * x] = d1[2 * x + 1] = a;
+        d0[2 * x + 2] = d0[2 * x + 3] = d1[2 * x + 2] = d1[2 * x + 3] = b;
+    }
+}
+
 static void blit(const AVFrame *f)
 {
     if(want_full != is_full && alt_w > 0) {            /* tela cheia <-> janela */
@@ -281,6 +309,10 @@ static void blit(const AVFrame *f)
     if(w > (fb_w - out_x) / 2) w = (fb_w - out_x) / 2 & ~1;  /* nunca fora do retângulo da tela */
     if(h > (fb_h - out_y) / 2) h = (fb_h - out_y) / 2 & ~1;
     if(w <= 0 || h <= 0) return;
+    /* altura ímpar (tela cheia 800x450: 400x225 do PC): os laços andam de 2 em 2 linhas; a
+     * última sai sozinha (blit_last), sem ler abaixo do quadro nem pintar fora do retângulo */
+    int odd = h & 1;
+    h -= odd;
     if(!getenv_no64 && !(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 7)) {
         /* alinhado em 8: quatro pontos por escrita de 64 bits (STRD), metade das escritas de 32 */
         for(int y = 0; y < h; y += 2) {
@@ -298,6 +330,7 @@ static void blit(const AVFrame *f)
                 d2[x / 2] = d3[x / 2] = cd;
             }
         }
+        if(odd) blit_last(f, h, w);
         return;
     }
     if(!(((uintptr_t)(fb + out_y * fb_stride + out_x) | (uintptr_t)(fb_stride * 2)) & 3)) {
@@ -319,6 +352,7 @@ static void blit(const AVFrame *f)
                 d2[x + 1] = d3[x + 1] = d;
             }
         }
+        if(odd) blit_last(f, h, w);
         return;
     }
     for(int y = 0; y < h; y += 2) {
@@ -337,6 +371,7 @@ static void blit(const AVFrame *f)
             d2[o + 2] = d2[o + 3] = d3[o + 2] = d3[o + 3] = d;
         }
     }
+    if(odd) blit_last(f, h, w);
 }
 
 static int fb_open(void)
@@ -363,7 +398,23 @@ static int fb_open(void)
 /* ------------------------------------------------------------ áudio */
 
 static int dsp = -1;
-static double audio_pts = -1;                                 /* fim do que foi escrito (s) */
+/* fim do que foi escrito no som (s; -1 nenhum). Escrito pela thread do som e lido pelo vídeo e
+ * pelo laço principal: um double são duas palavras no ARM1176, então sempre pela trava */
+static double audio_pts_v = -1;
+static pthread_mutex_t apts_mx = PTHREAD_MUTEX_INITIALIZER;
+static double apts_get(void)
+{
+    pthread_mutex_lock(&apts_mx);
+    double v = audio_pts_v;
+    pthread_mutex_unlock(&apts_mx);
+    return v;
+}
+static void apts_set(double v)
+{
+    pthread_mutex_lock(&apts_mx);
+    audio_pts_v = v;
+    pthread_mutex_unlock(&apts_mx);
+}
 
 static int dsp_open(void)
 {
@@ -392,10 +443,11 @@ static int dsp_open(void)
 
 static double audio_clock(void)
 {
-    if(dsp < 0 || audio_pts < 0) return -1;
+    double ap = apts_get();
+    if(dsp < 0 || ap < 0) return -1;
     int bytes = 0;
     ioctl(dsp, SNDCTL_DSP_GETODELAY, &bytes);
-    return audio_pts - bytes / 64000.0;                       /* 32 kHz mono 16 bits */
+    return ap - bytes / 64000.0;                       /* 32 kHz mono 16 bits */
 }
 
 /* 48 kHz -> 32 kHz (3 -> 2, média linear), mistura para mono */
@@ -410,7 +462,7 @@ static void audio_out(const INT_PCM *pcm, int frames, int chans, double pts)
         out[n++] = (int16_t)((b + 2 * c) / 3);
     }
     if(dsp < 0) return;
-    if(audio_pts >= 0) {                                       /* o buffer secou: o som falhou */
+    if(apts_get() >= 0) {                                       /* o buffer secou: o som falhou */
         int q = 0;
         if(ioctl(dsp, SNDCTL_DSP_GETODELAY, &q) == 0 && q == 0) audio_underruns++;
     }
@@ -422,7 +474,7 @@ static void audio_out(const INT_PCM *pcm, int frames, int chans, double pts)
         p += w;
         left -= (size_t)w;
     }
-    audio_pts = pts + frames / 48000.0;
+    apts_set(pts + frames / 48000.0);
 }
 
 /* ------------------------------------------------------------ fila de quadros (mostrar na hora) */
@@ -485,11 +537,11 @@ static void *show_thread(void *a)
 
 /* ------------------------------------------------------------ PC decodificando (tvrelay.h) */
 
-static int listen_fd = -1, relay_fd = -1;
 static FILE *play_fp;                                     /* gravação indo para o PC (-p com o relay) */
 static double play_start;                                 /* horário do começo da gravação */
 static volatile int play_done;
 static volatile int play_sent;                            /* o arquivo todo já foi */
+static unsigned long tx_bytes;                            /* TS mandado ao PC (__atomic: relay_tx escreve) */
 static double relay_t0;                                   /* começo do modo PC (para o log) */
 static volatile int relay_stop;
 static pthread_mutex_t tx_mx = PTHREAD_MUTEX_INITIALIZER;
@@ -503,14 +555,26 @@ static int relay_send(char type, const void *d, uint32_t n)
     return r;
 }
 
+static int tx_send(const uint8_t *b, uint32_t n)
+{
+    if(relay_send('T', b, n)) return -1;
+    __atomic_add_fetch(&tx_bytes, n, __ATOMIC_RELAXED);
+    return 0;
+}
+
 static int relay_listen(void)
 {
     int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if(s < 0) return -1;
     int one = 1;
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(TVRELAY_PORT), .sin_addr.s_addr = htonl(INADDR_ANY) };
-    if(bind(s, (struct sockaddr *)&a, sizeof a) || listen(s, 1)) { close(s); return -1; }
+    /* só na rede USB: o FOSTON também entra em rede pelo Bluetooth (PAN do celular), e quem
+     * conecta recebe a TV e manda imagem para a tela */
+    struct sockaddr_in a = { .sin_family = AF_INET, .sin_port = htons(TVRELAY_PORT) };
+    if(inet_pton(AF_INET, TVRELAY_ADDR, &a.sin_addr) != 1 || bind(s, (struct sockaddr *)&a, sizeof a) || listen(s, 1)) {
+        close(s);
+        return -1;
+    }
     return s;
 }
 
@@ -519,11 +583,23 @@ static int relay_accept(int ms)
 {
     struct pollfd p = { listen_fd, POLLIN, 0 };
     if(poll(&p, 1, ms) != 1) return -1;
-    int c = accept4(listen_fd, NULL, NULL, SOCK_CLOEXEC);
+    struct sockaddr_in pa;
+    socklen_t pl = sizeof pa;
+    int c = accept4(listen_fd, (struct sockaddr *)&pa, &pl, SOCK_CLOEXEC);
     if(c < 0) return -1;
+    struct in_addr peer;
+    if(pa.sin_family != AF_INET || inet_pton(AF_INET, TVRELAY_PEER, &peer) != 1 || pa.sin_addr.s_addr != peer.s_addr) {
+        fprintf(stderr, "bftvd: relay: conexão recusada (não veio do PC pelo cabo USB)\n");
+        close(c);
+        return -1;
+    }
     int one = 1, buf = 256 * 1024;
     setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     setsockopt(c, SOL_SOCKET, SO_RCVBUF, &buf, sizeof buf);
+    /* um PC que para de ler não prende o envio do TS (nem o R e o S atrás dele) para sempre: a
+     * escrita volta com erro e a TV passa a decodificar aqui */
+    struct timeval tmo = { 3, 0 };
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &tmo, sizeof tmo);
     return c;
 }
 
@@ -569,15 +645,18 @@ static void *relay_tx(void *a)
         pthread_mutex_lock(&q_mx);
         int vq = q_w - q_r;
         pthread_mutex_unlock(&q_mx);
-        /* antes do primeiro som o PC ainda analisa o fluxo (~200 KB): mais que isso viria de uma vez */
-        if(ahead > TVRELAY_RATE * 2 || (!have_audio && (vq > 60 || sent >= 256 * 1024))) { usleep(20000); continue; }
+        /* antes do primeiro som o PC ainda analisa o fluxo (~200 KB): isso vai de uma vez; depois,
+         * sem som de volta (gravação só com vídeo), na taxa do arquivo, com a fila de quadros como
+         * freio, em vez de parar para sempre */
+        if(ahead > TVRELAY_RATE * 2 || (!have_audio && vq > 60)) { usleep(20000); continue; }
+        int paced = have_audio || sent >= 256 * 1024;
         double now = mono();
-        if(have_audio && now < next_send) { usleep((useconds_t)((next_send - now) * 1e6)); continue; }
+        if(paced && now < next_send) { usleep((useconds_t)((next_send - now) * 1e6)); continue; }
         size_t n = fread(buf, 1, sizeof buf, play_fp);
         sent += n;
-        next_send = (next_send > now ? next_send : now) + n / (2 * rate);
+        next_send = (next_send > now ? next_send : now) + n / ((have_audio ? 2 : 1) * rate);
         if(n == 0) { play_sent = 1; return NULL; }
-        if(relay_send('T', buf, (uint32_t)n)) { relay_stop = 1; return NULL; }
+        if(tx_send(buf, (uint32_t)n)) { relay_stop = 1; return NULL; }
     }
     while(!quit && !relay_stop) {
         pthread_mutex_lock(&r_mx);
@@ -593,7 +672,7 @@ static void *relay_tx(void *a)
         for(int i = 0; i < n; i++) buf[i] = ring[(r_tail + (size_t)i) % RING];
         r_tail += (size_t)n;
         pthread_mutex_unlock(&r_mx);
-        if(n > 0 && relay_send('T', buf, (uint32_t)n)) { relay_stop = 1; break; }
+        if(n > 0 && tx_send(buf, (uint32_t)n)) { relay_stop = 1; break; }
     }
     return NULL;
 }
@@ -626,10 +705,16 @@ static void *relay_audio(void *a)
     setpriority(PRIO_PROCESS, 0, -15);
     static int16_t out[1024];
     int primed = 0;
+    unsigned seen_w = 0;
+    double grew_at = mono();
     while(!quit && !relay_stop) {
         pthread_mutex_lock(&aq_mx);
         unsigned have = ar_w - ar_r;
-        if(!primed && have < TVRELAY_RATE * 3 / 10) { pthread_mutex_unlock(&aq_mx); usleep(10000); continue; }
+        if(ar_w != seen_w) { seen_w = ar_w; grew_at = mono(); }
+        /* a reserva de 300 ms, menos no fim da gravação: o arquivo já foi todo e o PC parou de
+         * mandar som há 300 ms; o que sobrou toca (senão ficava preso e a gravação não acabava) */
+        int tail = play_sent && have && mono() - grew_at > 0.3;
+        if(!primed && have < TVRELAY_RATE * 3 / 10 && !tail) { pthread_mutex_unlock(&aq_mx); usleep(10000); continue; }
         primed = 1;
         if(!have) { pthread_mutex_unlock(&aq_mx); primed = 0; continue; }
         unsigned n = have < 1024 ? have : 1024;
@@ -641,7 +726,7 @@ static void *relay_audio(void *a)
         pthread_mutex_unlock(&aq_mx);
         if(dsp >= 0) {
             int q = 0;
-            if(audio_pts >= 0 && ioctl(dsp, SNDCTL_DSP_GETODELAY, &q) == 0 && q == 0) {
+            if(apts_get() >= 0 && ioctl(dsp, SNDCTL_DSP_GETODELAY, &q) == 0 && q == 0) {
                 audio_underruns++;
                 fprintf(stderr, "bftvd: o som secou em %.1f s (fila %u ms)\n", mono() - relay_t0, have * 1000 / TVRELAY_RATE);
             }
@@ -653,7 +738,7 @@ static void *relay_audio(void *a)
                 p += w;
                 left -= (size_t)w;
             }
-            if(pts >= 0) audio_pts = pts + n / (double)TVRELAY_RATE;
+            if(pts >= 0) apts_set(pts + n / (double)TVRELAY_RATE);
         }
     }
     return NULL;
@@ -706,7 +791,8 @@ static void queues_clear(void)
 static int relay_play(void)
 {
     char t[48], h[64];
-    relay_target(0, t, sizeof t);
+    int last_full = want_full;                             /* já pode estar em tela cheia */
+    relay_target(last_full, t, sizeof t);
     snprintf(h, sizeof h, "BFTV1 %s", t);
     relay_stop = 0;
     if(relay_send('H', h, (uint32_t)strlen(h))) { close(relay_fd); relay_fd = -1; return -1; }
@@ -714,20 +800,25 @@ static int relay_play(void)
     relay_t0 = mono();
     write_state(play_path ? "tocando" : "abrindo");
     double next_state = 0, quiet_since = 0;
-    for(int i = 0; i < QN; i++) if(!q[i]) q[i] = av_frame_alloc();
+    for(int i = 0; i < QN; i++) if(!q[i] && !(q[i] = av_frame_alloc())) relay_stop = 1;   /* relay_frame conta com elas */
     dsp_open();
     pthread_t st, tx, au;
     show_stop = 0;
-    pthread_create(&st, NULL, show_thread, NULL);
-    pthread_create(&tx, NULL, relay_tx, NULL);
-    pthread_create(&au, NULL, relay_audio, NULL);
+    __atomic_store_n(&tx_bytes, 0, __ATOMIC_RELAXED);       /* antes de o relay_tx subir */
+    /* uma thread que não sobe: para as outras e decodifica aqui (sem ela a sessão travaria) */
+    int st_ok = !pthread_create(&st, NULL, show_thread, NULL);
+    int tx_ok = st_ok && !pthread_create(&tx, NULL, relay_tx, NULL);
+    int au_ok = tx_ok && !pthread_create(&au, NULL, relay_audio, NULL);
+    if(!au_ok) { relay_stop = 1; fprintf(stderr, "bftvd: relay: thread não subiu\n"); }
+    double media_at = mono();                              /* última imagem ou som do PC */
+    int stalled = 0;
+    unsigned long media_tx = 0;                            /* TS já mandado naquela hora */
     /* ordem no aperto: som e antena (-15) > receber do PC (-13: o som vem nesta conexão, e esta
      * thread nunca espera) > desenhar (-12: um quadro atrasado é descartado) > o resto */
     setpriority(PRIO_PROCESS, 0, -13);
     proto_rx_t rx = { .cap = RELAY_MAX_MSG + 16 };
     rx.buf = malloc(rx.cap);
     yuvz_dec_t dec = { 0 };
-    int last_full = want_full;
     unsigned long n_v = 0, n_q = 0, n_a = 0, shown0 = frames_shown;
     double next_log = mono() + 60;
     while(rx.buf && !quit && !relay_stop) {
@@ -748,7 +839,7 @@ static int relay_play(void)
         }
         if(play_path) {                                    /* gravação: posição para a barra e o fim */
             double now = mono();
-            if(audio_pts >= 0) play_pos = audio_pts - play_start;
+            { double ap = apts_get(); if(ap >= 0) play_pos = ap - play_start; }
             if(now >= next_state) { write_state("tocando"); next_state = now + 1; }
             pthread_mutex_lock(&aq_mx);
             int a_empty = ar_w == ar_r;
@@ -759,6 +850,13 @@ static int relay_play(void)
             if(!play_sent || !a_empty || !v_empty) quiet_since = 0;
             else if(!quiet_since) quiet_since = now;
             else if(now - quiet_since > 1.5) { play_done = 1; break; }   /* tudo tocado */
+        }
+        /* o PC recebeu TS para alguns segundos e não devolveu nada: travou com a conexão aberta.
+         * Sem sinal na antena não chega TS, e isso não conta */
+        if(mono() - media_at > 8 && __atomic_load_n(&tx_bytes, __ATOMIC_RELAXED) - media_tx > 256 * 1024) {
+            fprintf(stderr, "bftvd: o PC parou de responder; decodificando aqui\n");
+            stalled = 1;
+            break;
         }
         struct pollfd p = { relay_fd, POLLIN, 0 };
         if(poll(&p, 1, 200) <= 0) continue;
@@ -777,10 +875,11 @@ static int relay_play(void)
             used += c;
             if(l < 8) continue;
             double pts = tvrelay_get_pts(d) / 1e6;
+            if(type == 'V' || type == 'A') { media_at = mono(); media_tx = __atomic_load_n(&tx_bytes, __ATOMIC_RELAXED); }
             if(type == 'V') {
                 int k = yuvz_decode(&dec, d + 8, l - 8);
                 n_v++;
-                if(k < 0) relay_send('R', NULL, 0);        /* sem a base: o próximo vem inteiro */
+                if(k < 0 && relay_send('R', NULL, 0)) relay_stop = 1;   /* sem a base: o próximo vem inteiro */
                 else if(k > 0) { relay_frame(&dec, pts); n_q++; }
             } else if(type == 'A' && l > 9) {
                 n_a++;
@@ -792,10 +891,10 @@ static int relay_play(void)
     int lost = !quit && !play_done;
     relay_stop = 1;
     shutdown(relay_fd, SHUT_RDWR);
-    pthread_join(tx, NULL);
-    pthread_join(au, NULL);
+    if(tx_ok) pthread_join(tx, NULL);
+    if(au_ok) pthread_join(au, NULL);
     show_stop = 1;
-    pthread_join(st, NULL);
+    if(st_ok) pthread_join(st, NULL);
     show_stop = 0;
     queues_clear();
     close(relay_fd);
@@ -803,9 +902,9 @@ static int relay_play(void)
     free(rx.buf);
     yuvz_dec_free(&dec);
     relay_on = 0;
-    audio_pts = -1;
+    apts_set(-1);
     if(dsp >= 0) { close(dsp); dsp = -1; }             /* aqui o buffer volta ao curto (dsp_open) */
-    if(lost) fprintf(stderr, "bftvd: o PC saiu; decodificando aqui\n");
+    if(lost && !stalled) fprintf(stderr, "bftvd: o PC saiu; decodificando aqui\n");
     if(ar_dropped) fprintf(stderr, "bftvd: %lu amostras de som não couberam no anel\n", ar_dropped);
     return lost ? -1 : 0;
 }
@@ -961,11 +1060,11 @@ static int audio_buffered_ms(void)
  * relógio do som, pula até o próximo quadro-chave. Antes era uma thread só: o som esperava cada
  * quadro de vídeo e secava (medido na Globo: 10-12 qps e 95 cortes em 36 s). */
 
-static volatile int local_switch;                         /* o PC conectou: a decodificação daqui para */
 #define PKN 1024
 typedef struct {
     AVPacket *p[PKN];
-    int r, w, eof;
+    uint8_t after_drop[PKN];      /* o pacote que entrou logo depois de um descartado */
+    int r, w, eof, dropped;
     pthread_mutex_t mx;
     pthread_cond_t cv;
 } pktq_t;
@@ -978,18 +1077,20 @@ static int pktq_len(pktq_t *q) { pthread_mutex_lock(&q->mx); int n = q->w - q->r
 static int pktq_put(pktq_t *q, AVPacket *pk)
 {
     pthread_mutex_lock(&q->mx);
-    if(q->w - q->r >= PKN) { pthread_mutex_unlock(&q->mx); return -1; }
-    AVPacket *d = q->p[q->w % PKN];
-    if(!d) d = q->p[q->w % PKN] = av_packet_alloc();
+    AVPacket *d = q->w - q->r >= PKN ? NULL : q->p[q->w % PKN];
+    if(q->w - q->r < PKN && !d) d = q->p[q->w % PKN] = av_packet_alloc();
+    if(!d) { q->dropped = 1; pthread_mutex_unlock(&q->mx); return -1; }
     av_packet_move_ref(d, pk);
+    q->after_drop[q->w % PKN] = (uint8_t)q->dropped;
+    q->dropped = 0;
     q->w++;
     pthread_cond_signal(&q->cv);
     pthread_mutex_unlock(&q->mx);
     return 0;
 }
 
-/* 1: pacote em out; 0: acabou (eof ou quit) */
-static int pktq_get(pktq_t *q, AVPacket *out)
+/* 1: pacote em out (*gap: veio depois de um descartado); 0: acabou (eof ou quit) */
+static int pktq_get(pktq_t *q, AVPacket *out, int *gap)
 {
     pthread_mutex_lock(&q->mx);
     while(q->r == q->w && !q->eof && !quit && !local_switch) {
@@ -1000,7 +1101,10 @@ static int pktq_get(pktq_t *q, AVPacket *out)
         pthread_cond_timedwait(&q->cv, &q->mx, &t);
     }
     int ok = q->r != q->w && !quit && !local_switch;
-    if(ok) av_packet_move_ref(out, q->p[q->r++ % PKN]);
+    if(ok) {
+        *gap = q->after_drop[q->r % PKN];
+        av_packet_move_ref(out, q->p[q->r++ % PKN]);
+    }
     pthread_mutex_unlock(&q->mx);
     return ok;
 }
@@ -1009,7 +1113,7 @@ static void pktq_reset(pktq_t *q)
 {
     pthread_mutex_lock(&q->mx);
     for(; q->r < q->w; q->r++) av_packet_unref(q->p[q->r % PKN]);
-    q->eof = 0;
+    q->eof = q->dropped = 0;
     pthread_mutex_unlock(&q->mx);
 }
 
@@ -1023,7 +1127,7 @@ static void ladder_step(AVCodecContext *vc)
     int len = pktq_len(&vpq);
     bool behind = len > 15 && len + 2 >= prev_len;
     prev_len = len;
-    bool tight = behind || (audio_pts >= 0 && audio_buffered_ms() < 30) || now - late_at < 1;
+    bool tight = behind || (apts_get() >= 0 && audio_buffered_ms() < 30) || now - late_at < 1;
     if(ladder_ok < 0) ladder_ok = now;
     if(tight) {
         if(ladder < 2) {
@@ -1057,7 +1161,7 @@ static void audio_gap(double from, double to)
         n -= k;
     }
     gap_ms += (unsigned long)((to - from) * 1000);
-    audio_pts = to;
+    apts_set(to);
 }
 
 static void *local_audio(void *a)
@@ -1067,7 +1171,8 @@ static void *local_audio(void *a)
     setpriority(PRIO_PROCESS, 0, -15);
     static INT_PCM pcm[8192];
     AVPacket *pk = av_packet_alloc();
-    while(pktq_get(&apq, pk)) {
+    int gap;                                               /* o AAC não depende do quadro anterior */
+    while(pk && pktq_get(&apq, pk, &gap)) {
         double pts = pk->pts == AV_NOPTS_VALUE ? -1 : pk->pts * av_q2d(l_atb);
         UCHAR *b = pk->data;
         UINT sz = (UINT)pk->size, valid = sz;
@@ -1078,9 +1183,9 @@ static void *local_audio(void *a)
             sz = valid;
             while(aacDecoder_DecodeFrame(l_aac, pcm, 8192, 0) == AAC_DEC_OK) {
                 CStreamInfo *si = aacDecoder_GetStreamInfo(l_aac);
-                double fp = first && pts >= 0 ? pts : audio_pts;
+                double ap = apts_get(), fp = first && pts >= 0 ? pts : ap;
                 first = 0;
-                if(audio_pts >= 0 && fp > audio_pts + 0.03 && fp < audio_pts + 3) audio_gap(audio_pts, fp);
+                if(ap >= 0 && fp > ap + 0.03 && fp < ap + 3) audio_gap(ap, fp);
                 audio_out(pcm, si->frameSize, si->numChannels, fp);
             }
         }
@@ -1098,10 +1203,15 @@ static void *local_video(void *a)
     int skip_ok = !getenv("BFTV_NOSKIP"), need_key = 0;
     AVPacket *pk = av_packet_alloc();
     AVFrame *fr = av_frame_alloc();
-    while(pktq_get(&vpq, pk)) {
+    int gap;
+    while(pk && fr && pktq_get(&vpq, pk, &gap)) {
         int key = (pk->flags & AV_PKT_FLAG_KEY) != 0;
         double pts = pk->pts == AV_NOPTS_VALUE ? -1 : pk->pts * av_q2d(l_vtb);
         double ac = audio_clock();
+        /* um pacote antes deste foi descartado (fila cheia): os seguintes dependem dele; só a
+         * partir do próximo quadro-chave (com o decodificador limpo) */
+        if(gap && !key) need_key = 1;
+        else if(gap) avcodec_flush_buffers(l_vc);
         /* atrasado em relação ao som: o que sair daqui já passou da hora; pula até o próximo
          * quadro-chave (decodificar P sem as referências daria lixo na tela) */
         if(skip_ok && !key && !need_key && ac >= 0 && pts >= 0 && pts < ac - 1.0) need_key = 1;
@@ -1135,8 +1245,9 @@ static void *local_video(void *a)
     return NULL;
 }
 
-/* demux já aberto: decodifica e mostra até o fim ou SIGTERM */
-static void run_player(AVFormatContext *fc, pthread_t *st)
+/* demux já aberto: decodifica e mostra até o fim ou SIGTERM. 1: o mostrador (*st) subiu e quem
+ * chamou o junta; 0: não subiu (nada tocou) */
+static int run_player(AVFormatContext *fc, pthread_t *st)
 {
     double next_state = 0, start_s = fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time / (double)AV_TIME_BASE;
     int vi = quit ? -1 : av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
@@ -1161,15 +1272,22 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
         l_atb = fc->streams[ai]->time_base;
         dsp_open();
     }
-    for(int i = 0; i < QN; i++) if(!q[i]) q[i] = av_frame_alloc();
+    int frames_ok = 1;
+    for(int i = 0; i < QN; i++) if(!q[i] && !(q[i] = av_frame_alloc())) frames_ok = 0;
     show_stop = 0;
-    pthread_create(st, NULL, show_thread, NULL);
+    int st_ok = frames_ok && !pthread_create(st, NULL, show_thread, NULL);
     pktq_reset(&apq);
     pktq_reset(&vpq);
     pthread_t at, vt;
-    int have_a = l_aac != NULL, have_v = l_vc != NULL;
-    if(have_a) pthread_create(&at, NULL, local_audio, NULL);
-    if(have_v) pthread_create(&vt, NULL, local_video, NULL);
+    /* sem a thread, sem a fila: a do som travaria a leitura de uma gravação esperando vaga */
+    int have_a = st_ok && l_aac != NULL && !pthread_create(&at, NULL, local_audio, NULL);
+    int have_v = st_ok && l_vc != NULL && !pthread_create(&vt, NULL, local_video, NULL);
+    if(!st_ok || (l_aac && !have_a) || (l_vc && !have_v)) fprintf(stderr, "bftvd: thread do player não subiu\n");
+    if(!st_ok) {
+        avcodec_free_context(&l_vc);
+        if(l_aac) { aacDecoder_Close(l_aac); l_aac = NULL; }
+        return 0;
+    }
     write_state(vi < 0 ? "sem_video" : play_path ? "tocando" : "abrindo");
     setpriority(PRIO_PROCESS, 0, -14);                     /* a leitura só distribui: barata */
 
@@ -1190,7 +1308,7 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
         }
         av_packet_unref(pk);
         if(play_path) {                                    /* arquivo: posição para a barra do shell */
-            if(audio_pts >= 0) play_pos = audio_pts - start_s;
+            { double ap = apts_get(); if(ap >= 0) play_pos = ap - start_s; }
             double t = mono();
             if(t >= next_state) { write_state("tocando"); next_state = t + 1; }
         }
@@ -1200,14 +1318,24 @@ static void run_player(AVFormatContext *fc, pthread_t *st)
     pthread_mutex_lock(&apq.mx); apq.eof = 1; pthread_cond_signal(&apq.cv); pthread_mutex_unlock(&apq.mx);
     pthread_mutex_lock(&vpq.mx); vpq.eof = 1; pthread_cond_signal(&vpq.cv); pthread_mutex_unlock(&vpq.mx);
     while(play_path && !quit && (pktq_len(&apq) || pktq_len(&vpq))) {
-        if(audio_pts >= 0) play_pos = audio_pts - start_s;
+        { double ap = apts_get(); if(ap >= 0) play_pos = ap - start_s; }
         usleep(100000);
     }
     if(have_a) pthread_join(at, NULL);
     if(have_v) pthread_join(vt, NULL);
+    /* gravação no fim: o mostrador ainda tem quadros na fila (numa curta, só vídeo, podiam ser
+     * todos); espera ele mostrar, até 3 s. Cancelada (quit) sai já */
+    for(double t_end = mono() + 3; play_path && !quit && mono() < t_end;) {
+        pthread_mutex_lock(&q_mx);
+        int left = q_w != q_r;
+        pthread_mutex_unlock(&q_mx);
+        if(!left) break;
+        usleep(20000);
+    }
     avcodec_free_context(&l_vc);
     if(l_aac) { aacDecoder_Close(l_aac); l_aac = NULL; }
     if(video_skipped) fprintf(stderr, "bftvd: %lu pacotes de vídeo pulados até um quadro-chave\n", video_skipped);
+    return 1;
 }
 
 static int play_file(void)
@@ -1236,10 +1364,10 @@ static int play_file(void)
         av_seek_frame(fc, -1, fc->start_time == AV_NOPTS_VALUE ? 0 : fc->start_time, AVSEEK_FLAG_BACKWARD);
     } else if(relay_fd >= 0) { close(relay_fd); relay_fd = -1; }
     pthread_t st;
-    run_player(fc, &st);
-    int done = !quit;
+    int st_ok = run_player(fc, &st);
+    int done = !quit && st_ok;
     quit = 1;
-    pthread_join(st, NULL);
+    if(st_ok) pthread_join(st, NULL);
     if(dsp >= 0) close(dsp);
     avformat_close_input(&fc);
     write_state(done ? "fim" : "parado");
@@ -1247,6 +1375,36 @@ static int play_file(void)
 }
 
 /* ------------------------------------------------------------ principal */
+
+/* demux do TS da antena (lido do anel). O pb é nosso: nem o avformat_close_input nem o
+ * open_input que falha o soltam */
+static int local_open(AVFormatContext **out)
+{
+    *out = NULL;
+    AVFormatContext *fc = avformat_alloc_context();
+    uint8_t *iob = av_malloc(32768);
+    AVIOContext *pb = fc && iob ? avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL) : NULL;
+    if(!pb) { av_free(iob); avformat_free_context(fc); return -1; }
+    fc->pb = pb;
+    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg: abre o canal mais rápido */
+    fc->max_analyze_duration = AV_TIME_BASE;
+    if(avformat_open_input(&fc, NULL, av_find_input_format("mpegts"), NULL) < 0) {
+        av_freep(&pb->buffer);
+        avio_context_free(&pb);
+        return -1;
+    }
+    avformat_find_stream_info(fc, NULL);
+    *out = fc;
+    return 0;
+}
+
+static void local_close(AVFormatContext **fc)
+{
+    if(!*fc) return;
+    AVIOContext *pb = (*fc)->pb;
+    avformat_close_input(fc);
+    if(pb) { av_freep(&pb->buffer); avio_context_free(&pb); }
+}
 
 int main(int argc, char **argv)
 {
@@ -1328,29 +1486,33 @@ int main(int argc, char **argv)
         if(relay_fd >= 0) {
             fprintf(stderr, "bftvd: o PC decodifica (relay)\n");
             if(relay_play() == 0 || quit) break;
+            /* o PC parou no meio: o TS que ele não leu ficou no anel (segundos, se travou).
+             * Daqui segue o ao vivo, não o atraso (tocaria acelerado e o som ficaria para trás) */
+            pthread_mutex_lock(&r_mx);
+            r_tail = r_head;
+            pthread_mutex_unlock(&r_mx);
         }
-        if(!fc) {                                      /* demux daqui (uma vez; segue lendo o anel) */
-            fc = avformat_alloc_context();
-            uint8_t *iob = av_malloc(32768);
-            fc->pb = avio_alloc_context(iob, 32768, 0, NULL, ring_read, NULL, NULL);
-            fc->probesize = 120000;                    /* ~2,5 s de TS 1seg: abre o canal mais rápido */
-            fc->max_analyze_duration = AV_TIME_BASE;
-            const AVInputFormat *ts = av_find_input_format("mpegts");
-            if(avformat_open_input(&fc, NULL, ts, NULL) < 0) { write_state("erro_fluxo"); quit = 1; break; }
-            avformat_find_stream_info(fc, NULL);
+        /* demux daqui, aberto de novo a cada volta: o de antes do PC guardava TS velho (o buffer
+         * de 32 KB e pacotes pela metade), que tocaria fora de hora ao voltar */
+        local_switch = 0;
+        if(local_open(&fc)) {
+            if(local_switch && relay_fd >= 0) continue;   /* o PC chegou enquanto abria */
+            write_state("erro_fluxo");
+            break;
         }
         pthread_t st;
-        local_switch = 0;
-        run_player(fc, &st);
+        int st_ok = run_player(fc, &st);
         show_stop = 1;
-        pthread_join(st, NULL);
+        if(st_ok) pthread_join(st, NULL);
         show_stop = 0;
+        local_close(&fc);
         if(!local_switch) break;                       /* fim ou SIGTERM */
         queues_clear();                                /* o PC chegou: daqui para lá */
         if(dsp >= 0) { close(dsp); dsp = -1; }
-        audio_pts = -1;
+        apts_set(-1);
         ladder = 0;
     }
+    local_close(&fc);
     quit = 1;
     pthread_join(tt, NULL);
     if(dsp >= 0) close(dsp);

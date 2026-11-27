@@ -1,6 +1,6 @@
 /* test_yuvz.c - TV frames over USB (src/tv/yuvz.c): what the FOSTON rebuilds is exactly what the
  * PC quantized, through full frames, deltas, unchanged frames, a size change (odd height) and a
- * damaged message (which must ask for a full frame).
+ * full frame with a damaged checksum (refused, then a new full frame).
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,20 +38,20 @@ int main(void)
         int still = t >= 40 && t < 50;                      /* parado: nada muda depois do 1º */
         frame(f, w, h, still ? 40 : t, still);
         const uint8_t *m;
-        long l = yuvz_encode(&e, f, w, h, t == 70, &m);
+        long l = yuvz_encode(&e, f, w, h, t == 60 || t == 70, &m);
         CHECK(l > 0, "quadro %d: codificou %ld", t, l);
         if (l <= 0) break;
         if (m[4] & 1) deltas++;
-        if (t == 60) {                                      /* mensagem estragada: pede inteiro */
-            uint8_t bad[200000];
+        if (t == 60) {                                      /* inteiro com a soma estragada: recusa */
+            CHECK(!(m[4] & 1) && (m[4] & 2), "quadro %d: inteiro pedido sem soma (flags %d)", t, m[4]);
+            static uint8_t bad[200000];
             memcpy(bad, m, (size_t)l);
-            bad[l - 1] ^= 0x55;
+            bad[5] ^= 0x55;                                 /* o primeiro byte da soma */
+            unsigned long bad0 = d.bad;
             int r = yuvz_decode(&d, bad, (size_t)l);
-            CHECK(r == -1 || (m[4] & 1) == 0, "quadro %d: mensagem estragada aceita (%d)", t, r);
-            if (r == -1) {                                  /* o PC manda um inteiro */
-                l = yuvz_encode(&e, f, w, h, 1, &m);
-                CHECK(!(m[4] & 1), "pedido de inteiro não atendido");
-            }
+            CHECK(r == -1 && d.bad == bad0 + 1 && d.w == 0, "quadro %d: soma errada aceita (%d)", t, r);
+            l = yuvz_encode(&e, f, w, h, 1, &m);           /* o FOSTON pede um inteiro (R) */
+            CHECK(l > 0 && !(m[4] & 1), "pedido de inteiro não atendido (%ld)", l);
         }
         int r = yuvz_decode(&d, m, (size_t)l);
         CHECK(r >= 0, "quadro %d: decodificar deu %d", t, r);

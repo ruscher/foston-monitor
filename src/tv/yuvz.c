@@ -45,7 +45,7 @@ int yuvz_decode(yuvz_dec_t *d, const uint8_t *p, size_t l)
         int pairs = 0;
         for(int r = 0; r < chh; r++)
             if(mask[r / 8] >> (r % 8) & 1) { pairs++; xn += (size_t)(2 * r + 1 < h ? 2 : 1) * w + 2 * (size_t)cw; }
-        if(grow(&d->x, &d->x_cap, xn + 1)) return -1;
+        if(grow(&d->x, &d->x_cap, xn + 1)) { d->w = 0; return -1; }   /* sem o delta, a base fica velha */
         if(xn ? lz4_block_decode(z, zn, d->x, xn) != (long)xn : zn != 0) { d->w = 0; return -1; }
         const uint8_t *x = d->x;
         uint8_t *yu = d->yuv + (size_t)w * h, *yv = yu + (size_t)cw * chh;
@@ -59,7 +59,7 @@ int yuvz_decode(yuvz_dec_t *d, const uint8_t *p, size_t l)
         }
         changed = pairs > 0;
     } else {
-        if(grow(&d->yuv, &d->cap, need)) return -1;
+        if(grow(&d->yuv, &d->cap, need)) { d->w = 0; return -1; }      /* o PC já conta com este inteiro */
         if(lz4_block_decode(z, zn, d->yuv, need) != (long)need) { d->w = 0; return -1; }
     }
     d->w = w;
@@ -90,9 +90,11 @@ long yuvz_encode(yuvz_enc_t *e, const uint8_t *yuv, int w, int h, int force_key,
     if(w <= 0 || (w & 7) || h <= 0 || w > 1024 || h > 1024) return -1;
     size_t n = yuvz_size(w, h), ny = (size_t)w * h;
     if(w != e->w || h != e->h) e->have_prev = 0;
-    if(grow(&e->cur, &e->cap, n) || !(e->prev = e->prev && e->w == w && e->h == h ? e->prev : realloc(e->prev, n)) ||
-       !(e->x = e->x && e->w == w && e->h == h ? e->x : realloc(e->x, n)))
+    /* grow: se faltar memória, os buffers antigos continuam do codificador (yuvz_enc_free os solta) */
+    if(grow(&e->cur, &e->cap, n) || grow(&e->prev, &e->prev_cap, n) || grow(&e->x, &e->x_cap, n)) {
+        e->have_prev = 0;
         return -1;
+    }
     e->w = w;
     e->h = h;
     int delta = e->have_prev && !force_key && e->since_key < 60;
@@ -146,7 +148,7 @@ long yuvz_encode(yuvz_enc_t *e, const uint8_t *yuv, int w, int h, int force_key,
     e->since_key = sent_delta ? e->since_key + 1 : 1;
     int with_sum = !sent_delta || e->n++ % 30 == 0;       /* conferência: inteiros e 1 a cada 30 */
     size_t ml = sent_delta ? (size_t)(chh + 7) / 8 : 0, total = 5 + (with_sum ? 4u : 0u) + ml + (size_t)zn;
-    if(grow(&e->out, &e->out_cap, total)) return -1;
+    if(grow(&e->out, &e->out_cap, total)) { e->have_prev = 0; return -1; }   /* não saiu: o próximo é inteiro */
     uint8_t *o = e->out;
     o[0] = (uint8_t)w; o[1] = (uint8_t)(w >> 8); o[2] = (uint8_t)h; o[3] = (uint8_t)(h >> 8);
     o[4] = (uint8_t)((sent_delta ? 1 : 0) | (with_sum ? 2 : 0));

@@ -137,11 +137,38 @@ Gravação da Record com interferência (38 s, com 15 s de áudio perdidos no ar
 
 ## Gravações pelo PC
 
-- Com o PC conectado, a gravação (`-p`) também vai para ele. O `bftvd` lê o arquivo no ritmo do
-  som, com até 2 s na frente e no máximo 2× a taxa do arquivo.
+Com o PC conectado, a gravação (`-p`) também vai para ele. O envio tem duas fases:
+
+- **Começo:** até 256 KB de uma vez, sem esperar. É o que o PC analisa antes de devolver o
+  primeiro som (~200 KB).
+- **Depois:** no ritmo do relógio, a no máximo 2× a taxa do arquivo. Enquanto há mais de 2 s de
+  som devolvido na fila, o envio espera.
+- **Sem som de volta** (gravação só com vídeo): o envio segue na taxa do arquivo, freado pela fila
+  de quadros. Antes ele parava nos 256 KB e a gravação nunca terminava (o binário antigo ficou
+  parado com 162 quadros; o novo vai até o fim).
 - Sem o limite de taxa, o laço mandava o arquivo inteiro antes da primeira resposta: 16 s de som
   na fila e amostras perdidas, e a gravação tocava em 23 s em vez de 38.
+- No fim, o som que sobra abaixo da reserva de 300 ms toca quando o arquivo já foi todo e o PC
+  parou de mandar som há 300 ms. Antes ele ficava preso e a gravação não chegava ao fim.
 - Se o PC sai no meio, a gravação recomeça aqui.
+
+## Segurança e falhas do PC
+
+- O `bftvd` só escuta no endereço da rede USB (192.168.7.2) e só aceita conexão vinda do PC
+  (192.168.7.1). O FOSTON também entra em rede pelo Bluetooth (PAN do celular), e quem conecta
+  recebe a TV e manda imagem para a tela. Testado: do endereço de rede local do PC, a conexão é
+  fechada ("conexão recusada"); de 192.168.7.1, entra.
+- **PC travado com a conexão aberta:**
+  - a escrita do TS tem limite de 3 s;
+  - se o PC recebeu mais de 256 KB de TS e não devolveu imagem nem som por 8 s, o FOSTON
+    decodifica sozinho. Sem sinal na antena não chega TS, e isso não conta;
+  - testado: relay congelado com `SIGSTOP`, o FOSTON assumiu em menos de 8 s; um PC falso que só
+    lê, depois de 260 KB ("o PC parou de responder").
+- Ao voltar para cá, o FOSTON segue a partir do ponto atual da antena. O TS que o PC não leu fica
+  para trás; senão tocaria acelerado e o som ficaria segundos atrás. O demux local é aberto de
+  novo a cada volta, sem os dados velhos de antes do PC.
+- Sem sinal na antena, um PC que conecta também é atendido (antes a leitura esperava o próximo
+  pacote da antena).
 
 ## Troca no meio
 
@@ -164,3 +191,36 @@ O rodapé do app TV mostra "Decodificado no PC" quando o PC está decodificando 
 - Testar a recuperação do som com interferência em outros canais e lugares (só a Record foi
   medida).
 - Sem o PC, o vídeo continua limitado a ~12 qps: é o que o ARM11 decodifica.
+- Gravação só com vídeo (sem som): sem o relógio do som, o vídeo anda no ritmo livre de 15 qps e
+  a barra de posição fica parada. Toca até o fim (37 s de vídeo em ~50 s).
+
+## Revisão do PR #11 (26/11/2026)
+
+Os 19 apontamentos do CodeRabbit foram conferidos no código e corrigidos (branch
+`fix/tv-revisao`). Além do que está acima:
+
+- **Tela cheia com altura ímpar** (800×450 → 400×225 do PC): os laços 2× liam uma linha além do
+  quadro e pintavam duas linhas fora do retângulo do vídeo. A última linha sai sozinha agora.
+- **Horário do som** (`audio_pts`): um `double` são duas palavras no ARM1176; escrito pela thread
+  do som e lido pelas outras, agora pela trava.
+- **Primeira mensagem ao PC:** se a TV já estava em tela cheia, pedia o tamanho da janela.
+- **Threads que não sobem:** a sessão para e decodifica aqui, em vez de travar.
+- **Pacote de vídeo descartado** (fila cheia, modo local): do próximo quadro-chave em diante,
+  com o decodificador limpo; antes, lixo na imagem até ele.
+- **Fim de gravação local:** espera o mostrador esvaziar a fila (até 3 s).
+- **yuvz:** sem memória para o delta ou o inteiro, a base fica inválida (pede outro inteiro); o
+  codificador não perde os buffers num `realloc` que falha; e, se a mensagem não sai, o próximo
+  é inteiro. O teste agora estraga a soma de um inteiro e exige a recusa.
+- **PC (`bftv-relay`):** o som sem horário não é mais puxado para trás a cada bloco; o pipe é
+  fechado antes de esperar a thread de leitura (o relay não reconectava se o FOSTON caía com o
+  pipe cheio); e as alocações do demux são conferidas.
+
+Medido no FOSTON, Globo, alternando o binário antigo e o novo (20 s cada):
+
+| | Janela | Tela cheia | Cortes de som |
+|---|---|---|---|
+| Antigo | 29,7 e 26,8 qps | 17,7 e 28,1 qps | 3 |
+| Novo | 31,1 e 29,9 qps | 27,1 e 27,7 qps | 0 |
+
+O `shown` só conta quadros que mudaram (cena parada não conta), então uma janela sozinha varia
+muito; só a alternância compara.

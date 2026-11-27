@@ -18,7 +18,7 @@ static inline size_t yuvz_size(int w, int h) { return (size_t)w * h + 2 * (size_
 /* ---- PC */
 typedef struct {
     uint8_t *cur, *prev, *x, *zk, *zd, *out;
-    size_t cap, zk_cap, zd_cap, out_cap;
+    size_t cap, prev_cap, x_cap, zk_cap, zd_cap, out_cap;
     int w, h, have_prev, since_key;
     unsigned long n;
 } yuvz_enc_t;
