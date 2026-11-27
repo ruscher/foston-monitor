@@ -10,7 +10,6 @@
 ![BigLinux](https://img.shields.io/badge/BigLinux-Big%20Screen%20Monitor-3584e4?style=for-the-badge&logo=linux&logoColor=white)
 ![Windows CE](https://img.shields.io/badge/Windows%20CE-5.0.1400-0078d6?style=for-the-badge&logo=windows&logoColor=white)
 ![MediaTek](https://img.shields.io/badge/MediaTek-MT3351-ef7d00?style=for-the-badge)
-![BigFoston OS](https://img.shields.io/badge/BigFoston%20OS-0.5.1-2ec27e?style=for-the-badge&logo=linux&logoColor=white)
 
 ![Tela](https://img.shields.io/badge/tela-7%22%20800×480-555?style=flat-square)
 ![Toque](https://img.shields.io/badge/toque-resistivo%201%20ponto-555?style=flat-square)
@@ -18,7 +17,6 @@
 ![Testes](https://img.shields.io/badge/testes%20automáticos-49%20%E2%9C%93-2ec27e?style=flat-square)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPL-blue?style=flat-square)
 
-[🐧 BigFoston OS](#-bigfoston-os-051-linux-no-próprio-aparelho) •
 [📸 Fotos](#-fotos-do-aparelho) •
 [🚀 Passo a passo](#-passo-a-passo-enviando-para-o-foston) •
 [👆 Usando](#-usando-o-painel-com-o-dedo) •
@@ -54,102 +52,10 @@
 
 ---
 
-## 🐧 BigFoston OS 0.5.1: Linux no próprio aparelho
-
-Além do painel pelo Windows CE, o FOSTON roda um **Linux completo** (kernel 6.12, Buildroot,
-BusyBox e musl), iniciado a partir do próprio CE e sem gravar o bootloader. A interface
-tem toque, som, cartão SD, rede USB com SSH, GPS e o **Big GPS**, com mapa offline do
-Brasil, rotas e voz; Bluetooth com o celular, Telefone, TV digital e transmissor FM.
-
-**Novidades da 0.5.1:**
-
-| | O que mudou | Estado |
-|---|---|---|
-| 🔐 | **Quiosque com o ícone Apps**: no fim dos apps escolhidos, abre a grade com todos os apps e grupos, sem o Ajustes (que continua só segurando 2 s na barra) e sem os menus de organizar | funcionando no aparelho (atualização aplicada pelo cartão) |
-
-**Novidades da 0.5.0:**
-
-| | O que mudou | Estado |
-|---|---|---|
-| 🗂️ | **Grupos de apps personalizados**: segurar um app por 2 s abre o menu (criar grupo, enviar para o grupo, mover, renomear, cor e ícone, excluir), modo "mover" no lugar do arrastar, busca por nome; a mesma organização na Grade, no Painel e no Foston Glass | testado no aparelho (toque, acentos, Painel, Glass, reinício do shell); 41 pastas sem travar |
-| 🧭 | **Painel com o ícone Apps**: todos os apps e grupos a um toque | testado no aparelho |
-| 🔀 | **Dual Boot**: a tela do agente no Windows CE (antes "modo diagnóstico") com o visual do BigFoston, ícones do Windows CE e do BigFoston, barra de progresso da contagem e registro em várias linhas | agente 0.7.0 gravado e iniciando o BigFoston sozinho |
-| 🎮 | **Big Remote Play**: a imagem e o som do computador (Sunshine) no FOSTON, com mouse por toque, zoom e o controle Bluetooth; relay no PC | **53–60 quadros/s** com o relay |
-| 🕹️ | **Grupo Jogos e pacotes `.bfapp`**: instalar apps pelo cartão; **SC Controller** para testar e mapear controles; DualShock 4 pelo Bluetooth | testado no aparelho |
-| 📺 | TV sem travar: TS sem perda, fila de 2 s e escada de decodificação | Globo de 7–8 para **20–26 quadros/s**, 0 perdas |
-| ⚡ | Ajustes > Potência (Economia, Equilibrado, Desempenho) e efeitos do sistema; modo performance na TV e no Big Remote Play | testado no aparelho |
-| 🌐 | Internet pelo celular (Bluetooth PAN) e navegador sem girar a CPU | Wikipédia pelo celular; CPU de um artigo 66 → 11 s |
-| 🔵 | Bluetooth: música e internet do celular sem cortes; controle e teclado sem atraso | 73 pacotes/s de música; ~64 relatórios/s do controle |
-
-> 📚 [Grupos de apps](docs/launcher-groups-final-report.md) · [Dual Boot](docs/dual-boot.md) ·
-> [Big Remote Play](docs/remote-play/00-overview.md) · [Jogos e pacotes](docs/jogos-e-pacotes/00-visao-geral.md) ·
-> [Energia e desempenho](docs/energia-e-desempenho/01-plano-de-energia.md)
-
-<details>
-<summary><b>Novidades da 0.4.0</b></summary>
-
-
-| | O que mudou | Estado |
-|---|---|---|
-| 🪟 | **Foston Glass**: quarta tela inicial, com cartões de vidro (relógio, Conexão com o celular, música) e um dock de apps; navegação na barra superior | funcionando no aparelho |
-| 📞 | **Telefone** pelo celular conectado: discador, contatos e histórico (PBAP), mensagens com conversas e resposta (MAP), aviso de chamada em qualquer tela | agenda de 5363 contatos em ~1 min; ligação real reconhecida |
-| 🎙️ | **Voz da ligação no FOSTON** (alto-falante e microfone, pelo DSP), com silenciar, volume, em espera, juntar chamadas e gravar | funcionando com os arquivos do aparelho no cartão |
-| 📺 | **TV digital** (ISDB-T 1seg, Siano): busca de canais, imagem e som, gravação no cartão e reprodução | **13,7 quadros/s**; 11 canais com nome em ~2 min |
-| 📻 | **FM Transmitir** (KT0801A): leva o som do FOSTON (música, TV, voz do GPS, ligações) a um rádio externo | ouvido num rádio a 88,1 MHz |
-| 🎵 | Multimídia: música do celular com aleatório/repetir, faixa, gênero e álbum; gravações do Telefone | Bluetooth sem cortes: 0 em 60 s |
-| 🕰️ | Ajustes > Data: **acertar data e hora pelo GPS**, automático (chave própria, sem precisar de rede) ou pelo botão "Acertar agora" | ainda não testado no aparelho |
-| 🖥️ | Big Screen: um toque mostra uma barra no topo com o **X** de sair para a Início (no lugar de segurar o canto por 3 s) | ainda não testado no aparelho |
-| 🧩 | FM Transmitir na grade Apps; GPS do cartão Conexão abre o mapa (os satélites ficam no ícone da barra); botão Apps responde no quadrado inteiro | ainda não testado no aparelho |
-
-> 📞 Telefone, TV e FM têm documentação própria: [Telefone](docs/phone/00-visao-geral.md) ·
-> [TV](docs/tv/00-visao-geral.md) · [FM Transmitir](docs/fm-radio/00-visao-geral.md) ·
-> [Foston Glass](docs/foston-glass/00-visao-geral.md). O FOSTON não tem receptor de rádio AM/FM,
-> só o transmissor. A entrada AV-IN e o EPG da TV ainda estão por fazer.
-
-</details>
-
-<details>
-<summary><b>Novidades da 0.3.0</b></summary>
-
-
-| | O que mudou | Medido no aparelho |
-|---|---|---|
-| 🔵 | **Bluetooth** (MediaTek MT6611): parear com o código na tela, ouvir a música do celular no alto-falante e controlar play, pausa e próxima pela tela | testado com um Android; reconecta sozinho ao ligar |
-| 🎵 | Áudio Bluetooth sem cortes | cortes com o FOSTON visível: **6 em 15 s → 0**; CPU livre tocando música: **23 % → 49 %** |
-| 🔎 | Busca do Big GPS entende abreviações (av, r, dr, sqn…) e procura em segundo plano | "doutor" no Brasil todo: **17,9 → 0,9 s** |
-| 🚦 | Rotas com semáforos, pedágios, perfil de moto e **Evitar pedágios** | Brasília → Goiânia sem pedágio: 253 km, 3 h 12 |
-| 🖼️ | Papel de parede com imagem da Galeria, novo padrão "Ondas Digitais" | — |
-| 💾 | Cartão SD vigiado por aviso do kernel, não por consulta | CPU com o aparelho parado: 10,9 → 8,3 % |
-| 🔄 | `reboot` no Terminal também reinicia por kexec | — |
-
-> 🔵 Desde a 0.3.0 o firmware oficial usa bibliotecas compartilhadas por causa do BlueZ e do
-> BlueALSA (initrd 3,7 MB; a variante estática sem Bluetooth é `bigfoston_fs707dc_static_defconfig`).
-> Fones e caixas, viva-voz e teclados Bluetooth ainda não estão prontos. Detalhes em
-> [recuperação do hardware](docs/hardware-enablement/00-overview.md).
-
-</details>
-
-<details>
-<summary><b>Novidades da 0.2.0</b></summary>
-
-
-| | O que mudou | Medido no aparelho |
-|---|---|---|
-| 🗺️ | Mapa do Big GPS mais rápido | arrasto de **3,6 → 17,4 quadros/s**; rotação de 5,1 → 12,8 |
-| 👆 | Interface sem travadas | pior espera para atender um toque na navegação: 722 → 316 ms |
-| 📡 | GPS sem bloquear o cartão | espera de disco com o aparelho parado: **20 % → 0 %** |
-| 💤 | Toque e botão por evento | o shell parado acorda 4 vezes/s em vez de 57 |
-| ⚙️ | Ajustes > Desempenho | detalhe do mapa: Automático, Econômico, Equilibrado ou Detalhado |
-| 🔘 | Botão de energia | diálogo com Cancelar, Hibernar, Reiniciar e Desligar |
-| 🔄 | Reiniciar de verdade | o Linux reinicia a si mesmo com kexec, sem desligar (~13 s) |
-
-</details>
-
-📚 Documentação: [estado da implementação](docs/implementation-status.md) ·
-[hardware e multimídia](docs/hardware-enablement/00-overview.md) ·
-[porte do Linux](docs/04-linux-port.md) · [Big GPS](docs/big-gps/00-visao-geral.md) ·
-[desempenho](docs/performance/00-overview.md) ·
-[relatório de desempenho](docs/performance/20-final-report.md) · [recuperação](docs/17-recuperacao.md)
+> 🐧 **Quer Linux no próprio FOSTON?** O **BigFoston OS** (Linux completo com Big GPS, TV,
+> Bluetooth, Telefone e mais, em dual boot com o Windows CE) agora tem repositório próprio:
+> **[ruscher/big-fostonos](https://github.com/ruscher/big-fostonos)**. Este repositório trata
+> só do **Big Screen Monitor Touch Display** pelo Windows CE original.
 
 ---
 
@@ -411,7 +317,7 @@ sequenceDiagram
 | ✅ **Programa próprio no firmware original** | ✅ | ✅ | baixo | **escolhida e validada** |
 | 📺 Entrada AV-IN (vídeo composto) | ✅ | ❌ | baixo | só exibiria vídeo |
 | 🔧 Trocar a controladora do LCD | ✅ | ✅ | médio | exige abrir o aparelho e comprar placas |
-| 💀 Linux / firmware novo | ❓ | ❓ | **alto** | firmwares de modelos parecidos podem inutilizar o GPS |
+| 🐧 Linux no aparelho | ✅ | ✅ | baixo | virou outro projeto: [BigFoston OS](https://github.com/ruscher/big-fostonos) |
 
 ### 📡 Protocolo FSP (Foston Screen Protocol)
 
@@ -517,11 +423,13 @@ python3 tools/make_readme_art.py                                  # regera as im
 |---|---|
 | `docs/art/` | banner, números, gráficos e cartões do passo a passo |
 | `docs/images/` | fotos do aparelho e capturas da interface |
-| `tools/` | bancada (`fsp_bench.py`), varredura (`fsp_sweep.py`), artes do README |
+| `tools/` | bancada (`fsp_bench.py`), varredura (`fsp_sweep.py`), artes do README (`make_readme_art.py`) |
 | `udev/` | regra de permissão para desenvolvimento |
 | `bench-*.jsonl`, `lab/` | medições e logs reais |
 
 🔒 **Ficam fora (`.gitignore`)**: `backup/` (dados pessoais do GPS), `toolchain/` (231 MB de terceiros), `pkg/` e o estado local.
+
+🐧 O código do BigFoston OS (kernel, Buildroot, agente Dual Boot, instalador, apps) fica em [ruscher/big-fostonos](https://github.com/ruscher/big-fostonos).
 </details>
 
 ---

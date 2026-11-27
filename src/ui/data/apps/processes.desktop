@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Processos
-Name[en]=Processes
-Name[es]=Procesos
-Comment=ps
-Exec=ps
-Terminal=true
