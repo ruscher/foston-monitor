@@ -14,13 +14,13 @@ VARIANT   ?= sim
 JOBS      ?= $(shell nproc 2>/dev/null || echo 2)
 BUILD     := build/$(VARIANT)
 BIN       := $(BUILD)/bigfoston-shell
-VERSION   := 0.6.1
+VERSION   := 0.6.2
 
 LVGL_DIR  := third_party/lvgl
 LVGL_SRCS := $(shell find $(LVGL_DIR)/src -name '*.c')
 APP_SRCS  := main.c $(wildcard core/*.c) $(wildcard screens/*.c) $(wildcard widgets/*.c)
 # Big GPS engine (biggps/README.md): hot loops, built with -O2 even on the target
-BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c biggps/bgmotion.c biggps/bgalert.c biggps/bgvoice.c biggps/bgvehicle.c biggps/bgpersp.c biggps/bglanes.c
+BIGGPS_SRCS := biggps/bgmap.c biggps/raster.c biggps/bgrender.c biggps/bgroute.c biggps/bgnav.c biggps/bgrouter.c biggps/bgicons.c biggps/bgsearch.c biggps/bgmotion.c biggps/bgalert.c biggps/bgvoice.c biggps/bgvehicle.c biggps/bgpersp.c biggps/bglanes.c biggps/bgspeed.c
 ASSET_SRCS:= $(wildcard assets/fonts/*.c) $(wildcard assets/icons/*.c) $(wildcard assets/logo/*.c)
 
 INCLUDES  := -I. -I$(LVGL_DIR) -Ithird_party/lodepng -Ithird_party/nanosvg -Iassets/icons -Iassets/logo
@@ -210,6 +210,9 @@ test:
 	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. -DYUVZ_ENCODER \
 		tests/test_yuvz.c ../tv/yuvz.c core/lz4dec.c -llz4 -o build/test/test_yuvz
 	./build/test/test_yuvz
+	$(HOST_CC) -std=gnu11 -Wall -Wextra -Werror -fsanitize=address,undefined -g -I. \
+		tests/test_bgspeed.c biggps/bgspeed.c -lm -o build/test/test_bgspeed
+	./build/test/test_bgspeed build/test
 
 run: sim
 	./build/sim/bigfoston-shell

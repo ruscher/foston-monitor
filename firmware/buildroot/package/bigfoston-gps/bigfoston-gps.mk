@@ -1,7 +1,7 @@
 ################################################################################
 # bigfoston-gps: loader for the device's own gps.dll (src/gps)
 ################################################################################
-BIGFOSTON_GPS_VERSION = 0.6.1
+BIGFOSTON_GPS_VERSION = 0.6.2
 BIGFOSTON_GPS_SITE = $(BR2_EXTERNAL_BIGFOSTON_PATH)/../../src/gps
 BIGFOSTON_GPS_SITE_METHOD = local
 BIGFOSTON_GPS_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = --exclude build
