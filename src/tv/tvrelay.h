@@ -21,6 +21,8 @@
 #include "../remoteplay/proto.h"
 
 #define TVRELAY_PORT 48122
+#define TVRELAY_ADDR "192.168.7.2"     /* o FOSTON na rede USB (S39usbnet): só ali o bftvd escuta */
+#define TVRELAY_PEER "192.168.7.1"     /* o PC do outro lado do cabo: só ele entra */
 #define TVRELAY_RATE 32000
 
 static inline void tvrelay_put_pts(uint8_t *p, int64_t v) { for(int i = 0; i < 8; i++) p[i] = (uint8_t)((uint64_t)v >> 8 * i); }

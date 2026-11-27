@@ -32,7 +32,7 @@
 #include "tvrelay.h"
 #include "yuvz.h"
 
-static const char *host = "192.168.7.2";
+static const char *host = TVRELAY_ADDR;
 static int port = TVRELAY_PORT, verbose;
 static int sock = -1, pipe_r = -1, pipe_w = -1;
 static atomic_int tgt_w, tgt_h, want_key, stopping;
@@ -178,14 +178,18 @@ static void session(void)
     pipe_w = pp[1];
     atomic_store(&stopping, 0);
     pthread_t rt;
-    pthread_create(&rt, NULL, reader, &rx);
+    if(pthread_create(&rt, NULL, reader, &rx)) {
+        close(pipe_r); close(pipe_w);
+        pipe_r = pipe_w = -1;
+        free(rx.buf);
+        return;
+    }
     fprintf(stderr, "relay: FOSTON conectado, decodificando no PC\n");
 
     AVFormatContext *fc = avformat_alloc_context();
     uint8_t *iob = av_malloc(32768);
-    fc->pb = avio_alloc_context(iob, 32768, 0, NULL, read_cb, NULL, NULL);
-    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg, como no FOSTON */
-    fc->max_analyze_duration = AV_TIME_BASE;
+    /* o pb é nosso (E/S própria): o avformat_close_input não o solta, nem o open_input que falha */
+    AVIOContext *pb = iob ? avio_alloc_context(iob, 32768, 0, NULL, read_cb, NULL, NULL) : NULL;
     AVCodecContext *vc = NULL, *ac = NULL;
     SwrContext *swr = NULL;
     struct SwsContext *sws = NULL;
@@ -200,7 +204,11 @@ static void session(void)
     unsigned long nv = 0, na = 0, bytes = 0;
     double t_log = now_s() + 10;
     int64_t a_next = AV_NOPTS_VALUE;
-    if(avformat_open_input(&fc, NULL, av_find_input_format("mpegts"), NULL) < 0) goto out;
+    if(!fc || !pb || !pk || !fr) goto out;
+    fc->pb = pb;
+    fc->probesize = 120000;                            /* ~2,5 s de TS 1seg, como no FOSTON */
+    fc->max_analyze_duration = AV_TIME_BASE;
+    if(avformat_open_input(&fc, NULL, av_find_input_format("mpegts"), NULL) < 0) goto out;   /* fc = NULL */
     avformat_find_stream_info(fc, NULL);
     int vi = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
     int ai = av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, vi, NULL, 0);
@@ -255,8 +263,11 @@ static void session(void)
                         swr_free(&swr);
                 }
                 if(!swr) { av_frame_unref(fr); continue; }
-                int64_t pts = fr->pts != AV_NOPTS_VALUE ? av_rescale_q(fr->pts, st->time_base, (AVRational){ 1, 1000000 }) : a_next;
-                if(pts != AV_NOPTS_VALUE) pts -= swr_get_delay(swr, 1000000);   /* o que o reamostrador segura */
+                /* com horário: menos o que o reamostrador segura; sem: o fim do bloco anterior, que
+                 * já é o horário da saída (descontar de novo puxaria o som para trás a cada bloco) */
+                int64_t pts = fr->pts != AV_NOPTS_VALUE
+                                  ? av_rescale_q(fr->pts, st->time_base, (AVRational){ 1, 1000000 }) - swr_get_delay(swr, 1000000)
+                                  : a_next;
                 int max = (int)swr_get_out_samples(swr, fr->nb_samples);
                 if(max > pcm_cap) { free(pcm); pcm = malloc((size_t)max * 2); pcm_cap = pcm ? max : 0; }
                 int got = pcm ? swr_convert(swr, (uint8_t **)&pcm, max, (const uint8_t **)fr->extended_data, fr->nb_samples) : 0;
@@ -286,16 +297,20 @@ static void session(void)
 out:
     atomic_store(&stopping, 1);
     shutdown(sock, SHUT_RDWR);
-    pthread_join(rt, NULL);
-    close(pipe_r);
+    /* antes do join: o reader pode estar preso escrevendo no pipe cheio (o shutdown não o solta);
+     * sem leitor, a escrita volta com EPIPE (SIGPIPE ignorado) */
+    if(pipe_r >= 0) close(pipe_r);
     pipe_r = -1;
+    pthread_join(rt, NULL);
     av_packet_free(&pk);
     av_frame_free(&fr);
     avcodec_free_context(&vc);
     avcodec_free_context(&ac);
     swr_free(&swr);
     sws_freeContext(sws);
-    if(fc) { av_freep(&fc->pb->buffer); avio_context_free(&fc->pb); avformat_close_input(&fc); }
+    avformat_close_input(&fc);
+    if(pb) { av_freep(&pb->buffer); avio_context_free(&pb); }
+    else av_free(iob);
     yuvz_enc_free(&enc);
     free(yuv);
     free(pcm);
