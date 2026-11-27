@@ -10,7 +10,7 @@
 #include <sys/utsname.h>
 
 #ifndef BIGFOSTON_VERSION
-#define BIGFOSTON_VERSION "0.6.4"
+#define BIGFOSTON_VERSION "0.6.5"
 #endif
 
 static const char *const logo[] = {
