@@ -48,6 +48,8 @@ int main(int argc, char **argv)
     road(0, 15, 1000, 15, 30, 30);         /* rua paralela 15 m ao norte */
     road(1000, 0, 1000, 600, 0, 0);        /* sem limite no mapa: não entra (o construtor nem escreve) */
     road(1000, 600, 1000, 900, 50, 50);    /* depois sobe com 50 */
+    road(0, -500, 400, -500, 0, 40);       /* só o sentido de volta tem limite no mapa */
+    road(0, -506, 400, -506, 60, 60);      /* outra via, paralela, 6 m ao sul, com 60 */
     qsort(E, (size_t)ne, sizeof E[0], cmp);
     FILE *f = fopen(path, "wb");
     if (!f) { perror(path); return 1; }
@@ -69,6 +71,9 @@ int main(int argc, char **argv)
     CHECK(bgk_at(p, wx(500), wy(0), 0) == 80, "no cruzamento, indo para o norte: %d", bgk_at(p, wx(500), wy(0), 0));
     CHECK(bgk_at(p, wx(1000), wy(300), 0) == 0, "trecho sem limite no mapa: %d", bgk_at(p, wx(1000), wy(300), 0));
     CHECK(bgk_at(p, wx(250), wy(40), 90) == 0, "40 m de tudo: %d", bgk_at(p, wx(250), wy(40), 90));
+    CHECK(bgk_at(p, wx(200), wy(-500), 90) == 0, "sem limite para leste na via, não o 60 da paralela: %d", bgk_at(p, wx(200), wy(-500), 90));
+    CHECK(bgk_at(p, wx(200), wy(-500), 270) == 40, "a mesma via para oeste: %d", bgk_at(p, wx(200), wy(-500), 270));
+    CHECK(bgk_at(p, wx(200), wy(-506), 90) == 60, "na paralela: %d", bgk_at(p, wx(200), wy(-506), 90));
 
     /* rota: leste até 1000, depois norte até 900; um ponto a cada 100 m */
     uint32_t xy[64];
@@ -84,6 +89,8 @@ int main(int argc, char **argv)
     bgk_close(p);
     /* arquivo cortado: recusa */
     f = fopen(path, "r+b");
+    CHECK(f, "não reabriu %s", path);
+    if (!f) return 1;
     fseek(f, 8, SEEK_SET);
     put32(f, (uint32_t)ne + 1);
     fclose(f);

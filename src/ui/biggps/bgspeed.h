@@ -15,7 +15,8 @@ uint32_t bgk_built(const bgk_pack_t *p);
 
 /* The limit (km/h, 0 = unknown) of the road at (x, y) going with bearing (degrees; -1 = any):
  * the nearest piece within 8 m whose direction matches within 35 degrees (its forward limit)
- * or is opposite within 35 (its backward limit). */
+ * or is opposite within 35 (its backward limit).  The nearest matching piece wins even when its
+ * limit in that direction is unknown (0), so a parallel road's limit is not borrowed. */
 int bgk_at(const bgk_pack_t *p, uint32_t x, uint32_t y, int bearing);
 
 /* For each segment of a route polyline (npts points, xy pairs), the limit of the road it runs

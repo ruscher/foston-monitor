@@ -1412,16 +1412,20 @@ static int upt_near(uint32_t x, uint32_t y)
  * 972 ms), e a interface não pode parar. A placa aparece quando o resultado chega. */
 static struct {
     pthread_mutex_t mu;
+    bgk_pack_t *pack;                              /* o que a thread lê (R.speeds) */
+    bgk_pack_t *dispose[4];                        /* o mapa fechou com a thread lendo: ela fecha */
     int gen, done_gen;                             /* rota pedida / rota do resultado */
     uint32_t *xy;
     int npts;
     uint8_t *out;
+    int out_n;                                     /* trechos em out */
     bool busy;
     /* seguindo sem rota: o limite no ponto (a busca também lê do cartão) */
-    bool pt_want;
-    uint32_t px, py;
-    int pb, pt_lim;
+    bool pt_want, pt_have;
+    uint32_t px, py, rx, ry;                       /* pedido / ponto do resultado */
+    int pb, rb, pt_lim;
 } LJ = { .mu = PTHREAD_MUTEX_INITIALIZER };
+static int nav_lim_n;                              /* trechos em N.lim (vem com o resultado) */
 
 static void *lim_worker(void *a)
 {
@@ -1429,6 +1433,7 @@ static void *lim_worker(void *a)
     setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
     for(;;) {
         pthread_mutex_lock(&LJ.mu);
+        bgk_pack_t *pk = LJ.pack;
         int gen = LJ.gen, npts = LJ.npts;
         uint32_t *xy = LJ.xy;
         LJ.xy = NULL;
@@ -1437,22 +1442,32 @@ static void *lim_worker(void *a)
             int b = LJ.pb;
             LJ.pt_want = false;
             pthread_mutex_unlock(&LJ.mu);
-            int v = bgk_at(R.speeds, x, y, b);
+            int v = bgk_at(pk, x, y, b);
             pthread_mutex_lock(&LJ.mu);
             LJ.pt_lim = v;
+            LJ.rx = x; LJ.ry = y; LJ.rb = b;
+            LJ.pt_have = true;
             pthread_mutex_unlock(&LJ.mu);
             continue;
         }
-        if(!xy) { LJ.busy = false; pthread_mutex_unlock(&LJ.mu); return NULL; }
+        if(!xy) {                                  /* acabou: fecha o que o mapa largou com ela lendo */
+            bgk_pack_t *d[4];
+            memcpy(d, LJ.dispose, sizeof d);
+            memset(LJ.dispose, 0, sizeof LJ.dispose);
+            LJ.busy = false;
+            pthread_mutex_unlock(&LJ.mu);
+            for(int i = 0; i < 4; i++) bgk_close(d[i]);
+            return NULL;
+        }
         pthread_mutex_unlock(&LJ.mu);
         uint8_t *out = calloc((size_t)npts, 1);
         uint64_t t0 = perf_now_us();
-        int got = out ? bgk_route(R.speeds, xy, npts, out) : 0;
+        int got = out ? bgk_route(pk, xy, npts, out) : 0;
         fprintf(stderr, "biggps: limite de velocidade em %d de %d trechos da rota (%u ms, em segundo plano)\n", got, npts - 1,
                 (unsigned)((perf_now_us() - t0) / 1000));
         free(xy);
         pthread_mutex_lock(&LJ.mu);
-        if(gen == LJ.gen) { free(LJ.out); LJ.out = out; LJ.done_gen = gen; out = NULL; }   /* senão já há outra rota */
+        if(gen == LJ.gen && out) { free(LJ.out); LJ.out = out; LJ.out_n = npts - 1; LJ.done_gen = gen; out = NULL; }   /* senão já há outra rota */
         pthread_mutex_unlock(&LJ.mu);
         free(out);
     }
@@ -1461,29 +1476,50 @@ static void *lim_worker(void *a)
 static void lim_kick(void);
 static void lim_start(void)
 {
+    /* a rota de antes deixa de valer já, mesmo se esta não puder ser pedida (sem memória): o
+     * resultado dela não pode virar o desta */
+    pthread_mutex_lock(&LJ.mu);
+    LJ.gen++;
+    free(LJ.xy);
+    LJ.xy = NULL;
+    free(LJ.out);
+    LJ.out = NULL;
+    pthread_mutex_unlock(&LJ.mu);
     if(!R.speeds || N.route.npts < 2) return;
     uint32_t *xy = malloc((size_t)N.route.npts * 2 * sizeof *xy);
     if(!xy) return;
     memcpy(xy, N.route.xy, (size_t)N.route.npts * 2 * sizeof *xy);
     pthread_mutex_lock(&LJ.mu);
-    LJ.gen++;
-    free(LJ.xy);
+    LJ.pack = R.speeds;
     LJ.xy = xy;
     LJ.npts = N.route.npts;
     pthread_mutex_unlock(&LJ.mu);
     lim_kick();
 }
 
-/* seguindo sem rota: pede o limite no ponto; devolve o último que chegou */
+/* seguindo sem rota: pede o limite no ponto; devolve o último que chegou, se ainda vale aqui
+ * (mesmo rumo, a até 3 s de caminho): depois de virar numa via de 30, o 80 da anterior não fica
+ * na tela enquanto a busca nova lê do cartão */
 static int lim_point(uint32_t x, uint32_t y, int bearing)
 {
     if(!R.speeds) return 0;
     pthread_mutex_lock(&LJ.mu);
+    LJ.pack = R.speeds;
     LJ.px = x; LJ.py = y; LJ.pb = bearing;
     LJ.pt_want = true;
-    int v = LJ.pt_lim;
+    int v = LJ.pt_have ? LJ.pt_lim : 0;
+    uint32_t rx = LJ.rx, ry = LJ.ry;
+    int rb = LJ.rb;
     pthread_mutex_unlock(&LJ.mu);
     lim_kick();
+    if(v) {
+        double lat = atan(sinh(M_PI * (1.0 - 2.0 * (double)y / 4294967296.0)));
+        double mpu = 40075016.686 / 4294967296.0 * cos(lat);
+        double dx = (double)(int32_t)(x - rx), dy = (double)(int32_t)(y - ry), d = sqrt(dx * dx + dy * dy) * mpu;
+        int db = abs((bearing - rb + 540) % 360 - 180);
+        double reach = pos_speed / 3.6 * 3;
+        if(d > (reach > 40 ? reach : 40) || (bearing >= 0 && rb >= 0 && db > 35)) v = 0;
+    }
     return v;
 }
 
@@ -1508,7 +1544,7 @@ static void lim_kick(void)
 static void lim_poll(void)
 {
     pthread_mutex_lock(&LJ.mu);
-    if(LJ.out && LJ.done_gen == LJ.gen) { free(N.lim); N.lim = LJ.out; LJ.out = NULL; }
+    if(LJ.out && LJ.done_gen == LJ.gen) { free(N.lim); N.lim = LJ.out; nav_lim_n = LJ.out_n; LJ.out = NULL; }
     pthread_mutex_unlock(&LJ.mu);
 }
 
@@ -1556,7 +1592,7 @@ static void road_limit_update(uint32_t x, uint32_t y)
     if(!lim_sign) return;
     int lim = 0;
     lim_poll();
-    if(N.navigating) { if(N.st.valid && N.lim && N.route.seg >= 0 && N.route.seg < N.route.npts - 1) lim = N.lim[N.route.seg]; }
+    if(N.navigating) { if(N.st.valid && N.lim && N.route.seg >= 0 && N.route.seg < nav_lim_n && N.route.seg < N.route.npts - 1) lim = N.lim[N.route.seg]; }
     else if(R.speeds && pos_live && pos_speed >= 5 && follow) lim = lim_point(x, y, (int)lround(pos_course));
     if(!settings()->map_alerts) lim = 0;
     if(lim != road_lim) {
@@ -1763,6 +1799,11 @@ static void end_navigation(void)
     N.al = NULL;
     free(N.lim);
     N.lim = NULL;
+    nav_lim_n = 0;
+    /* a placa e a velocidade vermelha da rota saem junto (sem GPS, nada mais as atualiza) */
+    road_lim = road_over = 0;
+    if(lim_sign) lv_obj_add_flag(lim_sign, LV_OBJ_FLAG_HIDDEN);
+    speed_color();
     N.nal = 0;
     N.nstops = N.pick_stop = 0;
     clear_alts();
@@ -3834,6 +3875,7 @@ static void destroy(void)
     free(N.al);
     free(N.lim);
     N.lim = NULL;
+    nav_lim_n = 0;
     for(int a = 0; a < N.nalt; a++) bgn_free(&N.alt[a]);
     for(int a = 0; a < BGRT_MAXALT; a++) { free(R.alt[a]); R.alt[a] = NULL; R.alt_n[a] = 0; }
     memset(&N, 0, sizeof N);
@@ -3852,22 +3894,26 @@ static void destroy(void)
     R.nral = 0;
     bga_close(R.alerts);
     R.alerts = NULL;
-    for(int i = 0; i < 300; i++) {                /* o cálculo dos limites ainda lê o arquivo: espera */
-        pthread_mutex_lock(&LJ.mu);
-        free(LJ.xy);
-        LJ.xy = NULL;
-        LJ.pt_want = false;
-        LJ.gen++;
-        bool busy = LJ.busy;
-        pthread_mutex_unlock(&LJ.mu);
-        if(!busy) break;
-        usleep(10000);
-    }
+    /* o cálculo dos limites pode estar lendo o arquivo (do cartão, sem prazo): se está, ela o
+     * fecha ao terminar; a tela não espera o cartão nem o arquivo some debaixo dela */
     pthread_mutex_lock(&LJ.mu);
+    free(LJ.xy);
+    LJ.xy = NULL;
+    LJ.pt_want = LJ.pt_have = false;
+    LJ.gen++;
     free(LJ.out);
     LJ.out = NULL;
+    LJ.pack = NULL;
+    bgk_pack_t *close_now = R.speeds;
+    if(LJ.busy && R.speeds) {
+        int k = 0;
+        while(k < 4 && LJ.dispose[k]) k++;
+        if(k < 4) LJ.dispose[k] = R.speeds;
+        else fprintf(stderr, "biggps: limites: arquivo ainda em uso, fica aberto\n");   /* 4 fechamentos numa busca */
+        close_now = NULL;                          /* nunca debaixo da thread */
+    }
     pthread_mutex_unlock(&LJ.mu);
-    bgk_close(R.speeds);
+    bgk_close(close_now);
     R.speeds = NULL;
     bgl_close(lanes_pack);
     lanes_pack = NULL;

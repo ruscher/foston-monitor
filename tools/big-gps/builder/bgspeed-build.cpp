@@ -57,9 +57,11 @@ struct Ways : osmium::handler::Handler {
     {
         const auto &t = w.tags();
         if (!t["highway"] || w.nodes().size() < 2) return;
-        int both = speed(t["maxspeed"]), f = speed(t["maxspeed:forward"]), b = speed(t["maxspeed:backward"]);
-        if (!f) f = both;
-        if (!b) b = both;
+        // o do sentido vale quando existe, mesmo não numérico ("signals": sem placa naquele
+        // sentido); o geral só preenche o sentido sem etiqueta própria
+        int both = speed(t["maxspeed"]);
+        int f = t["maxspeed:forward"] ? speed(t["maxspeed:forward"]) : both;
+        int b = t["maxspeed:backward"] ? speed(t["maxspeed:backward"]) : both;
         if (!f && !b) return;
         Way x{ ids.size(), w.nodes().size(), (uint8_t)f, (uint8_t)b };
         for (const auto &nd : w.nodes()) { ids.push_back(nd.ref()); loc.emplace(nd.ref(), std::make_pair(1000.0, 1000.0)); }
@@ -138,7 +140,9 @@ int main(int argc, char **argv)
         unsigned char tail[4] = { e.fwd, e.bwd, 0, 0 };
         std::fwrite(tail, 1, 4, f);
     }
-    if (std::fclose(f)) { std::perror(argv[2]); return 1; }
+    // um fwrite que falhou no meio (cartão ou disco cheio) não pode virar um .bgk cortado "ok"
+    bool bad = std::ferror(f) != 0;
+    if (std::fclose(f) || bad) { std::fprintf(stderr, "%s: erro ao gravar\n", argv[2]); std::remove(argv[2]); return 1; }
     std::fprintf(stderr, "bgspeed-build: %zu vias com limite, %zu trechos; %u valores não numéricos ignorados\n",
                  ways.size(), out.size(), skipped_values);
     return 0;
