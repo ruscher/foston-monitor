@@ -14,8 +14,9 @@ from PIL import Image, ImageDraw, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
-APP = os.environ.get("BSMD_APP", "/home/ruscher/Documentos/Git/big-screen-monitor-display/usr/share/"
-                                 "big-screen-monitor-display")
+# clone do big-screen-monitor-display ao lado deste repositório (ou BSMD_APP=<caminho>)
+APP = os.environ.get("BSMD_APP", os.path.join(ROOT, "..", "big-screen-monitor-display", "usr", "share",
+                                              "big-screen-monitor-display"))
 sys.path.insert(0, APP)
 
 from bsmd import touch  # noqa: E402

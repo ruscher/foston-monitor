@@ -129,14 +129,17 @@ flowchart LR
 
 ![Passo 1](docs/art/passo-1.png)
 
-O suporte ao FOSTON está na branch `feat/foston-fs707dc` do [Big Screen Monitor Display](https://github.com/biglinux/big-screen-monitor-display). Para gerar e instalar o pacote:
+O suporte ao FOSTON já está na `main` do [Big Screen Monitor Display](https://github.com/biglinux/big-screen-monitor-display). Para gerar e instalar o pacote:
 
 ```bash
-git clone -b feat/foston-fs707dc <url do big-screen-monitor-display>
+sudo pacman -S --needed base-devel git
+git clone https://github.com/biglinux/big-screen-monitor-display
 cd big-screen-monitor-display/pkgbuild
-makepkg -ef
-sudo pacman -U big-screen-monitor-display-*-any.pkg.tar
+makepkg -si
 ```
+
+> ℹ️ O pacote do repositório `biglinux-stable` (versão 26.03.28) é anterior ao suporte ao
+> FOSTON. Quando sair uma versão nova nele, bastará `sudo pacman -S big-screen-monitor-display`.
 
 > 📦 O pacote traz o serviço, a regra de permissão (udev) só para o FOSTON e o programa do aparelho em `/usr/share/big-screen-monitor-display/device-clients/wince/bsmd-ce.exe`.
 
@@ -352,6 +355,7 @@ Cabeçalho de **16 bytes** (little endian): `"FS"` · versão · tipo · sequên
 | 1.1.0 | 🧵 thread leitora + créditos: quadros inteiros estáveis |
 | 1.1.1 | ⏳ volta à tela de espera se o PC parar de enviar |
 | 1.2.0 | 🎨 tela de espera com a cara do app; leitura prioritária |
+| 1.2.1 | 💾 ao sair, o FOSTON volta a ligar como pendrive (o driver USB gravava o modo serial como padrão) · _ainda não conferido no aparelho_ |
 
 ### 🔐 Segurança
 
@@ -374,6 +378,7 @@ Cabeçalho de **16 bytes** (little endian): `"FS"` · versão · tipo · sequên
 | `/dev/ttyUSB0` sem permissão | regra udev ausente | instale o pacote |
 | "frame damaged … resynchronising" no log | perda de bytes no USB do WinCE | nada: o quadro é refeito sozinho |
 | O pendrive não aparece no PC | o programa está aberto (modo serial) | **Sair** no aparelho |
+| O FOSTON passou a ligar sempre como serial | cliente anterior ao 1.2.1 | instale o pacote atual e copie o `bsmd-ce.exe` de novo |
 
 > 🔙 **Voltar ao original:** Configurações → Caminho da navegação → navegador original. Se quiser, apague a pasta `BigScreen`.
 
@@ -384,7 +389,7 @@ Cabeçalho de **16 bytes** (little endian): `"FS"` · versão · tipo · sequên
 <details>
 <summary>⚙️ Compilar o programa do GPS (<code>bsmd-ce.exe</code>)</summary>
 
-O código está em `device-clients/wince/` no projeto principal.
+O código está em [`device-clients/wince/`](https://github.com/biglinux/big-screen-monitor-display/tree/main/device-clients/wince) no projeto principal.
 
 ```bash
 cd device-clients/wince
