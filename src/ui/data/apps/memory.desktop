@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Memória
-Name[en]=Memory
-Name[es]=Memoria
-Comment=free -m
-Exec=free -m
-Terminal=true

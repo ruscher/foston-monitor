@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Rede
-Name[en]=Network
-Name[es]=Red
-Comment=ip addr
-Exec=ip addr
-Terminal=true
