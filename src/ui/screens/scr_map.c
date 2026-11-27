@@ -2003,15 +2003,27 @@ static void add_stop_cb(lv_event_t *e)
     if(pick_chip) lv_obj_remove_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void clear_stops_cb(lv_event_t *e)
+/* uma parada sobe, desce ou sai da lista (painel de rotas). Fora do evento do botão: a rota
+ * nova recria o painel, e apagar o pai dentro do evento do filho derruba o LVGL */
+enum { STOP_UP, STOP_DOWN, STOP_DEL };
+static void stop_edit(int i, int op)
 {
-    (void)e;
-    N.nstops = 0;
-    N.pick_stop = 0;
-    if(pick_chip) lv_obj_add_flag(pick_chip, LV_OBJ_FLAG_HIDDEN);
+    if(i < 0 || i >= N.nstops || N.navigating) return;
+    if(op == STOP_DEL) {
+        for(int k = i; k + 1 < N.nstops; k++) { N.stx[k] = N.stx[k + 1]; N.sty[k] = N.sty[k + 1]; }
+        N.nstops--;
+    } else {
+        int j = op == STOP_UP ? i - 1 : i + 1;
+        if(j < 0 || j >= N.nstops) return;
+        uint32_t tx = N.stx[i], ty = N.sty[i];
+        N.stx[i] = N.stx[j]; N.sty[i] = N.sty[j];
+        N.stx[j] = tx; N.sty[j] = ty;
+    }
     update_dest_marker();
     route_request(N.profile, false);
 }
+static void stop_edit_async(void *ud) { intptr_t v = (intptr_t)ud; stop_edit((int)(v >> 2), (int)(v & 3)); }
+static void stop_btn_cb(lv_event_t *e) { lv_async_call(stop_edit_async, lv_event_get_user_data(e)); }
 
 static void route_sheet(void);
 static void route_sheet_async(void *ud) { (void)ud; if(ov && N.active && !N.navigating) route_sheet(); }
@@ -2113,6 +2125,8 @@ static void route_sheet(void)
     const bf_palette_t *p = pal();
     lv_obj_t *sh = sheet_new();
     lv_obj_set_size(sh, ROUTE_PANEL_W, MAP_H - 88);
+    lv_obj_add_flag(sh, LV_OBJ_FLAG_SCROLLABLE);       /* com paradas a lista passa da altura */
+    lv_obj_set_scroll_dir(sh, LV_DIR_VER);
     lv_obj_align(sh, LV_ALIGN_TOP_LEFT, 12, 76);
     lv_obj_add_flag(sh, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(sh, LV_DIR_VER);
@@ -2153,10 +2167,35 @@ static void route_sheet(void)
         lv_obj_set_flex_grow(b, 1);
         lv_obj_add_event_cb(b, add_stop_cb, LV_EVENT_CLICKED, NULL);
     }
-    if(N.nstops) {
-        b = bf_button(row, LV_SYMBOL_TRASH, NULL, 0);
-        lv_obj_set_size(b, 52, 44);
-        lv_obj_add_event_cb(b, clear_stops_cb, LV_EVENT_CLICKED, NULL);
+    for(int i = 0; i < N.nstops; i++) {              /* paradas: ordem e tirar uma */
+        lv_obj_t *r = sheet_row(sh);
+        lv_obj_set_flex_align(r, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_t *badge = lv_obj_create(r);
+        lv_obj_remove_style_all(badge);
+        lv_obj_set_size(badge, 28, 28);
+        lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(badge, lv_color_hex(0xe8710a), 0);
+        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+        lv_obj_remove_flag(badge, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        char n[12];
+        snprintf(n, sizeof n, "%d", i + 1);
+        lv_obj_center(bf_label(badge, n, BF_FONT_S, lv_color_white()));
+        lv_obj_t *l = bf_label(r, tr(S_MAP_ADD_STOP), BF_FONT_M, p->text);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_flex_grow(l, 1);
+        lv_obj_set_style_min_width(l, 60, 0);
+        static const char *const sym[3] = { LV_SYMBOL_UP, LV_SYMBOL_DOWN, LV_SYMBOL_CLOSE };
+        for(int op = 0; op < 3; op++) {
+            lv_obj_t *k = bf_button(r, sym[op], NULL, 0);
+            lv_obj_set_style_min_width(k, 0, 0);
+            lv_obj_set_style_pad_hor(k, 0, 0);
+            lv_obj_set_size(k, 40, 38);
+            lv_obj_add_event_cb(k, stop_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)(i << 2 | op));
+            if((op == STOP_UP && i == 0) || (op == STOP_DOWN && i == N.nstops - 1)) {
+                lv_obj_add_state(k, LV_STATE_DISABLED);
+                lv_obj_set_style_opa(k, LV_OPA_30, 0);        /* não há para onde ir */
+            }
+        }
     }
 }
 
@@ -2685,6 +2724,38 @@ static void set_follow(bool on)
 #define PIN_TOP 50                     /* a ponta não sobe além disso: o pino inteiro aparece */
 static bool pin_hit, pin_drag, pin_moved;
 static lv_point_t pin_grab;
+static int stop_hit = -1, stop_drag = -1;           /* parada sob o dedo / sendo arrastada */
+#define STOP_LIFT 30                                 /* a parada fica acima do dedo, à vista */
+
+static int stop_touched(lv_point_t p)
+{
+    if(N.navigating || !N.has_dest) return -1;
+    for(int i = N.nstops - 1; i >= 0; i--) {
+        if(!stop_mk[i] || lv_obj_has_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN)) continue;
+        int x = lv_obj_get_x(stop_mk[i]) + 15, y = lv_obj_get_y(stop_mk[i]) + 15;
+        if(abs(p.x - x) <= 26 && abs(p.y - y) <= 26) return i;
+    }
+    return -1;
+}
+
+static void stop_move(lv_point_t p)
+{
+    rast_surface_t s = { NULL, MAP_W, MAP_H, MAP_W };
+    int px = p.x, py = p.y - STOP_LIFT;
+    if(!pin_moved) pin_moved = abs(p.x - pin_grab.x) + abs(p.y - pin_grab.y) > 16;
+    int ex = px < 40 ? -8 : px > MAP_W - 40 ? 8 : 0, ey = py < PIN_TOP + 10 ? -8 : py > MAP_H - 40 ? 8 : 0;
+    if(pin_moved && (ex || ey)) {                     /* na borda o mapa anda junto, como no pino */
+        bgr_view_t v = cur;
+        anchor(&v.ox, &v.oy);
+        bgr_screen_to_world(&v, &s, v.ox + ex, v.oy + ey, &cur.cx, &cur.cy);
+        set_follow(false);
+        update_offset();
+        if(!render_busy()) request();
+    }
+    if(py < PIN_TOP) py = PIN_TOP;
+    bgr_screen_to_world(&shown, &s, px - off_x, py - off_y, &N.stx[stop_drag], &N.sty[stop_drag]);
+    update_dest_marker();
+}
 
 static bool pin_touched(lv_point_t p)
 {
@@ -2730,8 +2801,12 @@ static void press_cb(lv_event_t *e)
         dragging = false;
         pin_drag = false;
         pin_hit = pin_touched(p);
+        stop_drag = -1;
+        stop_hit = pin_hit ? -1 : stop_touched(p);
     } else if(c == LV_EVENT_PRESSING && pin_drag) {
         pin_move(p);
+    } else if(c == LV_EVENT_PRESSING && stop_drag >= 0) {
+        stop_move(p);
     } else if(c == LV_EVENT_PRESSING) {
         int dx = p.x - drag_start.x, dy = p.y - drag_start.y;
         if(!dragging && dx * dx + dy * dy < 64) return;
@@ -2758,6 +2833,17 @@ static void press_cb(lv_event_t *e)
             route_request(N.profile, false);
             return;
         }
+        if(stop_hit >= 0 && stop_hit < N.nstops) {    /* segurou uma parada: arrasta */
+            stop_drag = stop_hit;
+            pin_moved = false;
+            pin_grab = p;
+            close_sheet();
+            lv_obj_set_style_transform_scale(stop_mk[stop_drag], 320, 0);
+            lv_obj_set_style_transform_pivot_x(stop_mk[stop_drag], 15, 0);
+            lv_obj_set_style_transform_pivot_y(stop_mk[stop_drag], 15, 0);
+            stop_move(p);
+            return;
+        }
         if(pin_hit) {                                 /* segurou o pino: passa a arrastá-lo */
             pin_drag = true;
             pin_moved = false;
@@ -2774,6 +2860,14 @@ static void press_cb(lv_event_t *e)
         open_dest_sheet(x, y);
     } else if(c == LV_EVENT_RELEASED || c == LV_EVENT_PRESS_LOST) {
         dragging = false;
+        if(stop_drag >= 0) {                          /* soltou a parada: rota nova com ela ali */
+            if(c == LV_EVENT_RELEASED) stop_move(p);
+            lv_obj_set_style_transform_scale(stop_mk[stop_drag], LV_SCALE_NONE, 0);
+            fprintf(stderr, "biggps: parada %d arrastada\n", stop_drag + 1);
+            stop_drag = -1;
+            route_request(N.profile, false);
+            return;
+        }
         if(pin_drag) {                                /* soltou: novo destino, oferece a rota de novo */
             if(c == LV_EVENT_RELEASED) pin_move(p);   /* o último ponto do dedo */
             pin_drag = false;
@@ -3013,7 +3107,7 @@ static int bench_zoom = 15;
 static uint64_t bench_cpu0, bench_t0;
 static const struct { const char *name; int ticks; } bench_ph[] = {
     { "parado", 100 }, { "arrasto", 80 }, { "assentar", 60 }, { "arrasto-so-lvgl", 60 }, { "assentar2", 40 }, { "zoom", 160 },
-    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 }, { "radar", 240 },
+    { "rotacao", 80 }, { "seguir", 200 }, { "navegacao", 400 }, { "radar", 240 }, { "paradas", 400 },
 };
 #define BENCH_TICK_MS 50
 
@@ -3103,6 +3197,16 @@ static void bench_cb(lv_timer_t *t)
         if(k == 0) { end_navigation(); radar_show(1000, 60, 300); }
         if(k % 20 == 0) bench_fix(bench_lat, bench_lon + (k / 20) * 0.0002, 90, 80);
         if(k == 239) radar_hide();
+    } else if(!strcmp(ph, "paradas")) {             /* rota com 2 paradas, troca a ordem, depois o arrasto (bftap) */
+        if(k == 0) { end_navigation(); scr_map_demo(0); }
+        if(k == 80) scr_map_demo(17);
+        if(k == 160) { stop_edit(0, STOP_DOWN); fprintf(stderr, "bench: paradas trocadas de ordem\n"); }
+        if(k == 240) fit_route();
+        if(k == 300 && N.nstops) {                   /* onde estão os círculos (já no quadro novo), para o bftap */
+            for(int i = 0; i < N.nstops; i++)
+                if(stop_mk[i] && !lv_obj_has_flag(stop_mk[i], LV_OBJ_FLAG_HIDDEN))
+                    fprintf(stderr, "bench: parada %d em %d %d\n", i + 1, (int)lv_obj_get_x(stop_mk[i]) + 15, (int)lv_obj_get_y(stop_mk[i]) + 15);
+        }
     }
     if(bench_tick >= bench_ph[bench_phase].ticks) {
         bench_end_phase();
@@ -3759,6 +3863,17 @@ void scr_map_demo(int step)
         radar_tick();
     } else if(step == 15) {
         radar_hide();
+    } else if(step == 17) {                          /* duas paradas na rota (painel com a ordem) */
+        if(N.route.npts > 30 && !N.navigating) {
+            for(int k = 0; k < 2; k++) {
+                int i = N.route.npts * (k + 1) / 3;
+                N.stx[k] = N.route.xy[2 * i];
+                N.sty[k] = N.route.xy[2 * i + 1];
+            }
+            N.nstops = 2;
+            update_dest_marker();
+            route_request(N.profile, false);
+        }
     } else if(step == 16) {                          /* limite da via num trecho com maxspeed, acima dele */
         for(int i = 0; N.lim && i < N.route.npts - 1; i++) if(N.lim[i] >= 70) { N.route.seg = i; break; }
         pos_speed = 95;
